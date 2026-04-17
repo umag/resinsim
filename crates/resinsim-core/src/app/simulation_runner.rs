@@ -90,9 +90,7 @@ impl SimulationRunner {
         let mut sim = PrintSimulation::new();
         let mut prev_area = CrossSectionArea::new(0.0).expect("zero is valid");
 
-        for li in layers {
-            let area = CrossSectionArea::new(li.cross_section_area_mm2)
-                .map_err(|e| format!("layer {}: {e}", li.index))?;
+        for (li, area) in layers.iter().zip(areas.iter().copied()) {
             let overrides = LayerOverrides {
                 exposure_sec: Some(li.exposure_sec),
                 lift_speed_mm_min: Some(li.lift_speed_mm_min),
