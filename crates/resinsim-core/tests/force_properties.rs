@@ -48,7 +48,7 @@ proptest! {
         cap in 0.1f32..1000.0,
         force in 0.1f32..1000.0,
     ) {
-        let sf = SafetyFactor::compute(SupportCapacity::new(cap).unwrap(), PeelForce::new(force).unwrap());
+        let sf = SafetyFactor::compute(SupportCapacity::new(cap).unwrap(), PeelForce::new(force).unwrap()).unwrap();
         let expected = cap / force;
         prop_assert!((sf.value() - expected).abs() < 1e-4,
             "SF should be cap/force: {} vs {}", sf.value(), expected);
@@ -60,7 +60,7 @@ proptest! {
         cap in 0.1f32..1000.0,
         force in 0.1f32..1000.0,
     ) {
-        let sf = SafetyFactor::compute(SupportCapacity::new(cap).unwrap(), PeelForce::new(force).unwrap());
+        let sf = SafetyFactor::compute(SupportCapacity::new(cap).unwrap(), PeelForce::new(force).unwrap()).unwrap();
         if cap > force {
             prop_assert!(sf.is_safe(), "cap > force should be safe: cap={cap}, force={force}, sf={}", sf.value());
         }

@@ -273,7 +273,7 @@ fn cmd_force(
         (Some(r), Some(n)) => {
             let cap = PeelForceCalculator::support_capacity(tensile, r, n);
             let sf = SafetyFactor::compute(cap, total);
-            (Some(cap), Some(sf))
+            (Some(cap), sf)
         }
         _ => (None, None),
     };

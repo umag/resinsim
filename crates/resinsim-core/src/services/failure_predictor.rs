@@ -160,7 +160,8 @@ impl FailurePredictor {
         let capacity = crate::values::SupportCapacity(total_capacity);
         let safety = SafetyFactor::compute(capacity, total_force);
 
-        if !safety.is_safe() {
+        if safety.map_or(false, |s| !s.is_safe()) {
+            let safety = safety.unwrap(); // safe: guard guarantees Some
             let source = if plate_cap > 0.0 && support_cap.value() > 0.0 {
                 format!("plate {:.1} N + supports {:.1} N = {:.1} N", plate_cap, support_cap.value(), total_capacity)
             } else if plate_cap > 0.0 {
@@ -236,7 +237,7 @@ impl FailurePredictor {
             suction_force_n: suction.value(),
             total_force_n: total_force.value(),
             support_capacity_n: capacity.value(),
-            safety_factor: safety.value(),
+            safety_factor: safety.map_or(f32::INFINITY, |s| s.value()), // INFINITY = no load; print_simulation accumulator handles it correctly
             cross_section_area_mm2: area.value(),
             area_delta_mm2: delta,
             vat_temperature_c: vat_temp.value(),

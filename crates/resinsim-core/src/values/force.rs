@@ -50,10 +50,7 @@ impl SupportCapacity {
 }
 
 impl SafetyFactor {
-    /// Construct a safety factor from a known ratio.
-    /// Allows `f32::INFINITY` because the `compute()` constructor returns that
-    /// sentinel when peel force is zero; callers of `new()` must supply finite
-    /// values only.
+    /// Construct a safety factor from a known finite ratio.
     pub fn new(ratio: f32) -> Result<Self, String> {
         if !ratio.is_finite() {
             return Err(format!("safety factor must be finite, got {ratio}"));
@@ -65,13 +62,12 @@ impl SafetyFactor {
     }
 
     /// Compute safety factor from support capacity and peel force.
-    /// Invariant: SF = capacity / force.
-    /// Returns `f32::INFINITY` when the peel force is zero (no load).
-    pub fn compute(capacity: SupportCapacity, force: PeelForce) -> Self {
+    /// Returns None when peel force is zero (no load — trivially safe).
+    pub fn compute(capacity: SupportCapacity, force: PeelForce) -> Option<Self> {
         if force.0 <= 0.0 {
-            return Self(f32::INFINITY);
+            return None;
         }
-        Self(capacity.0 / force.0)
+        Some(Self(capacity.0 / force.0))
     }
 
     pub fn is_safe(&self) -> bool {
@@ -112,28 +108,28 @@ mod tests {
     #[test]
     fn safety_factor_is_capacity_over_force() {
         // KB-114 invariant: SF = F_max / F_total
-        let sf = SafetyFactor::compute(SupportCapacity(37.7), PeelForce(10.0));
+        let sf = SafetyFactor::compute(SupportCapacity(37.7), PeelForce(10.0)).unwrap();
         assert!((sf.value() - 3.77).abs() < 0.01);
     }
 
     #[test]
     fn safety_factor_one_at_equal() {
-        let sf = SafetyFactor::compute(SupportCapacity(37.7), PeelForce(37.7));
+        let sf = SafetyFactor::compute(SupportCapacity(37.7), PeelForce(37.7)).unwrap();
         assert!((sf.value() - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn safety_factor_below_one_is_failure() {
         // KB-114: F_total > F_max → FAIL
-        let sf = SafetyFactor::compute(SupportCapacity(37.7), PeelForce(50.0));
+        let sf = SafetyFactor::compute(SupportCapacity(37.7), PeelForce(50.0)).unwrap();
         assert!(!sf.is_safe());
         assert!((sf.value() - 0.754).abs() < 0.001);
     }
 
     #[test]
-    fn safety_factor_infinity_for_zero_force() {
+    fn safety_factor_none_for_zero_force() {
         let sf = SafetyFactor::compute(SupportCapacity(37.7), PeelForce(0.0));
-        assert!(sf.value().is_infinite());
+        assert!(sf.is_none());
     }
 
     #[test]
