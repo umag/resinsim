@@ -1,0 +1,5 @@
+[build]
+rustflags = ["-Z", "threads=8", "-Aunused_imports"]
+
+[profile.dev]
+opt-level = 0

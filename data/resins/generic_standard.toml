@@ -1,0 +1,27 @@
+# Generic Standard Resin — conservative defaults from KB data
+# Based on Liqcreate Premium Black (KB-100) and general measurements (KB-140, KB-141)
+
+name = "Generic Standard"
+
+# Optical (Beer-Lambert) — KB-100
+penetration_depth_um = 170.0
+critical_energy_mj_cm2 = 5.0
+
+# Mechanical — KB-140
+tensile_strength_mpa = 35.0
+peel_adhesion_kpa = 13.0    # KB-110: standard FEP
+
+# Shrinkage — KB-142
+linear_shrinkage_pct = 1.5
+
+# Thermal/Viscosity — KB-141
+viscosity_mpa_s = 200.0
+reference_temp_c = 25.0
+activation_energy_kj_mol = 52.0  # KB-150: derived from 82% drop
+
+# Density
+density_g_cm3 = 1.1
+
+# Thermal safety thresholds — KB-150
+degradation_temp_c = 50.0
+min_safe_temp_c = 15.0

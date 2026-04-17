@@ -1,0 +1,26 @@
+# Generic ABS-Like Resin — based on Elegoo ABS-Like V2 (KB-140, KB-142)
+
+name = "Generic ABS-Like"
+
+# Optical — estimated, Elegoo does not publish (KB-180)
+penetration_depth_um = 150.0
+critical_energy_mj_cm2 = 8.0
+
+# Mechanical — KB-140: Elegoo ABS-Like V2
+tensile_strength_mpa = 45.0
+peel_adhesion_kpa = 13.0
+
+# Shrinkage — KB-142: Elegoo ABS-Like V2
+linear_shrinkage_pct = 2.4  # ~7.1% volumetric / 3
+
+# Thermal/Viscosity — KB-141
+viscosity_mpa_s = 175.0     # KB-141: 150-200 mPa·s
+reference_temp_c = 25.0
+activation_energy_kj_mol = 52.0
+
+# Density
+density_g_cm3 = 1.12
+
+# Thermal safety thresholds — KB-150
+degradation_temp_c = 50.0
+min_safe_temp_c = 15.0

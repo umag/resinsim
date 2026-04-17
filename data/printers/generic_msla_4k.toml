@@ -1,0 +1,29 @@
+# Generic MSLA 4K Printer — conservative defaults from KB data
+
+name = "Generic MSLA 4K"
+
+# Light source — KB-121
+led_power_mw_cm2 = 4.0
+pixel_pitch_um = 50.0
+
+# Motion
+lift_speed_mm_min = 60.0
+ref_lift_speed_mm_min = 60.0
+lift_distance_mm = 5.0
+lift_cycle_sec = 7.5
+
+# Exposure
+normal_exposure_sec = 2.5
+bottom_exposure_sec = 25.0
+bottom_layer_count = 6
+layer_height_um = 50.0
+
+# Z-axis — KB-131
+z_stiffness_n_per_mm = 460.0
+
+# Thermal — KB-183 (estimates)
+delta_t_steady_c = 10.0
+thermal_tau_sec = 1200.0
+
+# LCD uniformity — KB-120
+lcd_uniformity_variation = 0.22

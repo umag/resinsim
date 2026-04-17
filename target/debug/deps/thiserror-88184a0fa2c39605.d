@@ -1,0 +1,13 @@
+/Users/mag1/dev_tmp/ora/resinsim/target/debug/deps/thiserror-88184a0fa2c39605.d: /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/provide.rs /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/mag1/dev_tmp/ora/resinsim/target/debug/build/thiserror-8fe3afcc47924b6a/out/private.rs
+
+/Users/mag1/dev_tmp/ora/resinsim/target/debug/deps/libthiserror-88184a0fa2c39605.rmeta: /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/provide.rs /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/mag1/dev_tmp/ora/resinsim/target/debug/build/thiserror-8fe3afcc47924b6a/out/private.rs
+
+/Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs:
+/Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs:
+/Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs:
+/Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/provide.rs:
+/Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs:
+/Users/mag1/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs:
+/Users/mag1/dev_tmp/ora/resinsim/target/debug/build/thiserror-8fe3afcc47924b6a/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/mag1/dev_tmp/ora/resinsim/target/debug/build/thiserror-8fe3afcc47924b6a/out
