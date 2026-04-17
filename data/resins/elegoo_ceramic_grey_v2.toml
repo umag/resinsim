@@ -1,0 +1,29 @@
+# Elegoo Ceramic Grey V2
+# Sources: Elegoo published mechanical specs (tensile_strength_mpa)
+# Optical/adhesion values estimated from ceramic-filled resin literature
+# Calibrate penetration_depth_um and peel_adhesion_kpa with Athena II data
+
+name = "Elegoo Ceramic Grey V2"
+
+# Optical (Beer-Lambert) — ceramic particles scatter, shallower than generic
+penetration_depth_um = 145.0
+critical_energy_mj_cm2 = 5.5
+
+# Mechanical — Elegoo published spec
+tensile_strength_mpa = 38.0
+peel_adhesion_kpa = 9.5            # ceramic-filled: lower FEP adhesion than standard 13.0
+
+# Shrinkage — ceramic-constrained
+linear_shrinkage_pct = 0.9
+
+# Thermal/Viscosity — higher viscosity from ceramic filler
+viscosity_mpa_s = 350.0
+reference_temp_c = 25.0
+activation_energy_kj_mol = 52.0
+
+# Density — ceramic filler increases density
+density_g_cm3 = 1.25
+
+# Thermal safety thresholds
+degradation_temp_c = 50.0
+min_safe_temp_c = 15.0

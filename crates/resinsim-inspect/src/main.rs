@@ -31,9 +31,12 @@ enum ReportType {
         /// Path to sliced file (CTB, auto-detected)
         #[arg(long)]
         file: Option<String>,
-        /// Resin name (default: generic_standard)
+        /// Resin name (generic_standard, elegoo_ceramic_grey_v2)
         #[arg(long, default_value = "generic_standard")]
         resin: String,
+        /// Printer name (generic_msla_4k, elegoo_mars5_ultra)
+        #[arg(long, default_value = "generic_msla_4k")]
+        printer: String,
         /// Support tip radius in mm
         #[arg(long, default_value_t = 0.2)]
         tip_radius: f32,
@@ -201,8 +204,8 @@ fn main() {
             }
         },
         Commands::Report { report_type } => match report_type {
-            ReportType::Health { stl, file, resin, tip_radius, n_supports, ambient, json } => {
-                cmd_report_health(stl.as_deref(), file.as_deref(), &resin, tip_radius, n_supports, ambient, json)
+            ReportType::Health { stl, file, resin, printer, tip_radius, n_supports, ambient, json } => {
+                cmd_report_health(stl.as_deref(), file.as_deref(), &resin, &printer, tip_radius, n_supports, ambient, json)
             }
         },
     }
@@ -470,7 +473,7 @@ fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
 }
 
 fn cmd_report_health(
-    path: Option<&str>, file_path: Option<&str>, resin_name: &str,
+    path: Option<&str>, file_path: Option<&str>, resin_name: &str, printer_name: &str,
     tip_radius: f32, n_supports: u32, ambient: f32, json: bool,
 ) {
     use resinsim_core::app::SimulationRunner;
@@ -481,12 +484,20 @@ fn cmd_report_health(
 
     let resin = match resin_name {
         "generic_standard" => ResinProfile::generic_standard(),
+        "elegoo_ceramic_grey_v2" => ResinProfile::elegoo_ceramic_grey_v2(),
         other => {
             eprintln!("Unknown resin profile: {other}. Using generic_standard.");
             ResinProfile::generic_standard()
         }
     };
-    let printer = PrinterProfile::generic_msla_4k();
+    let printer = match printer_name {
+        "generic_msla_4k" => PrinterProfile::generic_msla_4k(),
+        "elegoo_mars5_ultra" => PrinterProfile::elegoo_mars5_ultra(),
+        other => {
+            eprintln!("Unknown printer profile: {other}. Using generic_msla_4k.");
+            PrinterProfile::generic_msla_4k()
+        }
+    };
     let supports = SupportConfig { tip_radius_mm: tip_radius, n_supports };
     let plate = PlateAdhesionProfile::default_textured();
 

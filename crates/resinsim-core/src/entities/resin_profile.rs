@@ -122,6 +122,26 @@ impl ResinProfile {
         vat_temp.value() < self.min_safe_temp_c
     }
 
+    /// Elegoo Ceramic Grey V2.
+    /// Sources: Elegoo published mechanical specs; optical/adhesion values
+    /// estimated from ceramic-filled resin literature (calibrate with Athena II).
+    pub fn elegoo_ceramic_grey_v2() -> Self {
+        Self {
+            name: "Elegoo Ceramic Grey V2".into(),
+            penetration_depth_um: 145.0,   // ceramic particles scatter, shallower cure
+            critical_energy_mj_cm2: 5.5,
+            tensile_strength_mpa: 38.0,    // Elegoo published spec
+            peel_adhesion_kpa: 9.5,        // ceramic-filled: lower FEP adhesion than standard
+            linear_shrinkage_pct: 0.9,     // ceramic-constrained
+            viscosity_mpa_s: 350.0,        // higher viscosity from ceramic filler
+            reference_temp_c: 25.0,
+            activation_energy_kj_mol: 52.0,
+            density_g_cm3: 1.25,           // ceramic filler increases density
+            degradation_temp_c: default_degradation_temp_c(),
+            min_safe_temp_c: default_min_safe_temp_c(),
+        }
+    }
+
     /// Generic standard resin with conservative defaults from KB data.
     pub fn generic_standard() -> Self {
         Self {

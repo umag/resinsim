@@ -90,6 +90,29 @@ impl PrinterProfile {
         Ok(())
     }
 
+    /// Elegoo Mars 5 Ultra — 12K mono LCD, ParaLED, triple linear rail.
+    /// Sources: Elegoo published specs; z_stiffness estimated from triple-rail
+    /// geometry (calibrate with Athena II data when available).
+    pub fn elegoo_mars5_ultra() -> Self {
+        Self {
+            name: "Elegoo Mars 5 Ultra".into(),
+            led_power_mw_cm2: 20.0,        // ParaLED matrix, 12K mono LCD
+            pixel_pitch_um: 19.0,          // 218.88 mm / 11520 px
+            lift_speed_mm_min: 65.0,
+            ref_lift_speed_mm_min: 65.0,
+            lift_distance_mm: 6.0,
+            lift_cycle_sec: 6.5,
+            normal_exposure_sec: 2.0,
+            bottom_exposure_sec: 30.0,
+            bottom_layer_count: 6,
+            layer_height_um: 50.0,
+            z_stiffness_n_per_mm: 900.0,   // estimated — triple linear rail
+            delta_t_steady_c: 8.0,
+            thermal_tau_sec: 1200.0,
+            lcd_uniformity_variation: 0.12, // ParaLED, better than Saturn-class
+        }
+    }
+
     /// Generic MSLA 4K printer with conservative defaults.
     pub fn generic_msla_4k() -> Self {
         Self {
