@@ -60,7 +60,7 @@ fn cross_section_at_z(triangles: &[Triangle], z: f32) -> CrossSectionArea {
     }
 
     if segments.is_empty() {
-        return CrossSectionArea(0.0);
+        return CrossSectionArea::new(0.0).expect("zero is valid");
     }
 
     // For a closed mesh, the segments form closed contours.
@@ -74,7 +74,8 @@ fn cross_section_at_z(triangles: &[Triangle], z: f32) -> CrossSectionArea {
         .abs()
         * 0.5;
 
-    CrossSectionArea(area)
+    CrossSectionArea::new(if area.is_finite() { area } else { 0.0 })
+        .expect("guarded finite — NaN mesh vertices produce zero area")
 }
 
 /// Intersect a triangle with a Z-plane. Returns the 2D segment (in XY)

@@ -280,14 +280,14 @@ fn kb150_duty_cycle_typical() {
 #[test]
 fn kb121_photon_m3_plus_energy() {
     // KB-121: Photon M3 Plus = 7.06 mW/cm² at 2.5s → E = 17.65 mJ/cm²
-    let e = Energy::from_exposure(7.06, 2.5);
+    let e = Energy::from_exposure(7.06, 2.5).unwrap();
     assert!((e.value() - 17.65).abs() < 0.01, "KB-121 M3 Plus energy: got {:.2}", e.value());
 }
 
 #[test]
 fn kb121_saturn_energy() {
     // KB-121: Saturn = 3.72 mW/cm² at 2.5s → E = 9.30 mJ/cm²
-    let e = Energy::from_exposure(3.72, 2.5);
+    let e = Energy::from_exposure(3.72, 2.5).unwrap();
     assert!((e.value() - 9.30).abs() < 0.01, "KB-121 Saturn energy: got {:.2}", e.value());
 }
 
@@ -298,7 +298,7 @@ fn kb121_saturn_energy() {
 #[test]
 fn kb172_cylinder_5mm_force() {
     // KB-172: 5mm dia → A=19.6 mm², σ=13 kPa → F=0.255 N
-    let a = CrossSectionArea::circle(5.0);
+    let a = CrossSectionArea::circle(5.0).unwrap();
     let f = PeelForceCalculator::peel_force(13.0, a, 1.0);
     assert!((f.value() - 0.255).abs() < 0.01, "KB-172 5mm cyl: got {:.3}", f.value());
 }
@@ -306,7 +306,7 @@ fn kb172_cylinder_5mm_force() {
 #[test]
 fn kb172_cylinder_20mm_force() {
     // KB-172: 20mm dia → A=314.2 mm², σ=13 kPa → F=4.08 N
-    let a = CrossSectionArea::circle(20.0);
+    let a = CrossSectionArea::circle(20.0).unwrap();
     let f = PeelForceCalculator::peel_force(13.0, a, 1.0);
     assert!((f.value() - 4.08).abs() < 0.02, "KB-172 20mm cyl: got {:.3}", f.value());
 }
@@ -314,7 +314,7 @@ fn kb172_cylinder_20mm_force() {
 #[test]
 fn kb172_cylinder_30mm_force() {
     // KB-172: 30mm dia → A=706.9 mm², σ=13 kPa → F=9.19 N
-    let a = CrossSectionArea::circle(30.0);
+    let a = CrossSectionArea::circle(30.0).unwrap();
     let f = PeelForceCalculator::peel_force(13.0, a, 1.0);
     assert!((f.value() - 9.19).abs() < 0.02, "KB-172 30mm cyl: got {:.3}", f.value());
 }
@@ -324,10 +324,10 @@ fn kb172_force_linearity() {
     // KB-172: force should be strictly proportional to area across all 6 cylinders
     let diameters = [5.0, 10.0, 15.0, 20.0, 25.0, 30.0];
     let forces: Vec<f32> = diameters.iter()
-        .map(|&d| PeelForceCalculator::peel_force(13.0, CrossSectionArea::circle(d as f64), 1.0).value())
+        .map(|&d| PeelForceCalculator::peel_force(13.0, CrossSectionArea::circle(d as f64).unwrap(), 1.0).value())
         .collect();
     let areas: Vec<f64> = diameters.iter()
-        .map(|&d| CrossSectionArea::circle(d as f64).value())
+        .map(|&d| CrossSectionArea::circle(d as f64).unwrap().value())
         .collect();
 
     // Check F/A ratio is constant

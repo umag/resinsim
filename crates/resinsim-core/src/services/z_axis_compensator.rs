@@ -68,42 +68,42 @@ mod tests {
 
     #[test]
     fn zero_force_zero_deflection() {
-        let dz = ZAxisCompensator::deflection_um(PeelForce(0.0), 460.0);
+        let dz = ZAxisCompensator::deflection_um(PeelForce::new(0.0).unwrap(), 460.0);
         assert!((dz).abs() < 1e-6);
     }
 
     #[test]
     fn deflection_10n_at_460() {
         // KB-131: F=10, k=460 → Δz = 10/460 × 1000 = 21.7 µm
-        let dz = ZAxisCompensator::deflection_um(PeelForce(10.0), 460.0);
+        let dz = ZAxisCompensator::deflection_um(PeelForce::new(10.0).unwrap(), 460.0);
         assert!((dz - 21.7).abs() < 0.1);
     }
 
     #[test]
     fn deflection_120n_matches_mrazek() {
         // KB-131: F=120, k=460 → Δz = 260.9 µm (Mrazek measured ~260)
-        let dz = ZAxisCompensator::deflection_um(PeelForce(120.0), 460.0);
+        let dz = ZAxisCompensator::deflection_um(PeelForce::new(120.0).unwrap(), 460.0);
         assert!((dz - 260.9).abs() < 0.1);
     }
 
     #[test]
     fn deflection_200n_matches_mrazek() {
         // KB-131: F=200, k=460 → Δz = 434.8 µm (Mrazek measured ~340 + settling)
-        let dz = ZAxisCompensator::deflection_um(PeelForce(200.0), 460.0);
+        let dz = ZAxisCompensator::deflection_um(PeelForce::new(200.0).unwrap(), 460.0);
         assert!((dz - 434.8).abs() < 0.1);
     }
 
     #[test]
     fn deflection_with_stiff_axis() {
         // KB-131: F=120, k=1500 → Δz = 80.0 µm
-        let dz = ZAxisCompensator::deflection_um(PeelForce(120.0), 1500.0);
+        let dz = ZAxisCompensator::deflection_um(PeelForce::new(120.0).unwrap(), 1500.0);
         assert!((dz - 80.0).abs() < 0.1);
     }
 
     #[test]
     fn light_load_stiff_axis() {
         // KB-131: F=10, k=1500 → Δz = 6.7 µm
-        let dz = ZAxisCompensator::deflection_um(PeelForce(10.0), 1500.0);
+        let dz = ZAxisCompensator::deflection_um(PeelForce::new(10.0).unwrap(), 1500.0);
         assert!((dz - 6.67).abs() < 0.1);
     }
 

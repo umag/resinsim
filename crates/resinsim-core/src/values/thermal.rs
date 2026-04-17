@@ -5,17 +5,17 @@ use serde::{Deserialize, Serialize};
 /// Vat temperature at a given point in time. Unit: °C.
 /// Rises during printing due to screen heat. KB-150.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct VatTemperature(pub(crate) f32);
+pub struct VatTemperature(f32);
 
 /// Heat flux from LCD/LED screen into resin. Unit: Watts.
 /// Q = P_led × duty_cycle × A_exposed. KB-151.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct ScreenHeatFlux(pub(crate) f32);
+pub struct ScreenHeatFlux(f32);
 
 /// Thermal time constant of resin volume. Unit: seconds.
 /// Controls how fast vat approaches steady-state temperature. KB-183.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct ThermalTimeConstant(pub(crate) f32);
+pub struct ThermalTimeConstant(f32);
 
 impl VatTemperature {
     /// Absolute zero. Temperatures below this are unphysical.

@@ -5,17 +5,17 @@ use serde::{Deserialize, Serialize};
 /// Peel force — force to separate cured layer from FEP film. Unit: Newtons.
 /// Computed as σ_peel × A_layer × f(v_lift) + suction. KB-114.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct PeelForce(pub(crate) f32);
+pub struct PeelForce(f32);
 
 /// Support capacity — maximum force supports can resist. Unit: Newtons.
 /// Computed as σ_tensile × π × r²_tip × N_supports. KB-114.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct SupportCapacity(pub(crate) f32);
+pub struct SupportCapacity(f32);
 
 /// Safety factor — ratio of support capacity to peel force. Dimensionless.
 /// SF > 1.0 = safe, SF = 1.0 = marginal, SF < 1.0 = failure.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct SafetyFactor(pub(crate) f32);
+pub struct SafetyFactor(f32);
 
 impl PeelForce {
     pub fn new(newtons: f32) -> Result<Self, String> {

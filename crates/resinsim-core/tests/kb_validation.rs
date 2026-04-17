@@ -107,7 +107,7 @@ proptest! {
     fn premium_black_typical_exposure_sufficient(
         exposure_sec in 2.0f32..4.0,
     ) {
-        let energy = Energy::from_exposure(4.0, exposure_sec); // KB-121: ~4 mW/cm² typical
+        let energy = Energy::from_exposure(4.0, exposure_sec).unwrap(); // KB-121: ~4 mW/cm² typical
         let cd = CureCalculator::cure_depth(PenetrationDepth::new(170.0).unwrap(), energy, Energy::new(5.0).unwrap());
         prop_assert!(cd.is_sufficient(50.0),
             "Premium Black at {exposure_sec}s should cure >50µm, got {:.1}µm", cd.value());

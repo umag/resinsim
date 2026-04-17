@@ -114,7 +114,7 @@ impl UniformityCalculator {
         profile: &UniformityProfile,
     ) -> CureDepth {
         let factor = Self::intensity_factor(x_mm, y_mm, profile);
-        let local_energy = Energy(nominal_energy.value() * factor);
+        let local_energy = nominal_energy.scale(factor);
         CureCalculator::cure_depth(dp, local_energy, ec)
     }
 
@@ -178,9 +178,9 @@ mod tests {
     #[test]
     fn cure_depth_varies_across_plate() {
         let p = UniformityProfile::saturn_1();
-        let dp = PenetrationDepth(170.0);
-        let ec = Energy(5.0);
-        let e = Energy(10.0);
+        let dp = PenetrationDepth::new(170.0).unwrap();
+        let ec = Energy::new(5.0).unwrap();
+        let e = Energy::new(10.0).unwrap();
 
         let cd_center = UniformityCalculator::cure_depth_at_position(
             96.0, 60.0, e, dp, ec, &p,
@@ -198,9 +198,9 @@ mod tests {
         // Our simplified model won't match exactly (different geometry assumptions)
         // but should show significant spread (>50µm).
         let p = UniformityProfile::saturn_1();
-        let dp = PenetrationDepth(170.0);
-        let ec = Energy(5.0);
-        let e = Energy(10.0);
+        let dp = PenetrationDepth::new(170.0).unwrap();
+        let ec = Energy::new(5.0).unwrap();
+        let e = Energy::new(10.0).unwrap();
 
         let spread = UniformityCalculator::cure_depth_spread(e, dp, ec, &p);
         assert!(spread > 30.0, "Saturn 1 spread should be significant, got {spread:.1}");
@@ -208,9 +208,9 @@ mod tests {
 
     #[test]
     fn saturn2_less_spread_than_saturn1() {
-        let dp = PenetrationDepth(170.0);
-        let ec = Energy(5.0);
-        let e = Energy(10.0);
+        let dp = PenetrationDepth::new(170.0).unwrap();
+        let ec = Energy::new(5.0).unwrap();
+        let e = Energy::new(10.0).unwrap();
 
         let spread_s1 = UniformityCalculator::cure_depth_spread(
             e, dp, ec, &UniformityProfile::saturn_1(),
@@ -227,7 +227,7 @@ mod tests {
     fn uniform_profile_zero_spread() {
         let p = UniformityProfile::uniform();
         let spread = UniformityCalculator::cure_depth_spread(
-            Energy(10.0), PenetrationDepth(170.0), Energy(5.0), &p,
+            Energy::new(10.0).unwrap(), PenetrationDepth::new(170.0).unwrap(), Energy::new(5.0).unwrap(), &p,
         );
         assert!((spread).abs() < 1e-4);
     }

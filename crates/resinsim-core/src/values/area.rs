@@ -4,12 +4,12 @@ use serde::{Deserialize, Serialize};
 
 /// Cross-section area of a cured layer. Unit: mm².
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct CrossSectionArea(pub(crate) f64);
+pub struct CrossSectionArea(f64);
 
 /// Change in cross-section area between consecutive layers. Unit: mm².
 /// Large positive delta = sudden area increase = force spike risk.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct AreaDelta(pub(crate) f64);
+pub struct AreaDelta(f64);
 
 impl CrossSectionArea {
     pub fn new(mm2: f64) -> Result<Self, String> {
@@ -23,8 +23,15 @@ impl CrossSectionArea {
     }
 
     /// Area of a circle with given diameter (mm).
-    pub fn circle(diameter_mm: f64) -> Self {
-        Self(std::f64::consts::PI * (diameter_mm / 2.0).powi(2))
+    /// Returns Err if diameter is negative or non-finite.
+    pub fn circle(diameter_mm: f64) -> Result<Self, String> {
+        if !diameter_mm.is_finite() {
+            return Err(format!("circle diameter must be finite, got {diameter_mm}"));
+        }
+        if diameter_mm < 0.0 {
+            return Err(format!("circle diameter must be non-negative, got {diameter_mm}"));
+        }
+        Ok(Self(std::f64::consts::PI * (diameter_mm / 2.0).powi(2)))
     }
 
     pub fn value(&self) -> f64 {
@@ -68,14 +75,14 @@ mod tests {
     #[test]
     fn circle_area_10mm_diameter() {
         // KB-172: 10mm cylinder → 78.5 mm²
-        let a = CrossSectionArea::circle(10.0);
+        let a = CrossSectionArea::circle(10.0).unwrap();
         assert!((a.value() - 78.54).abs() < 0.01);
     }
 
     #[test]
     fn circle_area_30mm_diameter() {
         // KB-172: 30mm cylinder → 706.9 mm²
-        let a = CrossSectionArea::circle(30.0);
+        let a = CrossSectionArea::circle(30.0).unwrap();
         assert!((a.value() - 706.86).abs() < 0.01);
     }
 
@@ -136,5 +143,29 @@ mod tests {
     #[test]
     fn area_delta_new_rejects_infinity() {
         assert!(AreaDelta::new(f64::INFINITY).is_err());
+    }
+
+    // --- Step 12: circle regression tests ---
+
+    #[test]
+    fn circle_valid_diameter() {
+        let a = CrossSectionArea::circle(10.0).unwrap();
+        assert!((a.value() - 78.54).abs() < 0.01);
+    }
+
+    #[test]
+    fn circle_rejects_negative_diameter() {
+        assert!(CrossSectionArea::circle(-1.0).is_err());
+    }
+
+    #[test]
+    fn circle_rejects_nan_diameter() {
+        assert!(CrossSectionArea::circle(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn circle_zero_diameter_is_zero_area() {
+        let a = CrossSectionArea::circle(0.0).unwrap();
+        assert!((a.value()).abs() < 1e-10);
     }
 }

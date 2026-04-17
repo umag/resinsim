@@ -212,15 +212,15 @@ mod tests {
     fn is_degradation_risk_uses_profile_threshold() {
         let mut p = ResinProfile::generic_standard();
         p.degradation_temp_c = 40.0;
-        assert!(p.is_degradation_risk(VatTemperature(41.0)));
-        assert!(!p.is_degradation_risk(VatTemperature(39.0)));
+        assert!(p.is_degradation_risk(VatTemperature::new(41.0).unwrap()));
+        assert!(!p.is_degradation_risk(VatTemperature::new(39.0).unwrap()));
     }
 
     #[test]
     fn is_too_cold_uses_profile_threshold() {
         let mut p = ResinProfile::generic_standard();
         p.min_safe_temp_c = 18.0;
-        assert!(p.is_too_cold(VatTemperature(17.0)));
-        assert!(!p.is_too_cold(VatTemperature(20.0)));
+        assert!(p.is_too_cold(VatTemperature::new(17.0).unwrap()));
+        assert!(!p.is_too_cold(VatTemperature::new(20.0).unwrap()));
     }
 }

@@ -21,7 +21,8 @@ impl ThermalCalculator {
         time_sec: f32,
     ) -> VatTemperature {
         let rise = delta_t_steady_c * (1.0 - (-time_sec / tau.value()).exp());
-        VatTemperature(ambient_c + rise)
+        VatTemperature::new(ambient_c + rise)
+            .expect("ambient + rise from validated profile is finite and above absolute zero for realistic ambient temperatures")
     }
 
     /// Vat temperature at a specific layer index.
@@ -86,42 +87,42 @@ mod tests {
 
     #[test]
     fn vat_temp_at_t0_equals_ambient() {
-        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant(1200.0), 0.0);
+        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant::new(1200.0).unwrap(), 0.0);
         assert!((t.value() - 22.0).abs() < 1e-6);
     }
 
     #[test]
     fn vat_temp_at_tau_is_63_pct_rise() {
         // At t=τ: rise = ΔT × (1 - 1/e) = 10 × 0.632 = 6.32
-        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant(1200.0), 1200.0);
+        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant::new(1200.0).unwrap(), 1200.0);
         assert!((t.value() - 28.32).abs() < 0.1);
     }
 
     #[test]
     fn vat_temp_at_10min_matches_kb150() {
         // KB-150 vector: T_ambient=22, ΔT=10, τ=1200, t=600 → 25.9
-        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant(1200.0), 600.0);
+        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant::new(1200.0).unwrap(), 600.0);
         assert!((t.value() - 25.9).abs() < 0.1);
     }
 
     #[test]
     fn vat_temp_at_20min_matches_kb150() {
         // KB-150: t=1200 → 28.3
-        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant(1200.0), 1200.0);
+        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant::new(1200.0).unwrap(), 1200.0);
         assert!((t.value() - 28.3).abs() < 0.1);
     }
 
     #[test]
     fn vat_temp_at_40min_matches_kb150() {
         // KB-150: t=2400 → 30.6
-        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant(1200.0), 2400.0);
+        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant::new(1200.0).unwrap(), 2400.0);
         assert!((t.value() - 30.6).abs() < 0.1);
     }
 
     #[test]
     fn vat_temp_approaches_steady_state() {
         // KB-150: t=6000 → ~31.9 (99% rise)
-        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant(1200.0), 6000.0);
+        let t = ThermalCalculator::vat_temperature(22.0, 10.0, ThermalTimeConstant::new(1200.0).unwrap(), 6000.0);
         assert!((t.value() - 32.0).abs() < 0.2);
     }
 
@@ -130,7 +131,7 @@ mod tests {
     #[test]
     fn vat_temp_layer_0_equals_ambient() {
         let t = ThermalCalculator::vat_temperature_at_layer(
-            22.0, 10.0, ThermalTimeConstant(1200.0), 0, 2.5, 7.5,
+            22.0, 10.0, ThermalTimeConstant::new(1200.0).unwrap(), 0, 2.5, 7.5,
         );
         assert!((t.value() - 22.0).abs() < 1e-6);
     }
@@ -139,7 +140,7 @@ mod tests {
     fn vat_temp_layer_100_matches_kb150() {
         // KB-150: layer 100, 10s/layer → t=1000s → 27.7°C
         let t = ThermalCalculator::vat_temperature_at_layer(
-            22.0, 10.0, ThermalTimeConstant(1200.0), 100, 2.5, 7.5,
+            22.0, 10.0, ThermalTimeConstant::new(1200.0).unwrap(), 100, 2.5, 7.5,
         );
         assert!((t.value() - 27.7).abs() < 0.1);
     }
@@ -207,7 +208,7 @@ mod tests {
     #[test]
     fn degradation_risk_detected() {
         use crate::entities::ResinProfile;
-        let t = ThermalCalculator::vat_temperature(40.0, 15.0, ThermalTimeConstant(600.0), 3000.0);
+        let t = ThermalCalculator::vat_temperature(40.0, 15.0, ThermalTimeConstant::new(600.0).unwrap(), 3000.0);
         let resin = ResinProfile::generic_standard();
         assert!(resin.is_degradation_risk(t)); // 40 + ~15 = ~55°C
     }

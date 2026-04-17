@@ -5,18 +5,18 @@ use serde::{Deserialize, Serialize};
 /// Penetration depth — depth at which UV intensity drops to 1/e (37%) of surface. Unit: µm.
 /// Resin-specific property. Typical range: 40-600 µm (KB-102).
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct PenetrationDepth(pub(crate) f32);
+pub struct PenetrationDepth(f32);
 
 /// Energy dose at resin surface. Unit: mJ/cm².
 /// Calculated as I₀ × exposure_time. Typical range: 1-100 mJ/cm² (KB-103).
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct Energy(pub(crate) f32);
+pub struct Energy(f32);
 
 /// Cure depth — distance UV light solidifies resin. Unit: µm.
 /// Computed via Beer-Lambert: Cd = Dp × ln(E / Ec).
 /// Positive = overcured, zero = threshold, negative = undercured.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct CureDepth(pub(crate) f32);
+pub struct CureDepth(f32);
 
 impl PenetrationDepth {
     pub fn new(um: f32) -> Result<Self, &'static str> {
@@ -40,8 +40,25 @@ impl Energy {
     }
 
     /// Compute energy dose from irradiance and exposure time.
-    pub fn from_exposure(irradiance_mw_cm2: f32, exposure_sec: f32) -> Self {
-        Self(irradiance_mw_cm2 * exposure_sec)
+    /// Returns Err if either argument is non-positive or non-finite.
+    pub fn from_exposure(irradiance_mw_cm2: f32, exposure_sec: f32) -> Result<Self, String> {
+        if !irradiance_mw_cm2.is_finite() || irradiance_mw_cm2 <= 0.0 {
+            return Err(format!(
+                "irradiance must be positive and finite, got {irradiance_mw_cm2}"
+            ));
+        }
+        if !exposure_sec.is_finite() || exposure_sec <= 0.0 {
+            return Err(format!(
+                "exposure time must be positive and finite, got {exposure_sec}"
+            ));
+        }
+        Ok(Self(irradiance_mw_cm2 * exposure_sec))
+    }
+
+    /// Scale energy by a dimensionless factor. Factor must be positive and finite.
+    pub fn scale(&self, factor: f32) -> Self {
+        debug_assert!(factor > 0.0 && factor.is_finite(), "scale factor must be positive and finite, got {factor}");
+        Self(self.0 * factor)
     }
 
     pub fn value(&self) -> f32 {
@@ -115,7 +132,7 @@ mod tests {
     #[test]
     fn energy_from_exposure_computes_dose() {
         // KB-121: 4.0 mW/cm² × 2.5s = 10.0 mJ/cm²
-        let e = Energy::from_exposure(4.0, 2.5);
+        let e = Energy::from_exposure(4.0, 2.5).unwrap();
         assert!((e.value() - 10.0).abs() < 1e-6);
     }
 
@@ -165,5 +182,34 @@ mod tests {
     fn cure_depth_new_rejects_infinity() {
         assert!(CureDepth::new(f32::INFINITY).is_err());
         assert!(CureDepth::new(f32::NEG_INFINITY).is_err());
+    }
+
+    // --- Step 12: from_exposure regression tests ---
+
+    #[test]
+    fn from_exposure_valid() {
+        let e = Energy::from_exposure(4.0, 2.5).unwrap();
+        assert!((e.value() - 10.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn from_exposure_rejects_zero_irradiance() {
+        assert!(Energy::from_exposure(0.0, 2.5).is_err());
+    }
+
+    #[test]
+    fn from_exposure_rejects_zero_exposure() {
+        assert!(Energy::from_exposure(4.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn from_exposure_rejects_negative_irradiance() {
+        assert!(Energy::from_exposure(-1.0, 2.5).is_err());
+    }
+
+    #[test]
+    fn from_exposure_rejects_nan() {
+        assert!(Energy::from_exposure(f32::NAN, 2.5).is_err());
+        assert!(Energy::from_exposure(4.0, f32::NAN).is_err());
     }
 }

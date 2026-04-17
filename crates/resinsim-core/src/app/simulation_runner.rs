@@ -39,12 +39,15 @@ impl SimulationRunner {
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
     ) -> Result<PrintSimulation, String> {
+        resin.validate().map_err(|e| format!("resin: {e}"))?;
+        printer.validate().map_err(|e| format!("printer: {e}"))?;
+
         // Pre-pass: detect suction risks and raft layers
         let suction_map = Self::build_suction_map(areas);
         let raft_end = Self::detect_raft_end(areas);
 
         let mut sim = PrintSimulation::new();
-        let mut prev_area = CrossSectionArea(0.0);
+        let mut prev_area = CrossSectionArea::new(0.0).expect("zero is valid");
 
         for (i, &area) in areas.iter().enumerate() {
             let overrides = LayerOverrides {
@@ -73,18 +76,23 @@ impl SimulationRunner {
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
     ) -> Result<PrintSimulation, String> {
+        resin.validate().map_err(|e| format!("resin: {e}"))?;
+        printer.validate().map_err(|e| format!("printer: {e}"))?;
+
         // Pre-pass: detect suction risks and raft layers
         let areas: Vec<CrossSectionArea> = layers.iter()
-            .map(|li| CrossSectionArea(li.cross_section_area_mm2))
-            .collect();
+            .map(|li| CrossSectionArea::new(li.cross_section_area_mm2)
+                .map_err(|e| format!("layer {}: {e}", li.index)))
+            .collect::<Result<_, _>>()?;
         let suction_map = Self::build_suction_map(&areas);
         let raft_end = Self::detect_raft_end(&areas);
 
         let mut sim = PrintSimulation::new();
-        let mut prev_area = CrossSectionArea(0.0);
+        let mut prev_area = CrossSectionArea::new(0.0).expect("zero is valid");
 
         for li in layers {
-            let area = CrossSectionArea(li.cross_section_area_mm2);
+            let area = CrossSectionArea::new(li.cross_section_area_mm2)
+                .map_err(|e| format!("layer {}: {e}", li.index))?;
             let overrides = LayerOverrides {
                 exposure_sec: Some(li.exposure_sec),
                 lift_speed_mm_min: Some(li.lift_speed_mm_min),
@@ -164,7 +172,7 @@ mod tests {
     }
 
     fn cube_areas(n_layers: usize, area: f64) -> Vec<CrossSectionArea> {
-        vec![CrossSectionArea(area); n_layers]
+        vec![CrossSectionArea::new(area).expect("test area is non-negative"); n_layers]
     }
 
     fn sphere_areas(n_layers: usize, radius_mm: f64) -> Vec<CrossSectionArea> {
@@ -174,7 +182,7 @@ mod tests {
                 let h = (i as f64 + 0.5) * layer_height;
                 let d = (h - radius_mm).abs();
                 let a = std::f64::consts::PI * (radius_mm * radius_mm - d * d);
-                CrossSectionArea(a.max(0.0))
+                CrossSectionArea::new(a.max(0.0)).expect("max(0.0) guarantees non-negative")
             })
             .collect()
     }
@@ -251,9 +259,9 @@ mod tests {
         (0..n_layers)
             .map(|i| {
                 if i < base_layers {
-                    CrossSectionArea(base_area)
+                    CrossSectionArea::new(base_area).expect("test area is non-negative")
                 } else {
-                    CrossSectionArea(wall_area)
+                    CrossSectionArea::new(wall_area).expect("test area is non-negative")
                 }
             })
             .collect()
@@ -318,5 +326,29 @@ mod tests {
         let layers = sim.layers();
         assert!(layers[490].vat_temperature_c > layers[10].vat_temperature_c + 3.0);
         assert!(layers[490].viscosity_mpa_s < layers[10].viscosity_mpa_s);
+    }
+
+    // --- Step 12: profile fixture invariant tests ---
+
+    #[test]
+    fn generic_msla_4k_passes_validate() {
+        PrinterProfile::generic_msla_4k().validate().unwrap();
+    }
+
+    #[test]
+    fn generic_standard_resin_passes_validate() {
+        ResinProfile::generic_standard().validate().unwrap();
+    }
+
+    #[test]
+    fn invalid_printer_profile_returns_err() {
+        let mut printer = PrinterProfile::generic_msla_4k();
+        printer.lcd_uniformity_variation = 2.0; // outside [0, 1]
+        let areas = cube_areas(5, 100.0);
+        let result = SimulationRunner::run_from_areas(
+            &areas, &ResinProfile::generic_standard(), &printer,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 }, &default_plate(), 22.0,
+        );
+        assert!(result.is_err(), "invalid profile should be rejected at entry point");
     }
 }
