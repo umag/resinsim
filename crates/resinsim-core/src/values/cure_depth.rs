@@ -20,8 +20,8 @@ pub struct CureDepth(f32);
 
 impl PenetrationDepth {
     pub fn new(um: f32) -> Result<Self, &'static str> {
-        if um <= 0.0 {
-            return Err("penetration depth must be positive");
+        if !um.is_finite() || um <= 0.0 {
+            return Err("penetration depth must be positive and finite");
         }
         Ok(Self(um))
     }
@@ -33,8 +33,8 @@ impl PenetrationDepth {
 
 impl Energy {
     pub fn new(mj_cm2: f32) -> Result<Self, &'static str> {
-        if mj_cm2 <= 0.0 {
-            return Err("energy must be positive");
+        if !mj_cm2.is_finite() || mj_cm2 <= 0.0 {
+            return Err("energy must be positive and finite");
         }
         Ok(Self(mj_cm2))
     }
@@ -57,7 +57,7 @@ impl Energy {
 
     /// Scale energy by a dimensionless factor. Factor must be positive and finite.
     pub fn scale(&self, factor: f32) -> Self {
-        debug_assert!(factor > 0.0 && factor.is_finite(), "scale factor must be positive and finite, got {factor}");
+        assert!(factor > 0.0 && factor.is_finite(), "scale factor must be positive and finite, got {factor}");
         Self(self.0 * factor)
     }
 
@@ -119,6 +119,16 @@ mod tests {
     }
 
     #[test]
+    fn penetration_depth_rejects_nan() {
+        assert!(PenetrationDepth::new(f32::NAN).is_err());
+    }
+
+    #[test]
+    fn penetration_depth_rejects_infinity() {
+        assert!(PenetrationDepth::new(f32::INFINITY).is_err());
+    }
+
+    #[test]
     fn penetration_depth_accepts_positive() {
         let dp = PenetrationDepth::new(170.0).unwrap();
         assert_eq!(dp.value(), 170.0);
@@ -127,6 +137,24 @@ mod tests {
     #[test]
     fn energy_rejects_zero() {
         assert!(Energy::new(0.0).is_err());
+    }
+
+    #[test]
+    fn energy_rejects_nan() {
+        assert!(Energy::new(f32::NAN).is_err());
+    }
+
+    #[test]
+    fn energy_rejects_infinity() {
+        assert!(Energy::new(f32::INFINITY).is_err());
+        assert!(Energy::new(f32::NEG_INFINITY).is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "scale factor")]
+    fn energy_scale_rejects_nan_factor() {
+        let e = Energy::new(10.0).unwrap();
+        let _ = e.scale(f32::NAN);
     }
 
     #[test]

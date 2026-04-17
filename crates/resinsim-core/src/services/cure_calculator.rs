@@ -11,9 +11,23 @@ impl CureCalculator {
     /// Returns negative value for undercured (E < Ec).
     ///
     /// KB-103: Cd = Dp × ln(E / Ec)
+    ///
+    /// Contract: `dp`, `energy`, and `critical_energy` must all be positive and finite.
+    /// `Energy::new` and `Energy::scale` enforce this at construction; this guard is the
+    /// last-line runtime check that also catches any bypass (e.g. transmute in tests).
     pub fn cure_depth(dp: PenetrationDepth, energy: Energy, critical_energy: Energy) -> CureDepth {
+        assert!(
+            critical_energy.value() > 0.0 && critical_energy.value().is_finite(),
+            "cure_depth: critical_energy must be positive and finite, got {}",
+            critical_energy.value()
+        );
+        assert!(
+            energy.value() > 0.0 && energy.value().is_finite(),
+            "cure_depth: energy must be positive and finite, got {}",
+            energy.value()
+        );
         CureDepth::new(dp.value() * (energy.value() / critical_energy.value()).ln())
-            .expect("Beer-Lambert with validated positive dp, energy, critical_energy always yields finite result")
+            .expect("Beer-Lambert with validated dp, energy, critical_energy always yields finite result")
     }
 
     /// Compute UV intensity at depth z into the resin.
@@ -114,6 +128,20 @@ mod tests {
             Energy::new(6.9).unwrap(),
         );
         assert!((cd.value() - 1125.0).abs() < 5.0);
+    }
+
+    // --- Guard contract ---
+
+    #[test]
+    #[should_panic(expected = "cure_depth: critical_energy")]
+    fn cure_depth_panics_on_zero_critical_energy_bypass() {
+        // unsafe: only way to construct Energy(0.0) for testing the runtime guard directly
+        let zero_ec: Energy = unsafe { std::mem::transmute(0.0f32) };
+        let _ = CureCalculator::cure_depth(
+            PenetrationDepth::new(100.0).unwrap(),
+            Energy::new(10.0).unwrap(),
+            zero_ec,
+        );
     }
 
     // --- KB-103 intensity test vectors ---
