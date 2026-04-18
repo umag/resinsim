@@ -74,6 +74,24 @@ impl ResinProfile {
         &self.name
     }
 
+    // --- Public field accessors ---
+    //
+    // Fields are `pub(crate)` per the validate-on-mutation contract. These
+    // accessors expose read-only access to external callers (e.g.
+    // resinsim-inspect's profile-sourced CLI defaults per ADR-0004).
+
+    pub fn penetration_depth_um(&self) -> f32 { self.penetration_depth_um }
+    pub fn critical_energy_mj_cm2(&self) -> f32 { self.critical_energy_mj_cm2 }
+    pub fn tensile_strength_mpa(&self) -> f32 { self.tensile_strength_mpa }
+    pub fn peel_adhesion_kpa(&self) -> f32 { self.peel_adhesion_kpa }
+    pub fn linear_shrinkage_pct(&self) -> f32 { self.linear_shrinkage_pct }
+    pub fn viscosity_mpa_s(&self) -> f32 { self.viscosity_mpa_s }
+    pub fn reference_temp_c(&self) -> f32 { self.reference_temp_c }
+    pub fn activation_energy_kj_mol(&self) -> f32 { self.activation_energy_kj_mol }
+    pub fn density_g_cm3(&self) -> f32 { self.density_g_cm3 }
+    pub fn degradation_temp_c(&self) -> f32 { self.degradation_temp_c }
+    pub fn min_safe_temp_c(&self) -> f32 { self.min_safe_temp_c }
+
     /// Validate physical invariants. Must be called after deserialization from
     /// untrusted sources (e.g. TOML) to prevent NaN/inf propagation through
     /// downstream Beer-Lambert / Arrhenius calculations.

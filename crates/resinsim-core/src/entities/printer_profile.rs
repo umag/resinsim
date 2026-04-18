@@ -65,6 +65,25 @@ impl PrinterProfile {
         &self.name
     }
 
+    // --- Public field accessors ---
+    //
+    // Fields are `pub(crate)` per the validate-on-mutation contract (see struct
+    // doc). These accessors expose read-only access to external callers (e.g.
+    // resinsim-inspect's profile-sourced CLI defaults per ADR-0004).
+
+    pub fn z_stiffness_n_per_mm(&self) -> f32 { self.z_stiffness_n_per_mm }
+    pub fn layer_height_um(&self) -> f32 { self.layer_height_um }
+    pub fn normal_exposure_sec(&self) -> f32 { self.normal_exposure_sec }
+    pub fn bottom_exposure_sec(&self) -> f32 { self.bottom_exposure_sec }
+    pub fn bottom_layer_count(&self) -> u32 { self.bottom_layer_count }
+    pub fn lift_speed_mm_min(&self) -> f32 { self.lift_speed_mm_min }
+    pub fn ref_lift_speed_mm_min(&self) -> f32 { self.ref_lift_speed_mm_min }
+    pub fn lift_cycle_sec(&self) -> f32 { self.lift_cycle_sec }
+    pub fn delta_t_steady_c(&self) -> f32 { self.delta_t_steady_c }
+    pub fn thermal_tau_sec(&self) -> f32 { self.thermal_tau_sec }
+    pub fn led_power_mw_cm2(&self) -> f32 { self.led_power_mw_cm2 }
+    pub fn lcd_uniformity_variation(&self) -> f32 { self.lcd_uniformity_variation }
+
     /// Validate physical invariants. Must be called after deserialization from
     /// untrusted sources to prevent NaN/inf propagation through motion and
     /// thermal calculations.

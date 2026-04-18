@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
 
+mod profile_loader;
+
 #[derive(Parser)]
 #[command(name = "resinsim", about = "Resin 3D printer physics simulation")]
 struct Cli {
@@ -23,7 +25,11 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum ReportType {
-    /// Full print risk assessment from an STL file
+    /// Full print risk assessment from an STL file.
+    ///
+    /// Resolves --printer and --resin by loading TOML from the data
+    /// directory (see ADR-0004 for the 4-stage resolution chain: --data-dir
+    /// flag > RESINSIM_DATA_DIR env > $CWD/data > <binary>/data).
     Health {
         /// Path to STL file
         #[arg(long)]
@@ -31,12 +37,21 @@ enum ReportType {
         /// Path to sliced file (CTB, auto-detected)
         #[arg(long)]
         file: Option<String>,
-        /// Resin name (generic_standard, elegoo_ceramic_grey_v2)
+        /// Resin name (file stem of a .toml under <data-dir>/resins/).
+        ///
+        /// The binary resolves the data-dir via the 4-stage chain documented
+        /// in docs/adr/0004-cli-profile-loading.md: --data-dir flag →
+        /// $RESINSIM_DATA_DIR → $CWD/data → <binary-parent>/data. Unknown
+        /// names hard-error with the list of available profiles.
         #[arg(long, default_value = "generic_standard")]
         resin: String,
-        /// Printer name (generic_msla_4k, elegoo_mars5_ultra)
+        /// Printer name (file stem of a .toml under <data-dir>/printers/).
+        /// See --resin for the data-dir resolution chain.
         #[arg(long, default_value = "generic_msla_4k")]
         printer: String,
+        /// Profile data directory (stage (a) of the ADR-0004 resolution chain).
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
         /// Support tip radius in mm
         #[arg(long, default_value_t = 0.2)]
         tip_radius: f32,
@@ -54,36 +69,55 @@ enum ReportType {
 
 #[derive(Subcommand)]
 enum InspectDomain {
-    /// Compute cure depth from Beer-Lambert equation
+    /// Compute cure depth from Beer-Lambert equation.
+    ///
+    /// Accepts profile-sourced defaults via --resin; explicit --dp/--ec
+    /// override profile values. See docs/adr/0004-cli-profile-loading.md
+    /// for the data-dir resolution chain.
     Cure {
-        /// Penetration depth in µm
-        #[arg(long)]
-        dp: f32,
-        /// Critical energy in mJ/cm²
-        #[arg(long)]
-        ec: f32,
-        /// Energy dose in mJ/cm²
+        /// Penetration depth in µm. Profile source: resin
+        /// penetration_depth_um. Required unless --resin is given.
+        #[arg(long, required_unless_present = "resin")]
+        dp: Option<f32>,
+        /// Critical energy in mJ/cm². Profile source: resin
+        /// critical_energy_mj_cm2. Required unless --resin is given.
+        #[arg(long, required_unless_present = "resin")]
+        ec: Option<f32>,
+        /// Energy dose in mJ/cm² (user input — not profile-sourced).
         #[arg(long)]
         energy: f32,
+        /// Resin profile name (see ADR-0004 for resolution chain).
+        #[arg(long)]
+        resin: Option<String>,
+        /// Profile data directory (stage (a) of the ADR-0004 resolution chain).
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Compute peel force for a given cross-section
+    /// Compute peel force for a given cross-section.
+    ///
+    /// Accepts profile-sourced defaults via --printer / --resin; explicit
+    /// scalar flags override profile values. See ADR-0004 for the data-dir
+    /// resolution chain.
     Force {
-        /// Cross-section area in mm²
+        /// Cross-section area in mm² (not profile-sourced — user input only).
         #[arg(long)]
         area: f64,
-        /// Peel adhesion in kPa (default: 13.0 for standard FEP)
-        #[arg(long, default_value_t = 13.0)]
-        sigma: f32,
-        /// Lift speed in mm/min
-        #[arg(long, default_value_t = 60.0)]
-        speed: f32,
-        /// Reference speed for sigma measurement in mm/min
-        #[arg(long, default_value_t = 60.0)]
-        ref_speed: f32,
-        /// Sealed cavity area in mm² (suction)
+        /// Peel adhesion in kPa. Profile source: resin peel_adhesion_kpa.
+        /// Default: 13.0 (standard FEP).
+        #[arg(long)]
+        sigma: Option<f32>,
+        /// Lift speed in mm/min. Profile source: printer lift_speed_mm_min.
+        /// Default: 60.0.
+        #[arg(long)]
+        speed: Option<f32>,
+        /// Reference speed for sigma measurement in mm/min. Profile source:
+        /// printer ref_lift_speed_mm_min. Default: 60.0.
+        #[arg(long)]
+        ref_speed: Option<f32>,
+        /// Sealed cavity area in mm² (suction; not profile-sourced).
         #[arg(long, default_value_t = 0.0)]
         sealed_area: f64,
         /// Support tip radius in mm
@@ -92,54 +126,96 @@ enum InspectDomain {
         /// Number of supports
         #[arg(long)]
         n_supports: Option<u32>,
-        /// Resin tensile strength in MPa
-        #[arg(long, default_value_t = 35.0)]
-        tensile: f32,
+        /// Resin tensile strength in MPa. Profile source: resin
+        /// tensile_strength_mpa. Default: 35.0.
+        #[arg(long)]
+        tensile: Option<f32>,
+        /// Printer profile name (see ADR-0004).
+        #[arg(long)]
+        printer: Option<String>,
+        /// Resin profile name (see ADR-0004).
+        #[arg(long)]
+        resin: Option<String>,
+        /// Profile data directory (stage (a) of the ADR-0004 resolution chain).
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Compute vat temperature and viscosity drift over a print
+    /// Compute vat temperature and viscosity drift over a print.
+    ///
+    /// Accepts profile-sourced defaults via --printer / --resin; explicit
+    /// scalar flags override profile values. See ADR-0004 for the data-dir
+    /// resolution chain.
     Thermal {
         /// Total number of layers
         #[arg(long)]
         layers: u32,
-        /// Exposure time per layer in seconds
-        #[arg(long, default_value_t = 2.5)]
-        exposure: f32,
-        /// Lift cycle time in seconds (non-exposure portion)
-        #[arg(long, default_value_t = 7.5)]
-        lift_cycle: f32,
-        /// Ambient temperature in °C
+        /// Exposure time per layer in seconds. Profile source: printer
+        /// normal_exposure_sec. Default: 2.5.
+        #[arg(long)]
+        exposure: Option<f32>,
+        /// Lift cycle time in seconds. Profile source: printer
+        /// lift_cycle_sec. Default: 7.5.
+        #[arg(long)]
+        lift_cycle: Option<f32>,
+        /// Ambient temperature in °C (not profile-sourced — user input only).
         #[arg(long, default_value_t = 22.0)]
         ambient: f32,
-        /// Steady-state temperature rise in °C
-        #[arg(long, default_value_t = 10.0)]
-        delta_t: f32,
-        /// Thermal time constant in seconds
-        #[arg(long, default_value_t = 1200.0)]
-        tau: f32,
-        /// Reference viscosity in mPa·s
-        #[arg(long, default_value_t = 200.0)]
-        viscosity: f32,
-        /// Arrhenius activation energy in kJ/mol
-        #[arg(long, default_value_t = 52.0)]
-        ea: f32,
+        /// Steady-state temperature rise in °C. Profile source: printer
+        /// delta_t_steady_c. Default: 10.0.
+        #[arg(long)]
+        delta_t: Option<f32>,
+        /// Thermal time constant in seconds. Profile source: printer
+        /// thermal_tau_sec. Default: 1200.0.
+        #[arg(long)]
+        tau: Option<f32>,
+        /// Reference viscosity in mPa·s. Profile source: resin
+        /// viscosity_mpa_s. Default: 200.0.
+        #[arg(long)]
+        viscosity: Option<f32>,
+        /// Arrhenius activation energy in kJ/mol. Profile source: resin
+        /// activation_energy_kj_mol. Default: 52.0.
+        #[arg(long)]
+        ea: Option<f32>,
+        /// Printer profile name (see ADR-0004 for resolution chain).
+        #[arg(long)]
+        printer: Option<String>,
+        /// Resin profile name (see ADR-0004 for resolution chain).
+        #[arg(long)]
+        resin: Option<String>,
+        /// Profile data directory (stage (a) of the ADR-0004 resolution chain).
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Compute Z-axis deflection and effective layer height
+    /// Compute Z-axis deflection and effective layer height.
+    ///
+    /// Accepts profile-sourced defaults via --printer; explicit scalar flags
+    /// override profile values. See ADR-0004 for the data-dir resolution chain.
     Zaxis {
         /// Peel force in Newtons
         #[arg(long)]
         force: f32,
-        /// Z-axis stiffness in N/mm (default: 460 for Elegoo Mars class)
-        #[arg(long, default_value_t = 460.0)]
-        stiffness: f32,
-        /// Commanded layer height in µm
-        #[arg(long, default_value_t = 50.0)]
-        layer_height: f32,
+        /// Z-axis stiffness in N/mm. If omitted and --printer is set, sourced
+        /// from the profile; otherwise defaults to 460 (Elegoo Mars class).
+        /// Explicit flag always wins over profile (ADR-0004 §Decision(c)).
+        #[arg(long)]
+        stiffness: Option<f32>,
+        /// Commanded layer height in µm. Same precedence as --stiffness;
+        /// default 50.0 µm when no profile is named.
+        #[arg(long)]
+        layer_height: Option<f32>,
+        /// Printer profile name (file stem under <data-dir>/printers/).
+        /// Triggers data-dir resolution per ADR-0004.
+        #[arg(long)]
+        printer: Option<String>,
+        /// Profile data directory (stage (a) of the ADR-0004 resolution chain).
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -184,17 +260,28 @@ fn main() {
 
     match cli.command {
         Commands::Inspect { domain } => match domain {
-            InspectDomain::Cure { dp, ec, energy, json } => cmd_cure(dp, ec, energy, json),
+            InspectDomain::Cure { dp, ec, energy, resin, data_dir, json } => {
+                cmd_cure(dp, ec, energy, resin.as_deref(), data_dir.as_deref(), json)
+            }
             InspectDomain::Force {
                 area, sigma, speed, ref_speed, sealed_area,
-                tip_radius, n_supports, tensile, json,
-            } => cmd_force(area, sigma, speed, ref_speed, sealed_area, tip_radius, n_supports, tensile, json),
+                tip_radius, n_supports, tensile,
+                printer, resin, data_dir, json,
+            } => cmd_force(
+                area, sigma, speed, ref_speed, sealed_area,
+                tip_radius, n_supports, tensile,
+                printer.as_deref(), resin.as_deref(), data_dir.as_deref(), json,
+            ),
             InspectDomain::Thermal {
                 layers, exposure, lift_cycle, ambient,
-                delta_t, tau, viscosity, ea, json,
-            } => cmd_thermal(layers, exposure, lift_cycle, ambient, delta_t, tau, viscosity, ea, json),
-            InspectDomain::Zaxis { force, stiffness, layer_height, json } => {
-                cmd_zaxis(force, stiffness, layer_height, json)
+                delta_t, tau, viscosity, ea,
+                printer, resin, data_dir, json,
+            } => cmd_thermal(
+                layers, exposure, lift_cycle, ambient, delta_t, tau, viscosity, ea,
+                printer.as_deref(), resin.as_deref(), data_dir.as_deref(), json,
+            ),
+            InspectDomain::Zaxis { force, stiffness, layer_height, printer, data_dir, json } => {
+                cmd_zaxis(force, stiffness, layer_height, printer.as_deref(), data_dir.as_deref(), json)
             }
             InspectDomain::Athena { file, from, to, json } => {
                 cmd_athena(&file, from, to, json)
@@ -204,22 +291,47 @@ fn main() {
             }
         },
         Commands::Report { report_type } => match report_type {
-            ReportType::Health { stl, file, resin, printer, tip_radius, n_supports, ambient, json } => {
-                cmd_report_health(stl.as_deref(), file.as_deref(), &resin, &printer, tip_radius, n_supports, ambient, json)
+            ReportType::Health { stl, file, resin, printer, data_dir, tip_radius, n_supports, ambient, json } => {
+                cmd_report_health(stl.as_deref(), file.as_deref(), &resin, &printer, data_dir.as_deref(), tip_radius, n_supports, ambient, json)
             }
         },
     }
 }
 
-fn cmd_cure(dp: f32, ec: f32, energy: f32, json: bool) {
+fn cmd_cure(
+    dp: Option<f32>,
+    ec: Option<f32>,
+    energy: f32,
+    resin_name: Option<&str>,
+    data_dir: Option<&std::path::Path>,
+    json: bool,
+) {
     use resinsim_core::services::CureCalculator;
     use resinsim_core::values::{Energy, PenetrationDepth};
 
-    let dp = match PenetrationDepth::new(dp) {
+    // ADR-0004 precedence. Resolve data-dir only when --resin is set.
+    let resin = resin_name.map(|name| {
+        let dir = profile_loader::resolve_data_dir(data_dir).unwrap_or_else(|e| {
+            eprintln!("{e}"); std::process::exit(1);
+        });
+        profile_loader::load_resin(&dir, name)
+            .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1) })
+    });
+
+    // clap's required_unless_present="resin" guarantees dp+ec are Some OR resin is Some.
+    // Resolve dp/ec: explicit flag > resin profile source > parse-time error (unreachable).
+    let dp_val = dp
+        .or_else(|| resin.as_ref().map(|r| r.penetration_depth_um()))
+        .expect("clap required_unless_present guarantees dp or resin is set");
+    let ec_val = ec
+        .or_else(|| resin.as_ref().map(|r| r.critical_energy_mj_cm2()))
+        .expect("clap required_unless_present guarantees ec or resin is set");
+
+    let dp = match PenetrationDepth::new(dp_val) {
         Ok(v) => v,
         Err(e) => { eprintln!("invalid penetration depth: {e}"); std::process::exit(2); }
     };
-    let ec_val = match Energy::new(ec) {
+    let ec_val = match Energy::new(ec_val) {
         Ok(v) => v,
         Err(e) => { eprintln!("invalid critical energy: {e}"); std::process::exit(2); }
     };
@@ -233,7 +345,7 @@ fn cmd_cure(dp: f32, ec: f32, energy: f32, json: bool) {
         let result = serde_json::json!({
             "cure_depth_um": cd.value(),
             "penetration_depth_um": dp.value(),
-            "critical_energy_mj_cm2": ec,
+            "critical_energy_mj_cm2": ec_val.value(),
             "energy_mj_cm2": energy,
             "sufficient_for_50um": cd.is_sufficient(50.0),
         });
@@ -253,15 +365,56 @@ fn cmd_cure(dp: f32, ec: f32, energy: f32, json: bool) {
     }
 }
 
-// CLI handler — arg count mirrors the clap subcommand's flags, a struct would
-// hide that mapping without simplifying the caller.
+// CLI handler — arg count mirrors the clap subcommand's flags plus the ADR-0004
+// profile loader parameters. A struct would hide the clap mapping.
 #[allow(clippy::too_many_arguments)]
 fn cmd_force(
-    area: f64, sigma: f32, speed: f32, ref_speed: f32, sealed_area: f64,
-    tip_radius: Option<f32>, n_supports: Option<u32>, tensile: f32, json: bool,
+    area: f64,
+    sigma: Option<f32>,
+    speed: Option<f32>,
+    ref_speed: Option<f32>,
+    sealed_area: f64,
+    tip_radius: Option<f32>,
+    n_supports: Option<u32>,
+    tensile: Option<f32>,
+    printer_name: Option<&str>,
+    resin_name: Option<&str>,
+    data_dir: Option<&std::path::Path>,
+    json: bool,
 ) {
     use resinsim_core::services::PeelForceCalculator;
     use resinsim_core::values::{CrossSectionArea, SafetyFactor};
+
+    // ADR-0004 precedence. Resolve data-dir only when a profile is named.
+    let data_dir_resolved = if printer_name.is_some() || resin_name.is_some() {
+        Some(profile_loader::resolve_data_dir(data_dir).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }))
+    } else {
+        None
+    };
+    let printer = printer_name.map(|n| {
+        profile_loader::load_printer(data_dir_resolved.as_deref().expect("resolved"), n)
+            .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1) })
+    });
+    let resin = resin_name.map(|n| {
+        profile_loader::load_resin(data_dir_resolved.as_deref().expect("resolved"), n)
+            .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1) })
+    });
+
+    let sigma = sigma
+        .or_else(|| resin.as_ref().map(|r| r.peel_adhesion_kpa()))
+        .unwrap_or(13.0);
+    let speed = speed
+        .or_else(|| printer.as_ref().map(|p| p.lift_speed_mm_min()))
+        .unwrap_or(60.0);
+    let ref_speed = ref_speed
+        .or_else(|| printer.as_ref().map(|p| p.ref_lift_speed_mm_min()))
+        .unwrap_or(60.0);
+    let tensile = tensile
+        .or_else(|| resin.as_ref().map(|r| r.tensile_strength_mpa()))
+        .unwrap_or(35.0);
 
     let speed_factor = PeelForceCalculator::lift_speed_factor(speed, ref_speed);
     let area_val = match CrossSectionArea::new(area) {
@@ -319,21 +472,76 @@ fn cmd_force(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // CLI handler — see cmd_force note.
+// CLI handler — arg count mirrors clap subcommand flags + profile loaders (ADR-0004).
+#[allow(clippy::too_many_arguments)]
 fn cmd_thermal(
-    layers: u32, exposure: f32, lift_cycle: f32, ambient: f32,
-    delta_t: f32, tau: f32, viscosity: f32, ea: f32, json: bool,
+    layers: u32,
+    exposure: Option<f32>,
+    lift_cycle: Option<f32>,
+    ambient: f32,
+    delta_t: Option<f32>,
+    tau: Option<f32>,
+    viscosity: Option<f32>,
+    ea: Option<f32>,
+    printer_name: Option<&str>,
+    resin_name: Option<&str>,
+    data_dir: Option<&std::path::Path>,
+    json: bool,
 ) {
     use resinsim_core::entities::ResinProfile;
     use resinsim_core::services::ThermalCalculator;
     use resinsim_core::values::ThermalTimeConstant;
 
+    // ADR-0004 precedence. Resolution triggered only when --printer or --resin is set.
+    let data_dir_resolved = if printer_name.is_some() || resin_name.is_some() {
+        Some(profile_loader::resolve_data_dir(data_dir).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }))
+    } else {
+        None
+    };
+    let printer = printer_name.map(|n| {
+        profile_loader::load_printer(
+            data_dir_resolved.as_deref().expect("printer name triggered resolution above"),
+            n,
+        )
+        .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1) })
+    });
+    let resin = resin_name.map(|n| {
+        profile_loader::load_resin(
+            data_dir_resolved.as_deref().expect("resin name triggered resolution above"),
+            n,
+        )
+        .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1) })
+    });
+
+    // Precedence: explicit flag > profile > default (ADR-0004 §Decision(c)).
+    let exposure = exposure
+        .or_else(|| printer.as_ref().map(|p| p.normal_exposure_sec()))
+        .unwrap_or(2.5);
+    let lift_cycle = lift_cycle
+        .or_else(|| printer.as_ref().map(|p| p.lift_cycle_sec()))
+        .unwrap_or(7.5);
+    let delta_t = delta_t
+        .or_else(|| printer.as_ref().map(|p| p.delta_t_steady_c()))
+        .unwrap_or(10.0);
+    let tau = tau
+        .or_else(|| printer.as_ref().map(|p| p.thermal_tau_sec()))
+        .unwrap_or(1200.0);
+    let viscosity = viscosity
+        .or_else(|| resin.as_ref().map(|r| r.viscosity_mpa_s()))
+        .unwrap_or(200.0);
+    let ea = ea
+        .or_else(|| resin.as_ref().map(|r| r.activation_energy_kj_mol()))
+        .unwrap_or(52.0);
+
     let tau_val = match ThermalTimeConstant::new(tau) {
         Ok(v) => v,
         Err(e) => { eprintln!("invalid thermal time constant: {e}"); std::process::exit(2); }
     };
-    // CLI uses generic-standard resin thresholds for degradation warnings.
-    let resin_defaults = ResinProfile::generic_standard();
+    // Degradation warnings use the explicit resin if given; otherwise generic-standard.
+    let resin_defaults = resin.unwrap_or_else(ResinProfile::generic_standard);
     let duty = ThermalCalculator::duty_cycle(exposure, lift_cycle);
 
     // Sample at key layers
@@ -405,9 +613,36 @@ fn cmd_thermal(
     }
 }
 
-fn cmd_zaxis(force: f32, stiffness: f32, layer_height: f32, json: bool) {
+fn cmd_zaxis(
+    force: f32,
+    stiffness: Option<f32>,
+    layer_height: Option<f32>,
+    printer_name: Option<&str>,
+    data_dir: Option<&std::path::Path>,
+    json: bool,
+) {
     use resinsim_core::services::ZAxisCompensator;
     use resinsim_core::values::PeelForce;
+
+    // Precedence (ADR-0004 §Decision(c)):
+    //   explicit flag > profile-sourced > built-in default.
+    // Data-dir resolution only when --printer is set (ADR-0004 §Decision(b)).
+    let printer = printer_name.map(|name| {
+        let dir = profile_loader::resolve_data_dir(data_dir).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
+        profile_loader::load_printer(&dir, name).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        })
+    });
+    let stiffness = stiffness
+        .or_else(|| printer.as_ref().map(|p| p.z_stiffness_n_per_mm()))
+        .unwrap_or(460.0);
+    let layer_height = layer_height
+        .or_else(|| printer.as_ref().map(|p| p.layer_height_um()))
+        .unwrap_or(50.0);
 
     let force_val = match PeelForce::new(force) {
         Ok(v) => v,
@@ -496,31 +731,39 @@ fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
     }
 }
 
-#[allow(clippy::too_many_arguments)] // CLI handler — see cmd_force note.
+// CLI handler — 9 args after --data-dir (ADR-0004). Profile resolution is
+// unconditional here because both --printer and --resin have clap defaults.
+#[allow(clippy::too_many_arguments)]
 fn cmd_report_health(
     path: Option<&str>, file_path: Option<&str>, resin_name: &str, printer_name: &str,
+    data_dir: Option<&std::path::Path>,
     tip_radius: f32, n_supports: u32, ambient: f32, json: bool,
 ) {
     use resinsim_core::app::SimulationRunner;
-    use resinsim_core::entities::{PrinterProfile, ResinProfile, Severity};
+    use resinsim_core::entities::Severity;
     use resinsim_core::services::build_plate::PlateAdhesionProfile;
     use resinsim_core::services::failure_predictor::SupportConfig;
     use std::path::Path;
 
-    let resin = match resin_name {
-        "generic_standard" => ResinProfile::generic_standard(),
-        "elegoo_ceramic_grey_v2" => ResinProfile::elegoo_ceramic_grey_v2(),
-        other => {
-            eprintln!("Unknown resin profile: {other}. Using generic_standard.");
-            ResinProfile::generic_standard()
+    let data_dir = match profile_loader::resolve_data_dir(data_dir) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
         }
     };
-    let printer = match printer_name {
-        "generic_msla_4k" => PrinterProfile::generic_msla_4k(),
-        "elegoo_mars5_ultra" => PrinterProfile::elegoo_mars5_ultra(),
-        other => {
-            eprintln!("Unknown printer profile: {other}. Using generic_msla_4k.");
-            PrinterProfile::generic_msla_4k()
+    let resin = match profile_loader::load_resin(&data_dir, resin_name) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    let printer = match profile_loader::load_printer(&data_dir, printer_name) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
         }
     };
     let supports = SupportConfig { tip_radius_mm: tip_radius, n_supports };
