@@ -16,51 +16,71 @@ fn default_min_safe_temp_c() -> f32 {
 
 /// Physical properties of a resin formulation.
 /// Identity: name. Loaded from TOML profiles in data/resins/.
+///
+/// # Validate-on-mutation contract
+///
+/// Fields are `pub(crate)` — external code cannot construct or mutate a
+/// `ResinProfile`. Construction is restricted to the factory methods on this
+/// type (`generic_standard`, `elegoo_ceramic_grey_v2`) and to TOML
+/// deserialisation via `ResinProfileRepository`, both of which run
+/// `validate()` before returning. After any field mutation by intra-crate
+/// code (typically tests), `validate()` MUST be re-called before treating
+/// the profile as trusted by downstream services. `simulation_runner`
+/// provides defence-in-depth by calling `validate()` again at run entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResinProfile {
-    pub name: String,
+    pub(crate) name: String,
 
     // Optical (Beer-Lambert)
     /// Penetration depth at 405nm. Unit: µm. KB-100, KB-101.
-    pub penetration_depth_um: f32,
+    pub(crate) penetration_depth_um: f32,
     /// Critical energy at 405nm. Unit: mJ/cm². KB-100, KB-101.
-    pub critical_energy_mj_cm2: f32,
+    pub(crate) critical_energy_mj_cm2: f32,
 
     // Mechanical
     /// Tensile strength (post-cure). Unit: MPa. KB-140.
-    pub tensile_strength_mpa: f32,
+    pub(crate) tensile_strength_mpa: f32,
     /// Peel adhesion to FEP. Unit: kPa. KB-110.
-    pub peel_adhesion_kpa: f32,
+    pub(crate) peel_adhesion_kpa: f32,
 
     // Shrinkage
     /// Linear shrinkage. Unit: %. KB-142.
-    pub linear_shrinkage_pct: f32,
+    pub(crate) linear_shrinkage_pct: f32,
 
     // Thermal/Viscosity
     /// Viscosity at reference temperature. Unit: mPa·s. KB-141.
-    pub viscosity_mpa_s: f32,
+    pub(crate) viscosity_mpa_s: f32,
     /// Reference temperature for viscosity. Unit: °C.
-    pub reference_temp_c: f32,
+    pub(crate) reference_temp_c: f32,
     /// Arrhenius activation energy. Unit: kJ/mol. KB-141.
-    pub activation_energy_kj_mol: f32,
+    pub(crate) activation_energy_kj_mol: f32,
 
     /// Density. Unit: g/cm³.
-    pub density_g_cm3: f32,
+    pub(crate) density_g_cm3: f32,
 
     /// Temperature above which this resin begins thermal degradation. Unit: °C.
     /// KB-150. Default 50 °C for typical standard resins.
     #[serde(default = "default_degradation_temp_c")]
-    pub degradation_temp_c: f32,
+    pub(crate) degradation_temp_c: f32,
     /// Temperature below which viscosity spike causes peel/suction problems. Unit: °C.
     /// Default 15 °C for typical standard resins.
     #[serde(default = "default_min_safe_temp_c")]
-    pub min_safe_temp_c: f32,
+    pub(crate) min_safe_temp_c: f32,
 }
 
 impl ResinProfile {
+    /// Resin profile identity (used for display + matching by name).
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Validate physical invariants. Must be called after deserialization from
     /// untrusted sources (e.g. TOML) to prevent NaN/inf propagation through
     /// downstream Beer-Lambert / Arrhenius calculations.
+    ///
+    /// **Contract:** intra-crate code that mutates any field of a previously
+    /// validated `ResinProfile` MUST re-call `validate()` before passing the
+    /// profile to a downstream service. See struct-level doc comment.
     pub fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() {
             return Err("resin name must not be empty".into());
@@ -242,5 +262,23 @@ mod tests {
         p.min_safe_temp_c = 18.0;
         assert!(p.is_too_cold(VatTemperature::new(17.0).unwrap()));
         assert!(!p.is_too_cold(VatTemperature::new(20.0).unwrap()));
+    }
+
+    // Contract demonstration — see ResinProfile struct doc comment.
+    // Distinct from `empty_name_rejected` (which constructs invalid from scratch)
+    // and from the numeric NaN/range tests: this mutates a previously-VALID
+    // profile via the only mutation surface remaining after T1-F5 (intra-crate
+    // field access) and demonstrates that the contract requires re-running
+    // validate() before treating the profile as trusted.
+    #[test]
+    fn validate_after_mutation_contract() {
+        let mut p = ResinProfile::generic_standard();
+        p.validate().expect("baseline profile must be valid");
+        p.name = "   ".into();
+        assert!(
+            p.validate().is_err(),
+            "validate() must be re-called after intra-crate field mutation; \
+             whitespace name should now be rejected"
+        );
     }
 }
