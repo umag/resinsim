@@ -545,7 +545,7 @@ fn cmd_report_health(
         println!("{}", serde_json::to_string_pretty(&result).unwrap());
     } else {
         println!("Print health report: {path}");
-        println!("  Resin: {}, Printer: {}", resin.name(), printer.name);
+        println!("  Resin: {}, Printer: {}", resin.name(), printer.name());
         println!("  Supports: {} x {:.1}mm radius", n_supports, tip_radius);
         println!();
         println!("Summary ({} layers):", summary.total_layers);

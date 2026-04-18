@@ -2,55 +2,76 @@ use serde::{Deserialize, Serialize};
 
 /// Mechanical and optical properties of a printer.
 /// Identity: name. Loaded from TOML profiles in data/printers/.
+///
+/// # Validate-on-mutation contract
+///
+/// Fields are `pub(crate)` — external code cannot construct or mutate a
+/// `PrinterProfile`. Construction is restricted to the factory methods on
+/// this type (`generic_msla_4k`, `elegoo_mars5_ultra`) and to TOML
+/// deserialisation via `PrinterProfileRepository`, both of which run
+/// `validate()` before returning. After any field mutation by intra-crate
+/// code (typically tests), `validate()` MUST be re-called before treating
+/// the profile as trusted by downstream services. `simulation_runner`
+/// provides defence-in-depth by calling `validate()` again at run entry
+/// (lines 43, 80). See `docs/patterns/entity-validate-on-mutation.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrinterProfile {
-    pub name: String,
+    pub(crate) name: String,
 
     // Light source
     /// LED power density at LCD plane. Unit: mW/cm². KB-121.
-    pub led_power_mw_cm2: f32,
+    pub(crate) led_power_mw_cm2: f32,
     /// Physical pixel size. Unit: µm. KB-160.
-    pub pixel_pitch_um: f32,
+    pub(crate) pixel_pitch_um: f32,
 
     // Motion
     /// Lift speed. Unit: mm/min.
-    pub lift_speed_mm_min: f32,
+    pub(crate) lift_speed_mm_min: f32,
     /// Reference speed at which peel adhesion was measured. Unit: mm/min.
-    pub ref_lift_speed_mm_min: f32,
+    pub(crate) ref_lift_speed_mm_min: f32,
     /// Lift distance. Unit: mm.
-    pub lift_distance_mm: f32,
+    pub(crate) lift_distance_mm: f32,
     /// Time for non-exposure portion of layer cycle. Unit: seconds.
-    pub lift_cycle_sec: f32,
+    pub(crate) lift_cycle_sec: f32,
 
     // Exposure
     /// Normal layer exposure time. Unit: seconds.
-    pub normal_exposure_sec: f32,
+    pub(crate) normal_exposure_sec: f32,
     /// Bottom layer exposure time. Unit: seconds.
-    pub bottom_exposure_sec: f32,
+    pub(crate) bottom_exposure_sec: f32,
     /// Number of bottom layers.
-    pub bottom_layer_count: u32,
+    pub(crate) bottom_layer_count: u32,
     /// Layer height. Unit: µm.
-    pub layer_height_um: f32,
+    pub(crate) layer_height_um: f32,
 
     // Z-axis
     /// Z-axis stiffness. Unit: N/mm. KB-131, KB-182.
-    pub z_stiffness_n_per_mm: f32,
+    pub(crate) z_stiffness_n_per_mm: f32,
 
     // Thermal
     /// Steady-state temperature rise above ambient. Unit: °C. KB-183.
-    pub delta_t_steady_c: f32,
+    pub(crate) delta_t_steady_c: f32,
     /// Thermal time constant. Unit: seconds. KB-183.
-    pub thermal_tau_sec: f32,
+    pub(crate) thermal_tau_sec: f32,
 
     // LCD uniformity — KB-120
     /// Peak-to-peak intensity variation as fraction (0.34 = 34%). 0.0 = ideal.
-    pub lcd_uniformity_variation: f32,
+    pub(crate) lcd_uniformity_variation: f32,
 }
 
 impl PrinterProfile {
+    /// Printer profile identity (used for display + matching by name).
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Validate physical invariants. Must be called after deserialization from
     /// untrusted sources to prevent NaN/inf propagation through motion and
     /// thermal calculations.
+    ///
+    /// **Contract:** intra-crate code that mutates any field of a previously
+    /// validated `PrinterProfile` MUST re-call `validate()` before passing the
+    /// profile to a downstream service. See struct-level doc comment.
     pub fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() {
             return Err("printer name must not be empty".into());
@@ -163,5 +184,23 @@ mod tests {
         let mut p = PrinterProfile::generic_msla_4k();
         p.z_stiffness_n_per_mm = f32::INFINITY;
         assert!(p.validate().is_err());
+    }
+
+    // Contract demonstration — see PrinterProfile struct doc comment.
+    // Mirrors ResinProfile's validate_after_mutation_contract from T1-F5
+    // (docs/patterns/entity-validate-on-mutation.md). Distinct from the
+    // numeric range tests above because this exercises the "previously-VALID
+    // → mutated → invalid" sequence on a string field, demonstrating the
+    // contract requires re-running validate() after intra-crate mutation.
+    #[test]
+    fn validate_after_mutation_contract() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.validate().expect("baseline profile must be valid");
+        p.name = "   ".into();
+        assert!(
+            p.validate().is_err(),
+            "validate() must be re-called after intra-crate field mutation; \
+             whitespace name should now be rejected"
+        );
     }
 }
