@@ -125,13 +125,13 @@ impl SimulationRunner {
         if first_area < 10.0 {
             return 0; // no significant raft
         }
-        for i in 1..areas.len() {
-            let ratio = areas[i].value() / first_area;
+        for (i, a) in areas.iter().enumerate().skip(1) {
+            let ratio = a.value() / first_area;
             if ratio < 0.5 {
                 return i as u32;
             }
             // Also break if area starts growing significantly (model started)
-            if areas[i].value() > first_area * 1.2 {
+            if a.value() > first_area * 1.2 {
                 return 0; // not a raft pattern
             }
         }
@@ -191,7 +191,7 @@ mod tests {
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0,
-        ).unwrap();
+        ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let layers = sim.layers();
         let first_force = layers[10].total_force_n;
         let last_force = layers[99].total_force_n;
@@ -205,7 +205,7 @@ mod tests {
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 30 }, &default_plate(), 22.0,
-        ).unwrap();
+        ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let summary = sim.summary();
         assert!(summary.max_force_layer > 80 && summary.max_force_layer < 120,
             "max force should be near equator, got layer {}", summary.max_force_layer);
@@ -217,7 +217,7 @@ mod tests {
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0,
-        ).unwrap();
+        ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         assert_eq!(sim.summary().critical_failures, 0, "small cube should have no failures");
     }
 
@@ -230,7 +230,7 @@ mod tests {
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 5 }, &default_plate(), 22.0,
-        ).unwrap();
+        ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let overload_count = sim.failures().iter()
             .filter(|f| f.failure_type == crate::entities::FailureType::SupportOverload)
             .count();
@@ -247,7 +247,7 @@ mod tests {
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.0, n_supports: 0 }, &no_plate, 22.0,
-        ).unwrap();
+        ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         assert!(sim.summary().critical_failures > 0, "no supports + no plate should fail");
     }
 
@@ -273,7 +273,7 @@ mod tests {
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 }, &default_plate(), 22.0,
-        ).unwrap();
+        ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let suction_events: Vec<_> = sim.failures().iter()
             .filter(|f| f.failure_type == crate::entities::FailureType::SuctionCup)
             .collect();
@@ -289,7 +289,7 @@ mod tests {
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0,
-        ).unwrap();
+        ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let suction_count = sim.failures().iter()
             .filter(|f| f.failure_type == crate::entities::FailureType::SuctionCup)
             .count();
@@ -303,7 +303,7 @@ mod tests {
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 }, &default_plate(), 22.0,
-        ).unwrap();
+        ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let layers = sim.layers();
         // Layer 5 has suction, layer 6 has same wall area but no new suction trigger
         // Both have same peel from adhesion, but layer 5 should have suction force added
@@ -320,7 +320,7 @@ mod tests {
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0,
-        ).unwrap();
+        ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let layers = sim.layers();
         assert!(layers[490].vat_temperature_c > layers[10].vat_temperature_c + 3.0);
         assert!(layers[490].viscosity_mpa_s < layers[10].viscosity_mpa_s);
@@ -330,12 +330,16 @@ mod tests {
 
     #[test]
     fn generic_msla_4k_passes_validate() {
-        PrinterProfile::generic_msla_4k().validate().unwrap();
+        PrinterProfile::generic_msla_4k()
+            .validate()
+            .expect("PrinterProfile::generic_msla_4k() factory must satisfy validate()");
     }
 
     #[test]
     fn generic_standard_resin_passes_validate() {
-        ResinProfile::generic_standard().validate().unwrap();
+        ResinProfile::generic_standard()
+            .validate()
+            .expect("ResinProfile::generic_standard() factory must satisfy validate()");
     }
 
     #[test]

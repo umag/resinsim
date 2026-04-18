@@ -237,7 +237,11 @@ fn cmd_cure(dp: f32, ec: f32, energy: f32, json: bool) {
             "energy_mj_cm2": energy,
             "sufficient_for_50um": cd.is_sufficient(50.0),
         });
-        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")
+        );
     } else {
         println!("Cure depth: {cd}");
         println!("  Dp = {dp}, Ec = {ec_val}, E = {e}");
@@ -249,6 +253,9 @@ fn cmd_cure(dp: f32, ec: f32, energy: f32, json: bool) {
     }
 }
 
+// CLI handler — arg count mirrors the clap subcommand's flags, a struct would
+// hide that mapping without simplifying the caller.
+#[allow(clippy::too_many_arguments)]
 fn cmd_force(
     area: f64, sigma: f32, speed: f32, ref_speed: f32, sealed_area: f64,
     tip_radius: Option<f32>, n_supports: Option<u32>, tensile: f32, json: bool,
@@ -297,7 +304,11 @@ fn cmd_force(
             result["safety_factor"] = serde_json::json!(sf.value());
             result["safe"] = serde_json::json!(sf.is_safe());
         }
-        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")
+        );
     } else {
         println!("Peel force: {peel} (adhesion) + {} (suction) = {total} (total)", suction);
         println!("  σ = {sigma} kPa, A = {area:.1} mm², f(v) = {speed_factor:.3}");
@@ -308,6 +319,7 @@ fn cmd_force(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // CLI handler — see cmd_force note.
 fn cmd_thermal(
     layers: u32, exposure: f32, lift_cycle: f32, ambient: f32,
     delta_t: f32, tau: f32, viscosity: f32, ea: f32, json: bool,
@@ -364,7 +376,11 @@ fn cmd_thermal(
             "ea_kj_mol": ea,
             "points": points,
         });
-        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")
+        );
     } else {
         println!("Vat thermal profile ({layers} layers, duty cycle {:.0}%)", duty * 100.0);
         println!("  Ambient: {ambient}°C, ΔT steady: {delta_t}°C, τ: {tau}s");
@@ -410,7 +426,11 @@ fn cmd_zaxis(force: f32, stiffness: f32, layer_height: f32, json: bool) {
             "effective_layer_height_um": h_eff,
             "severity": format!("{severity:?}"),
         });
-        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")
+        );
     } else {
         println!("Z-axis deflection: {dz:.1} µm");
         println!("  Force: {force} N, k: {stiffness} N/mm");
@@ -455,7 +475,11 @@ fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
                 "std_dev_n": stats.std_dev_n,
             },
         });
-        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")
+        );
     } else {
         let range = match (from, to) {
             (Some(f), Some(t)) => format!("layers {f}..{t}"),
@@ -472,6 +496,7 @@ fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // CLI handler — see cmd_force note.
 fn cmd_report_health(
     path: Option<&str>, file_path: Option<&str>, resin_name: &str, printer_name: &str,
     tip_radius: f32, n_supports: u32, ambient: f32, json: bool,
@@ -542,7 +567,11 @@ fn cmd_report_health(
             },
             "failures": failures,
         });
-        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")
+        );
     } else {
         println!("Print health report: {path}");
         println!("  Resin: {}, Printer: {}", resin.name(), printer.name());
@@ -627,7 +656,11 @@ fn cmd_inspect_layers(file: &str, from: Option<u32>, to: Option<u32>, stats: boo
                     "mean_area_mm2": mean_area,
                 },
             });
-            println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            println!(
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")
+        );
         } else {
             println!("Sliced file: {file}");
             println!("  {info}");

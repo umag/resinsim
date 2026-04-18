@@ -10,8 +10,8 @@ proptest! {
         a1 in 0.0f64..10000.0,
         a2 in 0.0f64..10000.0,
     ) {
-        let f1 = PeelForceCalculator::peel_force(sigma, CrossSectionArea::new(a1).unwrap(), 1.0);
-        let f2 = PeelForceCalculator::peel_force(sigma, CrossSectionArea::new(a2).unwrap(), 1.0);
+        let f1 = PeelForceCalculator::peel_force(sigma, CrossSectionArea::new(a1).expect("proptest strategy 0..10000 mm² produces valid CrossSectionArea"), 1.0);
+        let f2 = PeelForceCalculator::peel_force(sigma, CrossSectionArea::new(a2).expect("proptest strategy 0..10000 mm² produces valid CrossSectionArea"), 1.0);
         if a1 <= a2 {
             prop_assert!(f1.value() <= f2.value() + 1e-6, "more area should give more force");
         }
@@ -24,7 +24,7 @@ proptest! {
         area in 0.0f64..10000.0,
         speed_factor in 0.5f32..5.0,
     ) {
-        let f = PeelForceCalculator::peel_force(sigma, CrossSectionArea::new(area).unwrap(), speed_factor);
+        let f = PeelForceCalculator::peel_force(sigma, CrossSectionArea::new(area).expect("proptest strategy produces non-negative finite mm²"), speed_factor);
         prop_assert!(f.value() >= 0.0, "force should be non-negative: {}", f.value());
     }
 
@@ -35,8 +35,8 @@ proptest! {
         area in 1.0f64..10000.0,
         factor in 1.0f64..10.0,
     ) {
-        let f1 = PeelForceCalculator::peel_force(sigma, CrossSectionArea::new(area).unwrap(), 1.0);
-        let f2 = PeelForceCalculator::peel_force(sigma, CrossSectionArea::new(area * factor).unwrap(), 1.0);
+        let f1 = PeelForceCalculator::peel_force(sigma, CrossSectionArea::new(area).expect("proptest strategy produces non-negative finite mm²"), 1.0);
+        let f2 = PeelForceCalculator::peel_force(sigma, CrossSectionArea::new(area * factor).expect("proptest strategy: area × factor ranges produce finite non-negative mm²"), 1.0);
         let ratio = f2.value() as f64 / f1.value() as f64;
         prop_assert!((ratio - factor).abs() < 0.01,
             "force should scale linearly: ratio {} vs factor {}", ratio, factor);
@@ -48,7 +48,11 @@ proptest! {
         cap in 0.1f32..1000.0,
         force in 0.1f32..1000.0,
     ) {
-        let sf = SafetyFactor::compute(SupportCapacity::new(cap).unwrap(), PeelForce::new(force).unwrap()).unwrap();
+        let sf = SafetyFactor::compute(
+            SupportCapacity::new(cap).expect("proptest strategy 0.1..1000 N produces valid SupportCapacity"),
+            PeelForce::new(force).expect("proptest strategy 0.1..1000 N produces valid PeelForce"),
+        )
+        .expect("SafetyFactor::compute: proptest strategy force > 0 guarantees Some");
         let expected = cap / force;
         prop_assert!((sf.value() - expected).abs() < 1e-4,
             "SF should be cap/force: {} vs {}", sf.value(), expected);
@@ -60,7 +64,11 @@ proptest! {
         cap in 0.1f32..1000.0,
         force in 0.1f32..1000.0,
     ) {
-        let sf = SafetyFactor::compute(SupportCapacity::new(cap).unwrap(), PeelForce::new(force).unwrap()).unwrap();
+        let sf = SafetyFactor::compute(
+            SupportCapacity::new(cap).expect("proptest strategy 0.1..1000 N produces valid SupportCapacity"),
+            PeelForce::new(force).expect("proptest strategy 0.1..1000 N produces valid PeelForce"),
+        )
+        .expect("SafetyFactor::compute: proptest strategy force > 0 guarantees Some");
         if cap > force {
             prop_assert!(sf.is_safe(), "cap > force should be safe: cap={cap}, force={force}, sf={}", sf.value());
         }

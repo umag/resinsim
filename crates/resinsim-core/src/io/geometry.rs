@@ -1,20 +1,17 @@
 use crate::io::stl::{BoundingBox, Triangle};
 use crate::values::CrossSectionArea;
 
-/// Per-layer cross-section area computed by slicing the mesh.
-/// Uses the Sutherland-Hodgman approach: for each triangle, compute
-/// the intersection polygon with the Z-plane, then sum signed areas.
+/// Compute cross-section areas for all layers of a mesh.
+/// Returns one CrossSectionArea per layer from z_min to z_max.
 ///
-/// Simplified approach for Tier 1: count triangle-plane intersections
-/// and compute cross-section area using the shoelace formula on the
-/// intersection contour projected to XY.
+/// Uses a simplified Sutherland-Hodgman approach: for each triangle, compute
+/// the intersection polygon with the Z-plane, then sum signed areas.
+/// For Tier 1 we count triangle-plane intersections and compute cross-section
+/// area via the shoelace formula on the intersection contour projected to XY.
 ///
 /// For solid convex shapes this is exact. For complex meshes with
 /// internal cavities, this gives the outer-boundary area (sufficient
 /// for peel force estimation).
-
-/// Compute cross-section areas for all layers of a mesh.
-/// Returns one CrossSectionArea per layer from z_min to z_max.
 pub fn slice_areas(
     triangles: &[Triangle],
     bbox: &BoundingBox,

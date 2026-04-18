@@ -9,7 +9,7 @@ proptest! {
         area in 1.0f64..10000.0,
         n_layers in 10usize..200,
     ) {
-        let areas = vec![CrossSectionArea::new(area).unwrap(); n_layers];
+        let areas = vec![CrossSectionArea::new(area).expect("proptest strategy produces positive finite mm²"); n_layers];
         let risks = SuctionDetector::detect_from_areas(&areas, None);
         prop_assert!(risks.is_empty(),
             "constant area should never flag suction, got {} risks", risks.len());
@@ -24,7 +24,7 @@ proptest! {
         n_layers in 10usize..100,
     ) {
         let areas: Vec<CrossSectionArea> = (0..n_layers)
-            .map(|i| CrossSectionArea::new(start + step * i as f64).unwrap())
+            .map(|i| CrossSectionArea::new(start + step * i as f64).expect("proptest strategy: start + step × i is positive finite mm²"))
             .collect();
         let risks = SuctionDetector::detect_from_areas(&areas, None);
         prop_assert!(risks.is_empty(),
@@ -37,8 +37,8 @@ proptest! {
         area in 10.0f64..5000.0,
         n_layers in 5usize..50,
     ) {
-        let solid = vec![CrossSectionArea::new(area).unwrap(); n_layers];
-        let outer = vec![CrossSectionArea::new(area).unwrap(); n_layers]; // same = no hollow
+        let solid = vec![CrossSectionArea::new(area).expect("proptest strategy produces positive finite mm²"); n_layers];
+        let outer = vec![CrossSectionArea::new(area).expect("proptest strategy produces positive finite mm²"); n_layers]; // same = no hollow
         let risks = SuctionDetector::detect_from_areas(&solid, Some(&outer));
         prop_assert!(risks.is_empty(),
             "no hollow region should produce no suction");
@@ -53,12 +53,12 @@ proptest! {
         let n = 20;
         let wall_area = base_area * wall_fraction;
 
-        let mut solid = vec![CrossSectionArea::new(base_area).unwrap(); n];
-        let mut outer = vec![CrossSectionArea::new(base_area).unwrap(); n];
+        let mut solid = vec![CrossSectionArea::new(base_area).expect("proptest strategy 50..500 mm² produces valid CrossSectionArea"); n];
+        let mut outer = vec![CrossSectionArea::new(base_area).expect("proptest strategy 50..500 mm² produces valid CrossSectionArea"); n];
         // Transition to ring at layer 5
         for i in 5..n {
-            solid[i] = CrossSectionArea::new(wall_area).unwrap();
-            outer[i] = CrossSectionArea::new(base_area).unwrap();
+            solid[i] = CrossSectionArea::new(wall_area).expect("proptest strategy: base × 0.05..0.45 is positive finite mm²");
+            outer[i] = CrossSectionArea::new(base_area).expect("proptest strategy 50..500 mm² produces valid CrossSectionArea");
         }
 
         let risks = SuctionDetector::detect_from_areas(&solid, Some(&outer));
@@ -80,11 +80,11 @@ proptest! {
         let wall = 30.0; // fixed wall area
 
         let make_cup = |base: f64| {
-            let mut solid = vec![CrossSectionArea::new(base).unwrap(); n];
-            let mut outer = vec![CrossSectionArea::new(base).unwrap(); n];
+            let mut solid = vec![CrossSectionArea::new(base).expect("proptest strategy: base is positive finite mm²"); n];
+            let mut outer = vec![CrossSectionArea::new(base).expect("proptest strategy: base is positive finite mm²"); n];
             for i in 5..n {
-                solid[i] = CrossSectionArea::new(wall).unwrap();
-                outer[i] = CrossSectionArea::new(base).unwrap();
+                solid[i] = CrossSectionArea::new(wall).expect("test fixture: wall=30.0 mm² is in CrossSectionArea domain");
+                outer[i] = CrossSectionArea::new(base).expect("proptest strategy: base is positive finite mm²");
             }
             SuctionDetector::detect_from_areas(&solid, Some(&outer))
         };

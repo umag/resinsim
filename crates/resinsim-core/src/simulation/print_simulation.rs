@@ -24,6 +24,12 @@ pub struct SimSummary {
     pub max_z_deflection_um: f32,
 }
 
+impl Default for PrintSimulation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PrintSimulation {
     pub fn new() -> Self {
         Self {

@@ -55,21 +55,27 @@ mod tests {
 
     #[test]
     fn load_generic_msla() {
-        let profile = repo().load("generic_msla_4k").unwrap();
+        let profile = repo()
+            .load("generic_msla_4k")
+            .expect("test fixture: generic_msla_4k.toml ships with the crate under data/printers/");
         assert_eq!(profile.name, "Generic MSLA 4K");
         assert!((profile.led_power_mw_cm2 - 4.0).abs() < 0.01);
     }
 
     #[test]
     fn load_athena_ii() {
-        let profile = repo().load("athena_ii").unwrap();
+        let profile = repo()
+            .load("athena_ii")
+            .expect("test fixture: athena_ii.toml ships with the crate under data/printers/");
         assert_eq!(profile.name, "Athena II");
         assert!((profile.z_stiffness_n_per_mm - 1500.0).abs() < 0.01);
     }
 
     #[test]
     fn list_printers() {
-        let names = repo().list().unwrap();
+        let names = repo()
+            .list()
+            .expect("test fixture: data/printers/ ships with the crate and is readable");
         assert!(names.contains(&"generic_msla_4k".to_string()));
         assert!(names.contains(&"athena_ii".to_string()));
     }

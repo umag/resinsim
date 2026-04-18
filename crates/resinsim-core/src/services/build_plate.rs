@@ -105,12 +105,17 @@ mod tests {
         PlateAdhesionProfile::default_textured()
     }
 
+    fn area(mm2: f64) -> CrossSectionArea {
+        CrossSectionArea::new(mm2)
+            .expect("test fixture: non-negative finite mm² is in CrossSectionArea domain")
+    }
+
     // --- Bottom layer adhesion ---
 
     #[test]
     fn bottom_layer_uses_plate_adhesion() {
         // Layer 0 (bottom): σ=100 kPa, A=2500 mm² → 250 N
-        let cap = BuildPlate::holding_capacity(0, CrossSectionArea::new(2500.0).unwrap(), &profile());
+        let cap = BuildPlate::holding_capacity(0, area(2500.0), &profile());
         assert!((cap - 250.0).abs() < 0.01);
     }
 
@@ -118,7 +123,7 @@ mod tests {
     fn all_bottom_layers_use_plate_adhesion() {
         let p = profile();
         for layer in 0..p.bottom_layer_count {
-            let cap = BuildPlate::holding_capacity(layer, CrossSectionArea::new(1000.0).unwrap(), &p);
+            let cap = BuildPlate::holding_capacity(layer, area(1000.0), &p);
             // 100 kPa × 1000 mm² = 100 N
             assert!((cap - 100.0).abs() < 0.01, "layer {layer} should use plate adhesion");
         }
@@ -127,15 +132,15 @@ mod tests {
     #[test]
     fn normal_layer_uses_interlayer_bond() {
         // Layer 10 (normal): σ=50 kPa, A=2500 mm² → 125 N
-        let cap = BuildPlate::holding_capacity(10, CrossSectionArea::new(2500.0).unwrap(), &profile());
+        let cap = BuildPlate::holding_capacity(10, area(2500.0), &profile());
         assert!((cap - 125.0).abs() < 0.01);
     }
 
     #[test]
     fn transition_at_bottom_boundary() {
         let p = profile();
-        let last_bottom = BuildPlate::holding_capacity(p.bottom_layer_count - 1, CrossSectionArea::new(1000.0).unwrap(), &p);
-        let first_normal = BuildPlate::holding_capacity(p.bottom_layer_count, CrossSectionArea::new(1000.0).unwrap(), &p);
+        let last_bottom = BuildPlate::holding_capacity(p.bottom_layer_count - 1, area(1000.0), &p);
+        let first_normal = BuildPlate::holding_capacity(p.bottom_layer_count, area(1000.0), &p);
         // Bottom: 100 kPa, Normal: 50 kPa → bottom has 2× adhesion
         assert!(last_bottom > first_normal);
         assert!((last_bottom / first_normal - 2.0).abs() < 0.01);
@@ -147,7 +152,7 @@ mod tests {
     fn cube_50mm_no_supports_bottom_layers_hold() {
         // 50mm cube: A=2500 mm², peel force = 32.5 N
         // Bottom plate adhesion: 100 kPa × 2500 mm² = 250 N >> 32.5 N
-        let plate_cap = BuildPlate::holding_capacity(0, CrossSectionArea::new(2500.0).unwrap(), &profile());
+        let plate_cap = BuildPlate::holding_capacity(0, area(2500.0), &profile());
         let total = BuildPlate::total_capacity(plate_cap, 0.0); // no supports
         assert!(total > 32.5, "plate adhesion ({total} N) should hold 32.5 N peel force");
     }
@@ -155,7 +160,7 @@ mod tests {
     #[test]
     fn cube_50mm_no_supports_normal_layers_hold() {
         // Normal layers: interlayer bond 50 kPa × 2500 mm² = 125 N > 32.5 N
-        let interlayer_cap = BuildPlate::holding_capacity(50, CrossSectionArea::new(2500.0).unwrap(), &profile());
+        let interlayer_cap = BuildPlate::holding_capacity(50, area(2500.0), &profile());
         let total = BuildPlate::total_capacity(interlayer_cap, 0.0);
         assert!(total > 32.5, "interlayer bond ({total} N) should hold 32.5 N peel force");
     }
@@ -172,7 +177,7 @@ mod tests {
 
     #[test]
     fn zero_area_zero_adhesion() {
-        let cap = BuildPlate::holding_capacity(0, CrossSectionArea::new(0.0).unwrap(), &profile());
+        let cap = BuildPlate::holding_capacity(0, area(0.0), &profile());
         assert!((cap).abs() < 1e-6);
     }
 
@@ -189,7 +194,9 @@ mod tests {
 
     #[test]
     fn plate_adhesion_default_passes_validation() {
-        PlateAdhesionProfile::default_textured().validate().unwrap();
+        PlateAdhesionProfile::default_textured()
+            .validate()
+            .expect("PlateAdhesionProfile::default_textured() factory must satisfy validate()");
     }
 
     #[test]

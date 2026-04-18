@@ -77,9 +77,10 @@ proptest! {
         v1 in 0.01f32..0.25,
         v2 in 0.01f32..0.25,
     ) {
-        let dp = PenetrationDepth::new(170.0).unwrap();
-        let ec = Energy::new(5.0).unwrap();
-        let e = Energy::new(10.0).unwrap();
+        let dp = PenetrationDepth::new(170.0)
+            .expect("test fixture: 170.0 µm is in PenetrationDepth domain");
+        let ec = Energy::new(5.0).expect("test fixture: 5.0 mJ/cm² is in Energy domain");
+        let e = Energy::new(10.0).expect("test fixture: 10.0 mJ/cm² is in Energy domain");
 
         let p1 = UniformityProfile { variation: v1, plate_width_mm: 200.0, plate_depth_mm: 120.0 };
         let p2 = UniformityProfile { variation: v2, plate_width_mm: 200.0, plate_depth_mm: 120.0 };
@@ -103,7 +104,11 @@ proptest! {
     ) {
         let profile = UniformityProfile { variation, plate_width_mm: 200.0, plate_depth_mm: 120.0 };
         let spread = UniformityCalculator::cure_depth_spread(
-            Energy::new(energy).unwrap(), PenetrationDepth::new(dp).unwrap(), Energy::new(ec).unwrap(), &profile,
+            Energy::new(energy).expect("proptest strategy 1..50 mJ/cm² produces valid Energy"),
+            PenetrationDepth::new(dp)
+                .expect("proptest strategy 40..600 µm produces valid PenetrationDepth"),
+            Energy::new(ec).expect("proptest strategy 0.5..30 mJ/cm² produces valid Energy"),
+            &profile,
         );
         prop_assert!(spread >= -0.01, "spread should be non-negative: {spread}");
     }

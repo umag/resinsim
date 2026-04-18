@@ -10,7 +10,7 @@ proptest! {
         delta_t in 1.0f32..30.0,
         tau in 100.0f32..5000.0,
     ) {
-        let t = ThermalCalculator::vat_temperature(ambient, delta_t, ThermalTimeConstant::new(tau).unwrap(), 0.0);
+        let t = ThermalCalculator::vat_temperature(ambient, delta_t, ThermalTimeConstant::new(tau).expect("proptest strategy 100..5000 s produces valid ThermalTimeConstant"), 0.0);
         prop_assert!((t.value() - ambient).abs() < 1e-4,
             "at t=0 should be ambient: {} vs {}", t.value(), ambient);
     }
@@ -24,8 +24,8 @@ proptest! {
         t1 in 0.0f32..10000.0,
         t2 in 0.0f32..10000.0,
     ) {
-        let temp1 = ThermalCalculator::vat_temperature(ambient, delta_t, ThermalTimeConstant::new(tau).unwrap(), t1);
-        let temp2 = ThermalCalculator::vat_temperature(ambient, delta_t, ThermalTimeConstant::new(tau).unwrap(), t2);
+        let temp1 = ThermalCalculator::vat_temperature(ambient, delta_t, ThermalTimeConstant::new(tau).expect("proptest strategy 100..5000 s produces valid ThermalTimeConstant"), t1);
+        let temp2 = ThermalCalculator::vat_temperature(ambient, delta_t, ThermalTimeConstant::new(tau).expect("proptest strategy 100..5000 s produces valid ThermalTimeConstant"), t2);
         if t1 <= t2 {
             prop_assert!(temp1.value() <= temp2.value() + 1e-4,
                 "temperature should rise with time: t1={t1} T1={}, t2={t2} T2={}", temp1.value(), temp2.value());
@@ -40,7 +40,7 @@ proptest! {
         tau in 100.0f32..3000.0,
         time in 0.0f32..100000.0,
     ) {
-        let t = ThermalCalculator::vat_temperature(ambient, delta_t, ThermalTimeConstant::new(tau).unwrap(), time);
+        let t = ThermalCalculator::vat_temperature(ambient, delta_t, ThermalTimeConstant::new(tau).expect("proptest strategy 100..5000 s produces valid ThermalTimeConstant"), time);
         prop_assert!(t.value() >= ambient - 1e-4, "temp below ambient: {}", t.value());
         prop_assert!(t.value() <= ambient + delta_t + 1e-4,
             "temp above steady state: {} > {}", t.value(), ambient + delta_t);

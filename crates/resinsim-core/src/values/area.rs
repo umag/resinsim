@@ -75,22 +75,26 @@ mod tests {
     #[test]
     fn circle_area_10mm_diameter() {
         // KB-172: 10mm cylinder → 78.5 mm²
-        let a = CrossSectionArea::circle(10.0).unwrap();
+        let a = CrossSectionArea::circle(10.0)
+            .expect("test fixture: 10.0 mm is in CrossSectionArea::circle domain");
         assert!((a.value() - 78.54).abs() < 0.01);
     }
 
     #[test]
     fn circle_area_30mm_diameter() {
         // KB-172: 30mm cylinder → 706.9 mm²
-        let a = CrossSectionArea::circle(30.0).unwrap();
+        let a = CrossSectionArea::circle(30.0)
+            .expect("test fixture: 30.0 mm is in CrossSectionArea::circle domain");
         assert!((a.value() - 706.86).abs() < 0.01);
     }
 
     #[test]
     fn area_delta_positive_for_increase() {
         let d = AreaDelta::between(
-            CrossSectionArea::new(100.0).unwrap(),
-            CrossSectionArea::new(50.0).unwrap(),
+            CrossSectionArea::new(100.0)
+                .expect("test fixture: 100.0 mm² is in CrossSectionArea domain"),
+            CrossSectionArea::new(50.0)
+                .expect("test fixture: 50.0 mm² is in CrossSectionArea domain"),
         );
         assert!((d.value() - 50.0).abs() < 1e-6);
     }
@@ -98,21 +102,42 @@ mod tests {
     #[test]
     fn area_delta_negative_for_decrease() {
         let d = AreaDelta::between(
-            CrossSectionArea::new(50.0).unwrap(),
-            CrossSectionArea::new(100.0).unwrap(),
+            CrossSectionArea::new(50.0)
+                .expect("test fixture: 50.0 mm² is in CrossSectionArea domain"),
+            CrossSectionArea::new(100.0)
+                .expect("test fixture: 100.0 mm² is in CrossSectionArea domain"),
         );
         assert!((d.value() - (-50.0)).abs() < 1e-6);
     }
 
     #[test]
     fn area_display() {
-        assert_eq!(format!("{}", CrossSectionArea::new(78.5).unwrap()), "78.5 mm²");
+        assert_eq!(
+            format!(
+                "{}",
+                CrossSectionArea::new(78.5)
+                    .expect("test fixture: 78.5 mm² is in CrossSectionArea domain")
+            ),
+            "78.5 mm²"
+        );
     }
 
     #[test]
     fn delta_display_shows_sign() {
-        assert_eq!(format!("{}", AreaDelta::new(50.0).unwrap()), "+50.0 mm²");
-        assert_eq!(format!("{}", AreaDelta::new(-30.0).unwrap()), "-30.0 mm²");
+        assert_eq!(
+            format!(
+                "{}",
+                AreaDelta::new(50.0).expect("test fixture: 50.0 mm² is in AreaDelta domain")
+            ),
+            "+50.0 mm²"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                AreaDelta::new(-30.0).expect("test fixture: -30.0 mm² is in AreaDelta domain")
+            ),
+            "-30.0 mm²"
+        );
     }
 
     #[test]
@@ -127,7 +152,12 @@ mod tests {
 
     #[test]
     fn cross_section_area_new_accepts_zero() {
-        assert_eq!(CrossSectionArea::new(0.0).unwrap().value(), 0.0);
+        assert_eq!(
+            CrossSectionArea::new(0.0)
+                .expect("test fixture: 0.0 mm² is in CrossSectionArea domain")
+                .value(),
+            0.0
+        );
     }
 
     #[test]
@@ -143,7 +173,12 @@ mod tests {
     #[test]
     fn area_delta_new_accepts_negative() {
         // Negative delta is valid (shrinking layer).
-        assert_eq!(AreaDelta::new(-5.0).unwrap().value(), -5.0);
+        assert_eq!(
+            AreaDelta::new(-5.0)
+                .expect("test fixture: -5.0 mm² is in AreaDelta domain")
+                .value(),
+            -5.0
+        );
     }
 
     #[test]
@@ -155,7 +190,8 @@ mod tests {
 
     #[test]
     fn circle_valid_diameter() {
-        let a = CrossSectionArea::circle(10.0).unwrap();
+        let a = CrossSectionArea::circle(10.0)
+            .expect("test fixture: 10.0 mm is in CrossSectionArea::circle domain");
         assert!((a.value() - 78.54).abs() < 0.01);
     }
 
@@ -171,7 +207,8 @@ mod tests {
 
     #[test]
     fn circle_zero_diameter_is_zero_area() {
-        let a = CrossSectionArea::circle(0.0).unwrap();
+        let a = CrossSectionArea::circle(0.0)
+            .expect("test fixture: 0.0 mm is in CrossSectionArea::circle domain");
         assert!((a.value()).abs() < 1e-10);
     }
 }

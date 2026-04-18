@@ -123,7 +123,8 @@ impl ResinProfile {
                 self.min_safe_temp_c
             ));
         }
-        if !(self.min_safe_temp_c < self.degradation_temp_c) {
+        // Both fields are validated finite above, so `>=` is safe on f32.
+        if self.min_safe_temp_c >= self.degradation_temp_c {
             return Err(format!(
                 "min_safe_temp_c ({}) must be strictly less than degradation_temp_c ({})",
                 self.min_safe_temp_c, self.degradation_temp_c
@@ -187,7 +188,9 @@ mod tests {
 
     #[test]
     fn generic_standard_passes_validation() {
-        ResinProfile::generic_standard().validate().unwrap();
+        ResinProfile::generic_standard()
+            .validate()
+            .expect("ResinProfile::generic_standard() factory must satisfy validate()");
     }
 
     #[test]
@@ -252,16 +255,24 @@ mod tests {
     fn is_degradation_risk_uses_profile_threshold() {
         let mut p = ResinProfile::generic_standard();
         p.degradation_temp_c = 40.0;
-        assert!(p.is_degradation_risk(VatTemperature::new(41.0).unwrap()));
-        assert!(!p.is_degradation_risk(VatTemperature::new(39.0).unwrap()));
+        assert!(p.is_degradation_risk(
+            VatTemperature::new(41.0).expect("test fixture: 41.0 °C is in VatTemperature domain")
+        ));
+        assert!(!p.is_degradation_risk(
+            VatTemperature::new(39.0).expect("test fixture: 39.0 °C is in VatTemperature domain")
+        ));
     }
 
     #[test]
     fn is_too_cold_uses_profile_threshold() {
         let mut p = ResinProfile::generic_standard();
         p.min_safe_temp_c = 18.0;
-        assert!(p.is_too_cold(VatTemperature::new(17.0).unwrap()));
-        assert!(!p.is_too_cold(VatTemperature::new(20.0).unwrap()));
+        assert!(p.is_too_cold(
+            VatTemperature::new(17.0).expect("test fixture: 17.0 °C is in VatTemperature domain")
+        ));
+        assert!(!p.is_too_cold(
+            VatTemperature::new(20.0).expect("test fixture: 20.0 °C is in VatTemperature domain")
+        ));
     }
 
     // Contract demonstration — see ResinProfile struct doc comment.

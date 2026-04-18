@@ -10,7 +10,7 @@ proptest! {
         force in 0.0f32..500.0,
         k in 100.0f32..5000.0,
     ) {
-        let dz = ZAxisCompensator::deflection_um(PeelForce::new(force).unwrap(), k);
+        let dz = ZAxisCompensator::deflection_um(PeelForce::new(force).expect("proptest strategy produces non-negative finite N"), k);
         prop_assert!(dz >= 0.0, "deflection should be non-negative: {}", dz);
     }
 
@@ -21,8 +21,8 @@ proptest! {
         f2 in 0.0f32..500.0,
         k in 100.0f32..5000.0,
     ) {
-        let dz1 = ZAxisCompensator::deflection_um(PeelForce::new(f1).unwrap(), k);
-        let dz2 = ZAxisCompensator::deflection_um(PeelForce::new(f2).unwrap(), k);
+        let dz1 = ZAxisCompensator::deflection_um(PeelForce::new(f1).expect("proptest strategy 0..500 N produces valid PeelForce"), k);
+        let dz2 = ZAxisCompensator::deflection_um(PeelForce::new(f2).expect("proptest strategy 0..500 N produces valid PeelForce"), k);
         if f1 <= f2 {
             prop_assert!(dz1 <= dz2 + 1e-4, "more force should give more deflection");
         }
@@ -35,8 +35,8 @@ proptest! {
         k1 in 100.0f32..2500.0,
         k2 in 100.0f32..2500.0,
     ) {
-        let dz1 = ZAxisCompensator::deflection_um(PeelForce::new(force).unwrap(), k1);
-        let dz2 = ZAxisCompensator::deflection_um(PeelForce::new(force).unwrap(), k2);
+        let dz1 = ZAxisCompensator::deflection_um(PeelForce::new(force).expect("proptest strategy produces non-negative finite N"), k1);
+        let dz2 = ZAxisCompensator::deflection_um(PeelForce::new(force).expect("proptest strategy produces non-negative finite N"), k2);
         if k1 <= k2 {
             prop_assert!(dz1 >= dz2 - 1e-4, "stiffer axis should deflect less");
         }
@@ -75,7 +75,7 @@ proptest! {
         force in 1.0f32..200.0,
         k_original in 100.0f32..5000.0,
     ) {
-        let dz = ZAxisCompensator::deflection_um(PeelForce::new(force).unwrap(), k_original);
+        let dz = ZAxisCompensator::deflection_um(PeelForce::new(force).expect("proptest strategy produces non-negative finite N"), k_original);
         if dz > 0.1 { // avoid divide-by-near-zero
             let k_derived = ZAxisCompensator::derive_stiffness(force, dz);
             prop_assert!((k_derived - k_original).abs() < 1.0,

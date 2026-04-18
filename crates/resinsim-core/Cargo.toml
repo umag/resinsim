@@ -16,3 +16,6 @@ cbc = "0.1"
 [dev-dependencies]
 proptest = "1.9.0"
 approx = "0.5"
+
+[lints]
+workspace = true

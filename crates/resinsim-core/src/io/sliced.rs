@@ -127,7 +127,8 @@ mod tests {
 
     #[test]
     fn layer_input_accepts_valid() {
-        let li = LayerInput::new(0, 100.0, 2.5, 60.0, 50.0, 0.025).unwrap();
+        let li = LayerInput::new(0, 100.0, 2.5, 60.0, 50.0, 0.025)
+            .expect("test fixture: finite non-negative inputs are in LayerInput::new domain");
         assert_eq!(li.index, 0);
         assert!((li.cross_section_area_mm2 - 100.0).abs() < 1e-6);
     }
@@ -176,7 +177,8 @@ mod tests {
 
     #[test]
     fn layer_input_display() {
-        let li = LayerInput::new(42, 256.7, 2.5, 60.0, 50.0, 2.125).unwrap();
+        let li = LayerInput::new(42, 256.7, 2.5, 60.0, 50.0, 2.125)
+            .expect("test fixture: finite non-negative inputs are in LayerInput::new domain");
         let s = format!("{li}");
         assert!(s.contains("Layer 42"));
         assert!(s.contains("256.7 mm²"));

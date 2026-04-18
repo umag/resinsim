@@ -17,7 +17,7 @@ proptest! {
             bottom_layer_count: bottom_count,
             interlayer_bond_kpa: bond_kpa,
         };
-        let cap = BuildPlate::holding_capacity(layer, CrossSectionArea::new(area).unwrap(), &profile);
+        let cap = BuildPlate::holding_capacity(layer, CrossSectionArea::new(area).expect("proptest strategy: non-negative finite mm² produces valid CrossSectionArea"), &profile);
         prop_assert!(cap >= 0.0, "capacity must be non-negative: {cap}");
     }
 
@@ -29,8 +29,8 @@ proptest! {
         factor in 1.0f64..10.0,
     ) {
         let profile = PlateAdhesionProfile::default_textured();
-        let cap1 = BuildPlate::holding_capacity(layer, CrossSectionArea::new(area).unwrap(), &profile);
-        let cap2 = BuildPlate::holding_capacity(layer, CrossSectionArea::new(area * factor).unwrap(), &profile);
+        let cap1 = BuildPlate::holding_capacity(layer, CrossSectionArea::new(area).expect("proptest strategy: non-negative finite mm² produces valid CrossSectionArea"), &profile);
+        let cap2 = BuildPlate::holding_capacity(layer, CrossSectionArea::new(area * factor).expect("proptest strategy: area * factor in (1,5000) × (1,10) produces finite non-negative mm²"), &profile);
         if cap1 > 0.0 {
             let ratio = cap2 as f64 / cap1 as f64;
             prop_assert!((ratio - factor).abs() < 0.01,
@@ -45,9 +45,9 @@ proptest! {
         area in 1.0f64..10000.0,
     ) {
         let profile = PlateAdhesionProfile::default_textured();
-        let bottom_cap = BuildPlate::holding_capacity(0, CrossSectionArea::new(area).unwrap(), &profile);
+        let bottom_cap = BuildPlate::holding_capacity(0, CrossSectionArea::new(area).expect("proptest strategy: non-negative finite mm² produces valid CrossSectionArea"), &profile);
         let normal_cap = BuildPlate::holding_capacity(
-            profile.bottom_layer_count, CrossSectionArea::new(area).unwrap(), &profile,
+            profile.bottom_layer_count, CrossSectionArea::new(area).expect("proptest strategy: non-negative finite mm² produces valid CrossSectionArea"), &profile,
         );
         prop_assert!(bottom_cap >= normal_cap,
             "bottom should be >= normal: {bottom_cap} vs {normal_cap}");

@@ -132,10 +132,15 @@ impl SuctionDetector {
 mod tests {
     use super::*;
 
+    fn area(mm2: f64) -> CrossSectionArea {
+        CrossSectionArea::new(mm2)
+            .expect("test fixture: non-negative finite mm² is in CrossSectionArea domain")
+    }
+
     #[test]
     fn solid_cube_no_suction() {
         // Constant area → no hollows → no suction
-        let areas: Vec<CrossSectionArea> = vec![CrossSectionArea::new(100.0).unwrap(); 50];
+        let areas: Vec<CrossSectionArea> = vec![area(100.0); 50];
         let risks = SuctionDetector::detect_from_areas(&areas, None);
         assert!(risks.is_empty(), "solid cube should have no suction risks");
     }
@@ -146,18 +151,18 @@ mod tests {
         // Layer 0-5: solid base (outer=314, solid=314)
         // Layer 6+: ring walls (outer=314, solid=59.7) → hollow=254.3 mm²
         let n = 20;
-        let mut solid = vec![CrossSectionArea::new(0.0).unwrap(); n];
-        let mut outer = vec![CrossSectionArea::new(0.0).unwrap(); n];
+        let mut solid = vec![area(0.0); n];
+        let mut outer = vec![area(0.0); n];
 
         // Solid base
         for i in 0..6 {
-            solid[i] = CrossSectionArea::new(314.0).unwrap();
-            outer[i] = CrossSectionArea::new(314.0).unwrap();
+            solid[i] = area(314.0);
+            outer[i] = area(314.0);
         }
         // Ring walls (20mm OD, 1mm wall → ID=18mm)
         for i in 6..n {
-            solid[i] = CrossSectionArea::new(59.7).unwrap(); // wall cross-section only
-            outer[i] = CrossSectionArea::new(314.0).unwrap(); // outer boundary still 20mm dia
+            solid[i] = area(59.7); // wall cross-section only
+            outer[i] = area(314.0); // outer boundary still 20mm dia
         }
 
         let risks = SuctionDetector::detect_from_areas(&solid, Some(&outer));
@@ -174,15 +179,15 @@ mod tests {
         // model imperfect modelling; we assert that if a risk is flagged,
         // its sealed area is small (< 10 mm²) — far below a true sealed cup.
         let n = 20;
-        let mut solid = vec![CrossSectionArea::new(0.0).unwrap(); n];
-        let mut outer = vec![CrossSectionArea::new(0.0).unwrap(); n];
+        let mut solid = vec![area(0.0); n];
+        let mut outer = vec![area(0.0); n];
         for i in 0..6 {
-            solid[i] = CrossSectionArea::new(314.0).unwrap();
-            outer[i] = CrossSectionArea::new(314.0).unwrap();
+            solid[i] = area(314.0);
+            outer[i] = area(314.0);
         }
         for i in 6..n {
-            solid[i] = CrossSectionArea::new(59.7).unwrap();
-            outer[i] = CrossSectionArea::new(65.0).unwrap();
+            solid[i] = area(59.7);
+            outer[i] = area(65.0);
         }
 
         let risks = SuctionDetector::detect_from_areas(&solid, Some(&outer));
@@ -198,17 +203,17 @@ mod tests {
     #[test]
     fn mismatched_array_lengths_do_not_panic() {
         // Defensive: outer_areas shorter than solid_areas must not oob-panic.
-        let solid = vec![CrossSectionArea::new(100.0).unwrap(); 10];
-        let outer = vec![CrossSectionArea::new(150.0).unwrap(); 3];
+        let solid = vec![area(100.0); 10];
+        let outer = vec![area(150.0); 3];
         let _ = SuctionDetector::detect_from_areas(&solid, Some(&outer));
     }
 
     #[test]
     fn heuristic_detects_area_drop() {
         // Solid base → thin walls: 314 mm² drops to 60 mm² (ratio 0.19)
-        let mut areas: Vec<CrossSectionArea> = vec![CrossSectionArea::new(314.0).unwrap(); 10];
-        for i in 5..10 {
-            areas[i] = CrossSectionArea::new(60.0).unwrap();
+        let mut areas: Vec<CrossSectionArea> = vec![area(314.0); 10];
+        for a in areas.iter_mut().take(10).skip(5) {
+            *a = area(60.0);
         }
 
         let risks = SuctionDetector::detect_from_areas(&areas, None);
@@ -234,11 +239,11 @@ mod tests {
     #[test]
     fn suction_force_magnitude() {
         // KB-114: sealed 20mm cup → A=254 mm², ΔP=50 kPa → F=12.7 N
-        let mut solid = vec![CrossSectionArea::new(314.0).unwrap(); 10];
-        let mut outer = vec![CrossSectionArea::new(314.0).unwrap(); 10];
+        let mut solid = vec![area(314.0); 10];
+        let mut outer = vec![area(314.0); 10];
         for i in 5..10 {
-            solid[i] = CrossSectionArea::new(59.7).unwrap();
-            outer[i] = CrossSectionArea::new(314.0).unwrap();
+            solid[i] = area(59.7);
+            outer[i] = area(314.0);
         }
 
         let risks = SuctionDetector::detect_from_areas(&solid, Some(&outer));

@@ -109,20 +109,20 @@ mod tests {
     fn safety_factor_is_capacity_over_force() {
         // KB-114 invariant: SF = F_max / F_total
         let sf = SafetyFactor::compute(
-            SupportCapacity::new(37.7).unwrap(),
-            PeelForce::new(10.0).unwrap(),
+            SupportCapacity::new(37.7).expect("test fixture: 37.7 N is in SupportCapacity domain"),
+            PeelForce::new(10.0).expect("test fixture: 10.0 N is in PeelForce domain"),
         )
-        .unwrap();
+        .expect("SafetyFactor::compute: non-zero peel force guarantees Some");
         assert!((sf.value() - 3.77).abs() < 0.01);
     }
 
     #[test]
     fn safety_factor_one_at_equal() {
         let sf = SafetyFactor::compute(
-            SupportCapacity::new(37.7).unwrap(),
-            PeelForce::new(37.7).unwrap(),
+            SupportCapacity::new(37.7).expect("test fixture: 37.7 N is in SupportCapacity domain"),
+            PeelForce::new(37.7).expect("test fixture: 37.7 N is in PeelForce domain"),
         )
-        .unwrap();
+        .expect("SafetyFactor::compute: non-zero peel force guarantees Some");
         assert!((sf.value() - 1.0).abs() < 1e-6);
     }
 
@@ -130,10 +130,10 @@ mod tests {
     fn safety_factor_below_one_is_failure() {
         // KB-114: F_total > F_max → FAIL
         let sf = SafetyFactor::compute(
-            SupportCapacity::new(37.7).unwrap(),
-            PeelForce::new(50.0).unwrap(),
+            SupportCapacity::new(37.7).expect("test fixture: 37.7 N is in SupportCapacity domain"),
+            PeelForce::new(50.0).expect("test fixture: 50.0 N is in PeelForce domain"),
         )
-        .unwrap();
+        .expect("SafetyFactor::compute: non-zero peel force guarantees Some");
         assert!(!sf.is_safe());
         assert!((sf.value() - 0.754).abs() < 0.001);
     }
@@ -141,15 +141,21 @@ mod tests {
     #[test]
     fn safety_factor_none_for_zero_force() {
         let sf = SafetyFactor::compute(
-            SupportCapacity::new(37.7).unwrap(),
-            PeelForce::new(0.0).unwrap(),
+            SupportCapacity::new(37.7).expect("test fixture: 37.7 N is in SupportCapacity domain"),
+            PeelForce::new(0.0).expect("test fixture: 0.0 N is in PeelForce domain"),
         );
         assert!(sf.is_none());
     }
 
     #[test]
     fn peel_force_display() {
-        assert_eq!(format!("{}", PeelForce::new(32.5).unwrap()), "32.50 N");
+        assert_eq!(
+            format!(
+                "{}",
+                PeelForce::new(32.5).expect("test fixture: 32.5 N is in PeelForce domain")
+            ),
+            "32.50 N"
+        );
     }
 
     #[test]
@@ -169,7 +175,12 @@ mod tests {
 
     #[test]
     fn peel_force_new_accepts_zero() {
-        assert_eq!(PeelForce::new(0.0).unwrap().value(), 0.0);
+        assert_eq!(
+            PeelForce::new(0.0)
+                .expect("test fixture: 0.0 N is in PeelForce domain")
+                .value(),
+            0.0
+        );
     }
 
     #[test]
@@ -184,7 +195,12 @@ mod tests {
 
     #[test]
     fn support_capacity_new_accepts_zero() {
-        assert_eq!(SupportCapacity::new(0.0).unwrap().value(), 0.0);
+        assert_eq!(
+            SupportCapacity::new(0.0)
+                .expect("test fixture: 0.0 N is in SupportCapacity domain")
+                .value(),
+            0.0
+        );
     }
 
     #[test]

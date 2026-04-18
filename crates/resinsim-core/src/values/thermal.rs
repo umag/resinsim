@@ -99,7 +99,8 @@ mod tests {
 
     #[test]
     fn celsius_to_kelvin() {
-        let t = VatTemperature::new(25.0).unwrap();
+        let t =
+            VatTemperature::new(25.0).expect("test fixture: 25.0 °C is in VatTemperature domain");
         assert!((t.to_kelvin() - 298.15).abs() < 0.01);
     }
 
@@ -116,7 +117,12 @@ mod tests {
 
     #[test]
     fn vat_temperature_new_accepts_normal() {
-        assert_eq!(VatTemperature::new(25.0).unwrap().value(), 25.0);
+        assert_eq!(
+            VatTemperature::new(25.0)
+                .expect("test fixture: 25.0 °C is in VatTemperature domain")
+                .value(),
+            25.0
+        );
     }
 
     #[test]
@@ -136,7 +142,12 @@ mod tests {
 
     #[test]
     fn screen_heat_flux_new_accepts_zero() {
-        assert_eq!(ScreenHeatFlux::new(0.0).unwrap().value(), 0.0);
+        assert_eq!(
+            ScreenHeatFlux::new(0.0)
+                .expect("test fixture: 0.0 W/m² is in ScreenHeatFlux domain")
+                .value(),
+            0.0
+        );
     }
 
     #[test]
@@ -156,6 +167,11 @@ mod tests {
 
     #[test]
     fn thermal_time_constant_new_accepts_positive() {
-        assert_eq!(ThermalTimeConstant::new(1200.0).unwrap().value(), 1200.0);
+        assert_eq!(
+            ThermalTimeConstant::new(1200.0)
+                .expect("test fixture: 1200.0 s is in ThermalTimeConstant domain")
+                .value(),
+            1200.0
+        );
     }
 }

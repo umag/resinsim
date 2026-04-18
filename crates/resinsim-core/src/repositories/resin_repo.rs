@@ -59,7 +59,9 @@ mod tests {
 
     #[test]
     fn load_generic_standard() {
-        let profile = repo().load("generic_standard").unwrap();
+        let profile = repo()
+            .load("generic_standard")
+            .expect("test fixture: generic_standard.toml ships with the crate under data/resins/");
         assert_eq!(profile.name, "Generic Standard");
         assert!((profile.penetration_depth_um - 170.0).abs() < 0.01);
         assert!((profile.critical_energy_mj_cm2 - 5.0).abs() < 0.01);
@@ -67,13 +69,17 @@ mod tests {
 
     #[test]
     fn load_abs_like() {
-        let profile = repo().load("generic_abs_like").unwrap();
+        let profile = repo()
+            .load("generic_abs_like")
+            .expect("test fixture: generic_abs_like.toml ships with the crate under data/resins/");
         assert_eq!(profile.name, "Generic ABS-Like");
     }
 
     #[test]
     fn load_liqcreate() {
-        let profile = repo().load("liqcreate_premium_black").unwrap();
+        let profile = repo().load("liqcreate_premium_black").expect(
+            "test fixture: liqcreate_premium_black.toml ships with the crate under data/resins/",
+        );
         assert_eq!(profile.name, "Liqcreate Premium Black");
         assert!((profile.viscosity_mpa_s - 300.0).abs() < 0.01);
     }
@@ -86,7 +92,9 @@ mod tests {
 
     #[test]
     fn list_profiles() {
-        let names = repo().list().unwrap();
+        let names = repo()
+            .list()
+            .expect("test fixture: data/resins/ ships with the crate and is readable");
         assert!(names.contains(&"generic_standard".to_string()));
         assert!(names.contains(&"generic_abs_like".to_string()));
         assert!(names.contains(&"liqcreate_premium_black".to_string()));

@@ -10,8 +10,8 @@ proptest! {
         ec in 0.5f32..30.0,
         ratio in 1.01f32..100.0,
     ) {
-        let energy = Energy::new(ec * ratio).unwrap();
-        let cd = CureCalculator::cure_depth(PenetrationDepth::new(dp).unwrap(), energy, Energy::new(ec).unwrap());
+        let energy = Energy::new(ec * ratio).expect("proptest strategy: ec × positive ratio produces finite positive Energy");
+        let cd = CureCalculator::cure_depth(PenetrationDepth::new(dp).expect("proptest strategy 40..600 µm produces valid PenetrationDepth"), energy, Energy::new(ec).expect("proptest strategy 0.5..30 mJ/cm² produces valid Energy"));
         prop_assert!(cd.value() > 0.0, "E > Ec should give positive cure depth, got {}", cd.value());
     }
 
@@ -22,8 +22,8 @@ proptest! {
         ec in 1.0f32..30.0,
         ratio in 0.01f32..0.99,
     ) {
-        let energy = Energy::new(ec * ratio).unwrap();
-        let cd = CureCalculator::cure_depth(PenetrationDepth::new(dp).unwrap(), energy, Energy::new(ec).unwrap());
+        let energy = Energy::new(ec * ratio).expect("proptest strategy: ec × positive ratio produces finite positive Energy");
+        let cd = CureCalculator::cure_depth(PenetrationDepth::new(dp).expect("proptest strategy 40..600 µm produces valid PenetrationDepth"), energy, Energy::new(ec).expect("proptest strategy 0.5..30 mJ/cm² produces valid Energy"));
         prop_assert!(cd.value() < 0.0, "E < Ec should give negative cure depth, got {}", cd.value());
     }
 
@@ -33,7 +33,7 @@ proptest! {
         dp in 40.0f32..600.0,
         ec in 0.5f32..30.0,
     ) {
-        let cd = CureCalculator::cure_depth(PenetrationDepth::new(dp).unwrap(), Energy::new(ec).unwrap(), Energy::new(ec).unwrap());
+        let cd = CureCalculator::cure_depth(PenetrationDepth::new(dp).expect("proptest strategy 40..600 µm produces valid PenetrationDepth"), Energy::new(ec).expect("proptest strategy 0.5..30 mJ/cm² produces valid Energy"), Energy::new(ec).expect("proptest strategy 0.5..30 mJ/cm² produces valid Energy"));
         prop_assert!((cd.value()).abs() < 1e-4, "E = Ec should give ~zero, got {}", cd.value());
     }
 
@@ -45,8 +45,8 @@ proptest! {
         e1 in 1.0f32..50.0,
         e2 in 1.0f32..50.0,
     ) {
-        let cd1 = CureCalculator::cure_depth(PenetrationDepth::new(dp).unwrap(), Energy::new(e1).unwrap(), Energy::new(ec).unwrap());
-        let cd2 = CureCalculator::cure_depth(PenetrationDepth::new(dp).unwrap(), Energy::new(e2).unwrap(), Energy::new(ec).unwrap());
+        let cd1 = CureCalculator::cure_depth(PenetrationDepth::new(dp).expect("proptest strategy 40..600 µm produces valid PenetrationDepth"), Energy::new(e1).expect("proptest strategy 1..50 mJ/cm² produces valid Energy"), Energy::new(ec).expect("proptest strategy 0.5..30 mJ/cm² produces valid Energy"));
+        let cd2 = CureCalculator::cure_depth(PenetrationDepth::new(dp).expect("proptest strategy 40..600 µm produces valid PenetrationDepth"), Energy::new(e2).expect("proptest strategy 1..50 mJ/cm² produces valid Energy"), Energy::new(ec).expect("proptest strategy 0.5..30 mJ/cm² produces valid Energy"));
         if e1 < e2 {
             prop_assert!(cd1.value() <= cd2.value(), "more energy should give deeper cure");
         }
@@ -60,9 +60,9 @@ proptest! {
         ec in 0.5f32..30.0,
         ratio in 1.1f32..10.0,
     ) {
-        let energy = Energy::new(ec * ratio).unwrap();
-        let cd1 = CureCalculator::cure_depth(PenetrationDepth::new(dp1).unwrap(), energy, Energy::new(ec).unwrap());
-        let cd2 = CureCalculator::cure_depth(PenetrationDepth::new(dp2).unwrap(), energy, Energy::new(ec).unwrap());
+        let energy = Energy::new(ec * ratio).expect("proptest strategy: ec × positive ratio produces finite positive Energy");
+        let cd1 = CureCalculator::cure_depth(PenetrationDepth::new(dp1).expect("proptest strategy 40..300 µm produces valid PenetrationDepth"), energy, Energy::new(ec).expect("proptest strategy 0.5..30 mJ/cm² produces valid Energy"));
+        let cd2 = CureCalculator::cure_depth(PenetrationDepth::new(dp2).expect("proptest strategy 40..300 µm produces valid PenetrationDepth"), energy, Energy::new(ec).expect("proptest strategy 0.5..30 mJ/cm² produces valid Energy"));
         // Cd = Dp × ln(E/Ec), so Cd1/Dp1 = Cd2/Dp2
         let normalized1 = cd1.value() / dp1;
         let normalized2 = cd2.value() / dp2;
@@ -77,7 +77,7 @@ proptest! {
         z in 0.0f32..1000.0,
         dp in 40.0f32..600.0,
     ) {
-        let i = CureCalculator::intensity_at_depth(i0, z, PenetrationDepth::new(dp).unwrap());
+        let i = CureCalculator::intensity_at_depth(i0, z, PenetrationDepth::new(dp).expect("proptest strategy 40..600 µm produces valid PenetrationDepth"));
         prop_assert!(i <= i0 + 1e-6, "intensity at depth should be <= surface: {} > {}", i, i0);
         prop_assert!(i >= 0.0, "intensity cannot be negative: {}", i);
     }
@@ -88,7 +88,7 @@ proptest! {
         i0 in 0.1f32..30.0,
         dp in 40.0f32..600.0,
     ) {
-        let i = CureCalculator::intensity_at_depth(i0, 0.0, PenetrationDepth::new(dp).unwrap());
+        let i = CureCalculator::intensity_at_depth(i0, 0.0, PenetrationDepth::new(dp).expect("proptest strategy 40..600 µm produces valid PenetrationDepth"));
         prop_assert!((i - i0).abs() < 1e-5, "at surface: {} != {}", i, i0);
     }
 
@@ -100,8 +100,8 @@ proptest! {
         z2 in 0.0f32..500.0,
         dp in 40.0f32..600.0,
     ) {
-        let i1 = CureCalculator::intensity_at_depth(i0, z1, PenetrationDepth::new(dp).unwrap());
-        let i2 = CureCalculator::intensity_at_depth(i0, z2, PenetrationDepth::new(dp).unwrap());
+        let i1 = CureCalculator::intensity_at_depth(i0, z1, PenetrationDepth::new(dp).expect("proptest strategy 40..600 µm produces valid PenetrationDepth"));
+        let i2 = CureCalculator::intensity_at_depth(i0, z2, PenetrationDepth::new(dp).expect("proptest strategy 40..600 µm produces valid PenetrationDepth"));
         if z1 < z2 {
             prop_assert!(i1 >= i2 - 1e-6, "deeper should be dimmer: z1={z1} i1={i1}, z2={z2} i2={i2}");
         }

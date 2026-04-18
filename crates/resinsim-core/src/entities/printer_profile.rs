@@ -162,7 +162,9 @@ mod tests {
 
     #[test]
     fn generic_msla_4k_passes_validation() {
-        PrinterProfile::generic_msla_4k().validate().unwrap();
+        PrinterProfile::generic_msla_4k()
+            .validate()
+            .expect("PrinterProfile::generic_msla_4k() factory must satisfy validate()");
     }
 
     #[test]

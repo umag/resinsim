@@ -4,3 +4,7 @@ members = [
     "crates/resinsim-core",
     "crates/resinsim-inspect",
 ]
+
+[workspace.lints.clippy]
+# See docs/adr/0003-unwrap-policy.md
+unwrap_used = "deny"

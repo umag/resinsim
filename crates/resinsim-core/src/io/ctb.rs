@@ -30,6 +30,24 @@ const CTB_AES_DEFAULT_IV_XOR: [u8; 16] = [
     0x4B, 0x73, 0x6B, 0x62, 0x6A, 0x65, 0x40, 0x75, 0x7D, 0x6F, 0x7E, 0x4A, 0x58, 0x5A, 0x4D, 0x7D,
 ];
 
+/// Read a little-endian u32 from `buf` at `off`. Caller contract: `buf.len() >= off + 4`.
+/// Used on header/layer_def/settings buffers whose sizes are fixed constants and
+/// validated by the preceding `read_exact` call.
+fn read_u32_le(buf: &[u8], off: usize) -> u32 {
+    let slice: [u8; 4] = buf[off..off + 4]
+        .try_into()
+        .expect("4-byte slice at constant offset within read_exact-validated buffer");
+    u32::from_le_bytes(slice)
+}
+
+/// Read a little-endian f32 from `buf` at `off`. Same contract as `read_u32_le`.
+fn read_f32_le(buf: &[u8], off: usize) -> f32 {
+    let slice: [u8; 4] = buf[off..off + 4]
+        .try_into()
+        .expect("4-byte slice at constant offset within read_exact-validated buffer");
+    f32::from_le_bytes(slice)
+}
+
 fn xor_deobfuscate<const N: usize>(input: [u8; N]) -> [u8; N] {
     let mut out = [0u8; N];
     for i in 0..N {
@@ -43,7 +61,7 @@ fn aes_decrypt(bytes: &mut [u8]) -> Result<(), String> {
     use aes::cipher::block_padding::NoPadding;
     use aes::cipher::{BlockDecryptMut, KeyIvInit};
 
-    if bytes.is_empty() || bytes.len() % 16 != 0 {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(16) {
         return Err(format!("AES block must be multiple of 16 bytes, got {}", bytes.len()));
     }
     let key = xor_deobfuscate(CTB_AES_DEFAULT_KEY_XOR);
@@ -148,17 +166,17 @@ fn parse_plain(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<LayerInp
     let mut header = [0u8; CTB_HEADER_SIZE];
     file.read_exact(&mut header).map_err(|e| format!("header read: {e}"))?;
 
-    let bed_x = f32::from_le_bytes(header[8..12].try_into().unwrap());
-    let bed_y = f32::from_le_bytes(header[12..16].try_into().unwrap());
-    let layer_height_mm = f32::from_le_bytes(header[24..28].try_into().unwrap());
-    let exposure_sec = f32::from_le_bytes(header[28..32].try_into().unwrap());
-    let bottom_exposure_sec = f32::from_le_bytes(header[32..36].try_into().unwrap());
-    let bottom_layers = u32::from_le_bytes(header[40..44].try_into().unwrap());
-    let width_px = u32::from_le_bytes(header[52..56].try_into().unwrap());
-    let height_px = u32::from_le_bytes(header[56..60].try_into().unwrap());
-    let layers_def_off = u32::from_le_bytes(header[64..68].try_into().unwrap());
-    let layer_count = u32::from_le_bytes(header[68..72].try_into().unwrap());
-    let xor_key = u32::from_le_bytes(header[100..104].try_into().unwrap());
+    let bed_x = read_f32_le(&header, 8);
+    let bed_y = read_f32_le(&header, 12);
+    let layer_height_mm = read_f32_le(&header, 24);
+    let exposure_sec = read_f32_le(&header, 28);
+    let bottom_exposure_sec = read_f32_le(&header, 32);
+    let bottom_layers = read_u32_le(&header, 40);
+    let width_px = read_u32_le(&header, 52);
+    let height_px = read_u32_le(&header, 56);
+    let layers_def_off = read_u32_le(&header, 64);
+    let layer_count = read_u32_le(&header, 68);
+    let xor_key = read_u32_le(&header, 100);
 
     let pixel_area_mm2 = (bed_x / width_px as f32) as f64 * (bed_y / height_px as f32) as f64;
 
@@ -182,11 +200,11 @@ fn parse_plain(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<LayerInp
         let mut layer_def = [0u8; CTB_LAYER_DEF_SIZE];
         file.read_exact(&mut layer_def).map_err(|e| format!("layer def read: {e}"))?;
 
-        let z_mm = f32::from_le_bytes(layer_def[0..4].try_into().unwrap());
-        let layer_exposure = f32::from_le_bytes(layer_def[4..8].try_into().unwrap());
-        let data_page_rel = u32::from_le_bytes(layer_def[12..16].try_into().unwrap());
-        let encoded_len = u32::from_le_bytes(layer_def[16..20].try_into().unwrap());
-        let page_number = u32::from_le_bytes(layer_def[20..24].try_into().unwrap());
+        let z_mm = read_f32_le(&layer_def, 0);
+        let layer_exposure = read_f32_le(&layer_def, 4);
+        let data_page_rel = read_u32_le(&layer_def, 12);
+        let encoded_len = read_u32_le(&layer_def, 16);
+        let page_number = read_u32_le(&layer_def, 20);
 
         let abs_data = page_number as u64 * CTB_PAGE_SIZE + data_page_rel as u64;
         file.seek(SeekFrom::Start(abs_data)).map_err(|e| format!("layer data seek: {e}"))?;
@@ -216,11 +234,11 @@ fn parse_encrypted(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<Laye
     file.read_exact(&mut settings).map_err(|e| format!("settings read: {e}"))?;
     aes_decrypt(&mut settings)?;
 
-    let layer_pointers_off = u32::from_le_bytes(settings[8..12].try_into().unwrap());
-    let width_px = u32::from_le_bytes(settings[56..60].try_into().unwrap());
-    let height_px = u32::from_le_bytes(settings[60..64].try_into().unwrap());
-    let layer_count = u32::from_le_bytes(settings[64..68].try_into().unwrap());
-    let xor_key = u32::from_le_bytes(settings[128..132].try_into().unwrap());
+    let layer_pointers_off = read_u32_le(&settings, 8);
+    let width_px = read_u32_le(&settings, 56);
+    let height_px = read_u32_le(&settings, 60);
+    let layer_count = read_u32_le(&settings, 64);
+    let xor_key = read_u32_le(&settings, 128);
 
     // Encrypted settings layout (from DragonFruit ctb_v5enc.rs write order):
     //   [0..8]    checksum (u64)
@@ -237,8 +255,8 @@ fn parse_encrypted(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<Laye
     //   [60..64]  height_px (u32)
     //   [64..68]  layer_count (u32)
     //   [128..132] layer_xor_key (u32)
-    let bed_x = f32::from_le_bytes(settings[12..16].try_into().unwrap());
-    let bed_y = f32::from_le_bytes(settings[16..20].try_into().unwrap());
+    let bed_x = read_f32_le(&settings, 12);
+    let bed_y = read_f32_le(&settings, 16);
 
     if width_px == 0 || height_px == 0 {
         return Err(format!("invalid dimensions {width_px}x{height_px}"));
@@ -253,19 +271,19 @@ fn parse_encrypted(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<Laye
         let mut pointer = [0u8; 16];
         file.read_exact(&mut pointer).map_err(|e| format!("ptr read: {e}"))?;
 
-        let def_page_rel = u32::from_le_bytes(pointer[0..4].try_into().unwrap());
-        let def_page = u32::from_le_bytes(pointer[4..8].try_into().unwrap());
+        let def_page_rel = read_u32_le(&pointer, 0);
+        let def_page = read_u32_le(&pointer, 4);
         let abs_def = def_page as u64 * CTB_PAGE_SIZE + def_page_rel as u64;
 
         file.seek(SeekFrom::Start(abs_def)).map_err(|e| format!("layer def seek: {e}"))?;
         let mut layer_def = [0u8; CTB_ENCRYPTED_LAYER_DEF_SIZE];
         file.read_exact(&mut layer_def).map_err(|e| format!("layer def read: {e}"))?;
 
-        let z_mm = f32::from_le_bytes(layer_def[4..8].try_into().unwrap());
-        let layer_exposure = f32::from_le_bytes(layer_def[8..12].try_into().unwrap());
-        let data_page_rel = u32::from_le_bytes(layer_def[16..20].try_into().unwrap());
-        let data_page = u32::from_le_bytes(layer_def[20..24].try_into().unwrap());
-        let encoded_len = u32::from_le_bytes(layer_def[24..28].try_into().unwrap());
+        let z_mm = read_f32_le(&layer_def, 4);
+        let layer_exposure = read_f32_le(&layer_def, 8);
+        let data_page_rel = read_u32_le(&layer_def, 16);
+        let data_page = read_u32_le(&layer_def, 20);
+        let encoded_len = read_u32_le(&layer_def, 24);
 
         let abs_data = data_page as u64 * CTB_PAGE_SIZE + data_page_rel as u64;
         file.seek(SeekFrom::Start(abs_data)).map_err(|e| format!("layer data seek: {e}"))?;

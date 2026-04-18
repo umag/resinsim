@@ -15,7 +15,11 @@ proptest! {
         ec in 0.5f32..30.0,     // KB-102: measured range
         energy in 5.0f32..50.0, // typical operating range
     ) {
-        let cd = CureCalculator::cure_depth(PenetrationDepth::new(dp).unwrap(), Energy::new(energy).unwrap(), Energy::new(ec).unwrap());
+        let cd = CureCalculator::cure_depth(
+            PenetrationDepth::new(dp).expect("proptest strategy 40..600 µm produces valid PenetrationDepth"),
+            Energy::new(energy).expect("proptest strategy 5..50 mJ/cm² produces valid Energy"),
+            Energy::new(ec).expect("proptest strategy 0.5..30 mJ/cm² produces valid Energy"),
+        );
         // Physical constraint: cure depth cannot exceed several mm in any real resin.
         // VeroClear (Dp=568µm) at 50 mJ/cm² with Ec=0.5 → Cd = 568×ln(100) = 2616µm.
         // Cap at 3000µm (3mm) — deeper than any practical resin layer.
@@ -31,7 +35,12 @@ proptest! {
         area in 0.0f64..8200.0,     // KB-110: up to full Saturn plate
         sigma in 12.0f32..18.0,     // KB-110: ACF to thick FEP
     ) {
-        let f = PeelForceCalculator::peel_force(sigma, CrossSectionArea::new(area).unwrap(), 1.0);
+        let f = PeelForceCalculator::peel_force(
+            sigma,
+            CrossSectionArea::new(area)
+                .expect("proptest strategy 0..8200 mm² produces valid CrossSectionArea"),
+            1.0,
+        );
         // KB-111: peak measured forces up to 200 N
         prop_assert!(f.value() <= 200.0,
             "peel force {:.1} N exceeds KB-111 measured peak for area={area}, sigma={sigma}", f.value());
@@ -74,7 +83,8 @@ proptest! {
     ) {
         let t = ThermalCalculator::vat_temperature(
             ambient, delta_t,
-            resinsim_core::values::ThermalTimeConstant::new(tau).unwrap(),
+            resinsim_core::values::ThermalTimeConstant::new(tau)
+                .expect("proptest strategy 600..1800 s produces valid ThermalTimeConstant"),
             7200.0, // 2 hours
         );
         // After 2 hours (>> τ), should be near steady state
@@ -107,8 +117,14 @@ proptest! {
     fn premium_black_typical_exposure_sufficient(
         exposure_sec in 2.0f32..4.0,
     ) {
-        let energy = Energy::from_exposure(4.0, exposure_sec).unwrap(); // KB-121: ~4 mW/cm² typical
-        let cd = CureCalculator::cure_depth(PenetrationDepth::new(170.0).unwrap(), energy, Energy::new(5.0).unwrap());
+        let energy = Energy::from_exposure(4.0, exposure_sec)
+            .expect("proptest strategy: 4.0 mW/cm² × 2..4 s produces valid Energy"); // KB-121: ~4 mW/cm² typical
+        let cd = CureCalculator::cure_depth(
+            PenetrationDepth::new(170.0)
+                .expect("KB-100 Premium Black: 170.0 µm is in PenetrationDepth domain"),
+            energy,
+            Energy::new(5.0).expect("KB-100 Premium Black: 5.0 mJ/cm² is in Energy domain"),
+        );
         prop_assert!(cd.is_sufficient(50.0),
             "Premium Black at {exposure_sec}s should cure >50µm, got {:.1}µm", cd.value());
     }

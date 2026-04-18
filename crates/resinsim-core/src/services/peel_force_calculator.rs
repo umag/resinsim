@@ -64,53 +64,62 @@ impl PeelForceCalculator {
 mod tests {
     use super::*;
 
+    fn area(mm2: f64) -> CrossSectionArea {
+        CrossSectionArea::new(mm2)
+            .expect("test fixture: non-negative finite mm² is in CrossSectionArea domain")
+    }
+
+    fn peel(n: f32) -> PeelForce {
+        PeelForce::new(n).expect("test fixture: non-negative finite N is in PeelForce domain")
+    }
+
     // --- KB-114 peel force test vectors ---
 
     #[test]
     fn peel_force_50mm_square_standard_fep() {
         // KB-114: σ=13 kPa, A=2500 mm², f(v)=1.0 → 32.5 N
-        let f = PeelForceCalculator::peel_force(13.0, CrossSectionArea::new(2500.0).unwrap(), 1.0);
+        let f = PeelForceCalculator::peel_force(13.0, area(2500.0), 1.0);
         assert!((f.value() - 32.5).abs() < 0.01);
     }
 
     #[test]
     fn peel_force_small_cross_section() {
         // KB-114: σ=13, A=100 mm², f(v)=1.0 → 1.3 N
-        let f = PeelForceCalculator::peel_force(13.0, CrossSectionArea::new(100.0).unwrap(), 1.0);
+        let f = PeelForceCalculator::peel_force(13.0, area(100.0), 1.0);
         assert!((f.value() - 1.3).abs() < 0.01);
     }
 
     #[test]
     fn peel_force_full_saturn_plate() {
         // KB-114: σ=13, A=8160 mm² (120×68mm), f(v)=1.0 → 106.08 N
-        let f = PeelForceCalculator::peel_force(13.0, CrossSectionArea::new(8160.0).unwrap(), 1.0);
+        let f = PeelForceCalculator::peel_force(13.0, area(8160.0), 1.0);
         assert!((f.value() - 106.08).abs() < 0.01);
     }
 
     #[test]
     fn peel_force_thick_fep() {
         // KB-114: σ=18, A=2500, f(v)=1.0 → 45.0 N
-        let f = PeelForceCalculator::peel_force(18.0, CrossSectionArea::new(2500.0).unwrap(), 1.0);
+        let f = PeelForceCalculator::peel_force(18.0, area(2500.0), 1.0);
         assert!((f.value() - 45.0).abs() < 0.01);
     }
 
     #[test]
     fn peel_force_acf_film() {
         // KB-114: σ=12 (ACF), A=2500, f(v)=1.0 → 30.0 N
-        let f = PeelForceCalculator::peel_force(12.0, CrossSectionArea::new(2500.0).unwrap(), 1.0);
+        let f = PeelForceCalculator::peel_force(12.0, area(2500.0), 1.0);
         assert!((f.value() - 30.0).abs() < 0.01);
     }
 
     #[test]
     fn peel_force_with_fast_lift() {
         // KB-114: σ=13, A=2500, f(v)=2.3 → 74.75 N
-        let f = PeelForceCalculator::peel_force(13.0, CrossSectionArea::new(2500.0).unwrap(), 2.3);
+        let f = PeelForceCalculator::peel_force(13.0, area(2500.0), 2.3);
         assert!((f.value() - 74.75).abs() < 0.01);
     }
 
     #[test]
     fn peel_force_zero_area_is_zero() {
-        let f = PeelForceCalculator::peel_force(13.0, CrossSectionArea::new(0.0).unwrap(), 1.0);
+        let f = PeelForceCalculator::peel_force(13.0, area(0.0), 1.0);
         assert!((f.value()).abs() < 1e-6);
     }
 
@@ -119,21 +128,21 @@ mod tests {
     #[test]
     fn suction_force_sealed_10mm_cup() {
         // KB-114: ΔP=101, A=100 mm² → 10.1 N
-        let f = PeelForceCalculator::suction_force(101.0, CrossSectionArea::new(100.0).unwrap());
+        let f = PeelForceCalculator::suction_force(101.0, area(100.0));
         assert!((f.value() - 10.1).abs() < 0.01);
     }
 
     #[test]
     fn suction_force_sealed_30mm_cup() {
         // KB-114: ΔP=101, A=706 mm² → 71.306 N
-        let f = PeelForceCalculator::suction_force(101.0, CrossSectionArea::new(706.0).unwrap());
+        let f = PeelForceCalculator::suction_force(101.0, area(706.0));
         assert!((f.value() - 71.306).abs() < 0.01);
     }
 
     #[test]
     fn suction_force_drained_cup_is_zero() {
         // KB-114: ΔP=0, A=706 → 0 N
-        let f = PeelForceCalculator::suction_force(0.0, CrossSectionArea::new(706.0).unwrap());
+        let f = PeelForceCalculator::suction_force(0.0, area(706.0));
         assert!((f.value()).abs() < 1e-6);
     }
 
@@ -193,9 +202,9 @@ mod tests {
 
     #[test]
     fn total_force_combines_peel_and_suction() {
-        let peel = PeelForce::new(32.5).unwrap();
-        let suction = PeelForce::new(10.1).unwrap();
-        let total = PeelForceCalculator::total_force(peel, suction);
+        let peel_f = peel(32.5);
+        let suction = peel(10.1);
+        let total = PeelForceCalculator::total_force(peel_f, suction);
         assert!((total.value() - 42.6).abs() < 0.01);
     }
 }

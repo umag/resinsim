@@ -130,7 +130,8 @@ mod tests {
 
     #[test]
     fn penetration_depth_accepts_positive() {
-        let dp = PenetrationDepth::new(170.0).unwrap();
+        let dp = PenetrationDepth::new(170.0)
+            .expect("test fixture: 170.0 µm is in PenetrationDepth domain");
         assert_eq!(dp.value(), 170.0);
     }
 
@@ -153,51 +154,53 @@ mod tests {
     #[test]
     #[should_panic(expected = "scale factor")]
     fn energy_scale_rejects_nan_factor() {
-        let e = Energy::new(10.0).unwrap();
+        let e = Energy::new(10.0).expect("test fixture: 10.0 mJ/cm² is in Energy domain");
         let _ = e.scale(f32::NAN);
     }
 
     #[test]
     fn energy_from_exposure_computes_dose() {
         // KB-121: 4.0 mW/cm² × 2.5s = 10.0 mJ/cm²
-        let e = Energy::from_exposure(4.0, 2.5).unwrap();
+        let e = Energy::from_exposure(4.0, 2.5)
+            .expect("test fixture: irradiance 4.0 mW/cm² × 2.5s is in Energy::from_exposure domain");
         assert!((e.value() - 10.0).abs() < 1e-6);
     }
 
     #[test]
     fn cure_depth_sufficient_when_exceeds_layer() {
-        let cd = CureDepth::new(100.0).unwrap();
+        let cd = CureDepth::new(100.0).expect("test fixture: 100.0 µm is in CureDepth domain");
         assert!(cd.is_sufficient(50.0));
     }
 
     #[test]
     fn cure_depth_insufficient_when_below_layer() {
-        let cd = CureDepth::new(30.0).unwrap();
+        let cd = CureDepth::new(30.0).expect("test fixture: 30.0 µm is in CureDepth domain");
         assert!(!cd.is_sufficient(50.0));
     }
 
     #[test]
     fn cure_depth_display() {
-        let cd = CureDepth::new(117.7).unwrap();
+        let cd = CureDepth::new(117.7).expect("test fixture: 117.7 µm is in CureDepth domain");
         assert_eq!(format!("{cd}"), "117.7 µm");
     }
 
     #[test]
     fn energy_display() {
-        let e = Energy::new(10.0).unwrap();
+        let e = Energy::new(10.0).expect("test fixture: 10.0 mJ/cm² is in Energy domain");
         assert_eq!(format!("{e}"), "10.00 mJ/cm²");
     }
 
     #[test]
     fn cure_depth_new_accepts_negative() {
         // Undercured layer is a legitimate state to represent.
-        let cd = CureDepth::new(-10.0).unwrap();
+        let cd = CureDepth::new(-10.0)
+            .expect("test fixture: -10.0 µm (undercure) is in CureDepth domain");
         assert_eq!(cd.value(), -10.0);
     }
 
     #[test]
     fn cure_depth_new_accepts_zero() {
-        let cd = CureDepth::new(0.0).unwrap();
+        let cd = CureDepth::new(0.0).expect("test fixture: 0.0 µm is in CureDepth domain");
         assert_eq!(cd.value(), 0.0);
     }
 
@@ -216,7 +219,8 @@ mod tests {
 
     #[test]
     fn from_exposure_valid() {
-        let e = Energy::from_exposure(4.0, 2.5).unwrap();
+        let e = Energy::from_exposure(4.0, 2.5)
+            .expect("test fixture: irradiance 4.0 mW/cm² × 2.5s is in Energy::from_exposure domain");
         assert!((e.value() - 10.0).abs() < 1e-5);
     }
 
