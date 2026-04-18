@@ -108,33 +108,48 @@ mod tests {
     #[test]
     fn safety_factor_is_capacity_over_force() {
         // KB-114 invariant: SF = F_max / F_total
-        let sf = SafetyFactor::compute(SupportCapacity(37.7), PeelForce(10.0)).unwrap();
+        let sf = SafetyFactor::compute(
+            SupportCapacity::new(37.7).unwrap(),
+            PeelForce::new(10.0).unwrap(),
+        )
+        .unwrap();
         assert!((sf.value() - 3.77).abs() < 0.01);
     }
 
     #[test]
     fn safety_factor_one_at_equal() {
-        let sf = SafetyFactor::compute(SupportCapacity(37.7), PeelForce(37.7)).unwrap();
+        let sf = SafetyFactor::compute(
+            SupportCapacity::new(37.7).unwrap(),
+            PeelForce::new(37.7).unwrap(),
+        )
+        .unwrap();
         assert!((sf.value() - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn safety_factor_below_one_is_failure() {
         // KB-114: F_total > F_max → FAIL
-        let sf = SafetyFactor::compute(SupportCapacity(37.7), PeelForce(50.0)).unwrap();
+        let sf = SafetyFactor::compute(
+            SupportCapacity::new(37.7).unwrap(),
+            PeelForce::new(50.0).unwrap(),
+        )
+        .unwrap();
         assert!(!sf.is_safe());
         assert!((sf.value() - 0.754).abs() < 0.001);
     }
 
     #[test]
     fn safety_factor_none_for_zero_force() {
-        let sf = SafetyFactor::compute(SupportCapacity(37.7), PeelForce(0.0));
+        let sf = SafetyFactor::compute(
+            SupportCapacity::new(37.7).unwrap(),
+            PeelForce::new(0.0).unwrap(),
+        );
         assert!(sf.is_none());
     }
 
     #[test]
     fn peel_force_display() {
-        assert_eq!(format!("{}", PeelForce(32.5)), "32.50 N");
+        assert_eq!(format!("{}", PeelForce::new(32.5).unwrap()), "32.50 N");
     }
 
     #[test]

@@ -281,4 +281,82 @@ mod tests {
              whitespace name should now be rejected"
         );
     }
+
+    // --- Legacy-TOML serde(default) regression tests (T1-F6) ---
+    //
+    // KB-150 added `degradation_temp_c` and `min_safe_temp_c` after legacy
+    // resin TOMLs were already in the wild. `#[serde(default)]` makes these
+    // fields optional so old files parse; these tests lock that parse-layer
+    // contract so a future schema change cannot silently shift defaults or
+    // cross the ordering invariant without a test catching it.
+
+    /// Baseline: TOML without the two thermal-threshold fields present.
+    /// Used by the three regression cases below.
+    fn legacy_toml_without_thermal_thresholds() -> String {
+        r#"
+name = "Legacy Resin"
+penetration_depth_um = 170.0
+critical_energy_mj_cm2 = 5.0
+tensile_strength_mpa = 35.0
+peel_adhesion_kpa = 13.0
+linear_shrinkage_pct = 1.5
+viscosity_mpa_s = 200.0
+reference_temp_c = 25.0
+activation_energy_kj_mol = 52.0
+density_g_cm3 = 1.1
+"#
+        .to_string()
+    }
+
+    #[test]
+    fn legacy_toml_full_missing_applies_both_defaults() {
+        // Both thermal fields absent → serde fills 50.0 / 15.0.
+        let toml_str = legacy_toml_without_thermal_thresholds();
+        let p: ResinProfile =
+            toml::from_str(&toml_str).expect("legacy TOML must parse with serde defaults");
+        assert_eq!(p.degradation_temp_c, default_degradation_temp_c());
+        assert_eq!(p.min_safe_temp_c, default_min_safe_temp_c());
+        p.validate()
+            .expect("defaulted thermal thresholds must satisfy validate()");
+    }
+
+    #[test]
+    fn legacy_toml_partial_missing_applies_single_default() {
+        // Only min_safe_temp_c explicit (below the default degradation_temp_c).
+        // serde applies default for the absent degradation_temp_c.
+        let toml_str = format!(
+            "{}\nmin_safe_temp_c = 12.0\n",
+            legacy_toml_without_thermal_thresholds()
+        );
+        let p: ResinProfile =
+            toml::from_str(&toml_str).expect("partial-legacy TOML must parse with serde defaults");
+        assert_eq!(p.min_safe_temp_c, 12.0);
+        assert_eq!(p.degradation_temp_c, default_degradation_temp_c());
+        p.validate()
+            .expect("12 < default 50 — ordering invariant holds");
+    }
+
+    #[test]
+    fn legacy_toml_invariant_crossing_rejected_by_validate() {
+        // Only min_safe_temp_c explicit at 55.0, above the serde-applied
+        // default degradation_temp_c (50.0) — validate() must reject on
+        // ordering. Locks the parse-path invariant at its most fragile seam:
+        // any future change to the default degradation_temp_c that narrows
+        // the allowed min_safe range would be caught by this test.
+        let toml_str = format!(
+            "{}\nmin_safe_temp_c = 55.0\n",
+            legacy_toml_without_thermal_thresholds()
+        );
+        let p: ResinProfile =
+            toml::from_str(&toml_str).expect("parse must succeed; validate() is the gate");
+        assert_eq!(p.min_safe_temp_c, 55.0);
+        assert_eq!(p.degradation_temp_c, default_degradation_temp_c());
+        let err = p
+            .validate()
+            .expect_err("55 > default-50 violates ordering invariant");
+        assert!(
+            err.contains("min_safe_temp_c") && err.contains("degradation_temp_c"),
+            "error must identify both offending fields; got: {err}"
+        );
+    }
 }

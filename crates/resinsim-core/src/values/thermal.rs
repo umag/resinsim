@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn celsius_to_kelvin() {
-        let t = VatTemperature(25.0);
+        let t = VatTemperature::new(25.0).unwrap();
         assert!((t.to_kelvin() - 298.15).abs() < 0.01);
     }
 

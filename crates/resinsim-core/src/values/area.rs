@@ -88,25 +88,31 @@ mod tests {
 
     #[test]
     fn area_delta_positive_for_increase() {
-        let d = AreaDelta::between(CrossSectionArea(100.0), CrossSectionArea(50.0));
+        let d = AreaDelta::between(
+            CrossSectionArea::new(100.0).unwrap(),
+            CrossSectionArea::new(50.0).unwrap(),
+        );
         assert!((d.value() - 50.0).abs() < 1e-6);
     }
 
     #[test]
     fn area_delta_negative_for_decrease() {
-        let d = AreaDelta::between(CrossSectionArea(50.0), CrossSectionArea(100.0));
+        let d = AreaDelta::between(
+            CrossSectionArea::new(50.0).unwrap(),
+            CrossSectionArea::new(100.0).unwrap(),
+        );
         assert!((d.value() - (-50.0)).abs() < 1e-6);
     }
 
     #[test]
     fn area_display() {
-        assert_eq!(format!("{}", CrossSectionArea(78.5)), "78.5 mm²");
+        assert_eq!(format!("{}", CrossSectionArea::new(78.5).unwrap()), "78.5 mm²");
     }
 
     #[test]
     fn delta_display_shows_sign() {
-        assert_eq!(format!("{}", AreaDelta(50.0)), "+50.0 mm²");
-        assert_eq!(format!("{}", AreaDelta(-30.0)), "-30.0 mm²");
+        assert_eq!(format!("{}", AreaDelta::new(50.0).unwrap()), "+50.0 mm²");
+        assert_eq!(format!("{}", AreaDelta::new(-30.0).unwrap()), "-30.0 mm²");
     }
 
     #[test]

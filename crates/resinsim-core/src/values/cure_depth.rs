@@ -166,25 +166,25 @@ mod tests {
 
     #[test]
     fn cure_depth_sufficient_when_exceeds_layer() {
-        let cd = CureDepth(100.0);
+        let cd = CureDepth::new(100.0).unwrap();
         assert!(cd.is_sufficient(50.0));
     }
 
     #[test]
     fn cure_depth_insufficient_when_below_layer() {
-        let cd = CureDepth(30.0);
+        let cd = CureDepth::new(30.0).unwrap();
         assert!(!cd.is_sufficient(50.0));
     }
 
     #[test]
     fn cure_depth_display() {
-        let cd = CureDepth(117.7);
+        let cd = CureDepth::new(117.7).unwrap();
         assert_eq!(format!("{cd}"), "117.7 µm");
     }
 
     #[test]
     fn energy_display() {
-        let e = Energy(10.0);
+        let e = Energy::new(10.0).unwrap();
         assert_eq!(format!("{e}"), "10.00 mJ/cm²");
     }
 
