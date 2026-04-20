@@ -34,7 +34,11 @@ impl ResinProfileRepository {
         let mut names: Vec<String> = entries
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
-            .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .filter_map(|e| {
+                e.path()
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+            })
             .collect();
         names.sort();
         Ok(names)
@@ -42,7 +46,8 @@ impl ResinProfileRepository {
 
     /// Load a profile by name, falling back to generic_standard() if not found.
     pub fn load_or_default(&self, name: &str) -> ResinProfile {
-        self.load(name).unwrap_or_else(|_| ResinProfile::generic_standard())
+        self.load(name)
+            .unwrap_or_else(|_| ResinProfile::generic_standard())
     }
 }
 

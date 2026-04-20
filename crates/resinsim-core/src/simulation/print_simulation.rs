@@ -60,7 +60,10 @@ impl PrintSimulation {
     }
 
     pub fn critical_failures(&self) -> Vec<&FailureEvent> {
-        self.failures.iter().filter(|f| f.severity == Severity::Critical).collect()
+        self.failures
+            .iter()
+            .filter(|f| f.severity == Severity::Critical)
+            .collect()
     }
 
     /// Compute summary statistics. Requires at least one layer.
@@ -105,8 +108,16 @@ impl PrintSimulation {
 
         SimSummary {
             total_layers: self.layers.len() as u32,
-            critical_failures: self.failures.iter().filter(|f| f.severity == Severity::Critical).count(),
-            warnings: self.failures.iter().filter(|f| f.severity == Severity::Warning).count(),
+            critical_failures: self
+                .failures
+                .iter()
+                .filter(|f| f.severity == Severity::Critical)
+                .count(),
+            warnings: self
+                .failures
+                .iter()
+                .filter(|f| f.severity == Severity::Warning)
+                .count(),
             max_peel_force_n: max_force,
             max_force_layer,
             min_safety_factor: min_sf,
@@ -161,12 +172,15 @@ mod tests {
     fn summary_finds_extremes() {
         let mut sim = PrintSimulation::new();
         sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![]);
-        sim.add_layer(make_layer(1, 20.0, 0.8, 25.0), vec![FailureEvent {
-            layer: 1,
-            failure_type: crate::entities::FailureType::SupportOverload,
-            severity: Severity::Critical,
-            message: "test".into(),
-        }]);
+        sim.add_layer(
+            make_layer(1, 20.0, 0.8, 25.0),
+            vec![FailureEvent {
+                layer: 1,
+                failure_type: crate::entities::FailureType::SupportOverload,
+                severity: Severity::Critical,
+                message: "test".into(),
+            }],
+        );
         sim.add_layer(make_layer(2, 10.0, 2.0, 24.0), vec![]);
 
         let s = sim.summary();

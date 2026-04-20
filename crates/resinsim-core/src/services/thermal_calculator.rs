@@ -135,18 +135,14 @@ mod tests {
 
     #[test]
     fn vat_temp_layer_0_equals_ambient() {
-        let t = ThermalCalculator::vat_temperature_at_layer(
-            22.0, 10.0, tau(1200.0), 0, 2.5, 7.5,
-        );
+        let t = ThermalCalculator::vat_temperature_at_layer(22.0, 10.0, tau(1200.0), 0, 2.5, 7.5);
         assert!((t.value() - 22.0).abs() < 1e-6);
     }
 
     #[test]
     fn vat_temp_layer_100_matches_kb150() {
         // KB-150: layer 100, 10s/layer → t=1000s → 27.7°C
-        let t = ThermalCalculator::vat_temperature_at_layer(
-            22.0, 10.0, tau(1200.0), 100, 2.5, 7.5,
-        );
+        let t = ThermalCalculator::vat_temperature_at_layer(22.0, 10.0, tau(1200.0), 100, 2.5, 7.5);
         assert!((t.value() - 27.7).abs() < 0.1);
     }
 

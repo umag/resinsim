@@ -1,5 +1,7 @@
 # Athena II — Concepts3D reference printer with force sensor
-# Values are estimates pending Athena II calibration (KB-182, KB-183)
+# Hardware envelope only (ADR-0005). Recipe fields moved to ResinProfile.recipe.
+# Ranges are wide-but-documented pre-calibration per ADR-0005 + EXPERIMENT-PLAN-v1.1.md.
+# Tighten via follow-up issue once E1-E3 calibration data is collected.
 
 name = "Athena II"
 
@@ -7,17 +9,13 @@ name = "Athena II"
 led_power_mw_cm2 = 5.0
 pixel_pitch_um = 35.0
 
-# Motion
-lift_speed_mm_min = 90.0
-ref_lift_speed_mm_min = 60.0
-lift_distance_mm = 6.0
-lift_cycle_sec = 8.0
-
-# Exposure
-normal_exposure_sec = 2.0
-bottom_exposure_sec = 20.0
-bottom_layer_count = 6
-layer_height_um = 50.0
+# Hardware envelope (ADR-0005 Axis 1)
+# TODO: tighten ranges after Athena II calibration (resinsim/spec/EXPERIMENT-PLAN-v1.1.md).
+# Current ranges are intentionally permissive; pairing protection is weak until calibration.
+layer_height_range_um = { min = 15.0, max = 200.0 }
+exposure_range_sec = { min = 0.5, max = 60.0 }
+lift_speed_range_mm_min = { min = 10.0, max = 300.0 }
+bottom_layer_count_max = 20
 
 # Z-axis — estimated premium (ball screw)
 z_stiffness_n_per_mm = 1500.0

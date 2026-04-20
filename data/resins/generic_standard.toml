@@ -10,6 +10,7 @@ critical_energy_mj_cm2 = 5.0
 # Mechanical — KB-140
 tensile_strength_mpa = 35.0
 peel_adhesion_kpa = 13.0    # KB-110: standard FEP
+ref_lift_speed_mm_min = 60.0  # measurement speed for peel_adhesion_kpa (KB-112, KB-114, ADR-0005 §3)
 
 # Shrinkage — KB-142
 linear_shrinkage_pct = 1.5
@@ -25,3 +26,18 @@ density_g_cm3 = 1.1
 # Thermal safety thresholds — KB-150
 degradation_temp_c = 50.0
 min_safe_temp_c = 15.0
+
+# Recipe (ADR-0005 Axis 2b) — concrete operating point for this resin
+# Matches the recipe previously baked into generic_msla_4k (KB-171 RERF defaults).
+[recipe]
+layer_height_um = 50.0
+bottom_layer_count = 6
+transition_layers = 3
+normal_exposure_sec = 2.5
+bottom_exposure_sec = 25.0
+wait_before_cure_sec = 0.5
+wait_before_release_sec = 1.0
+wait_after_release_sec = 0.0
+lift_speed_mm_min = 60.0
+lift_cycle_sec = 7.5
+lift_distance_mm = 5.0

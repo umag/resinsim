@@ -205,14 +205,21 @@ enum InspectDomain {
         /// Explicit flag always wins over profile (ADR-0004 §Decision(c)).
         #[arg(long)]
         stiffness: Option<f32>,
-        /// Commanded layer height in µm. Same precedence as --stiffness;
-        /// default 50.0 µm when no profile is named.
+        /// Commanded layer height in µm. Per ADR-0005, layer_height lives on
+        /// ResinProfile.recipe (not PrinterProfile). When omitted, use --resin to
+        /// source from the resin's recipe; otherwise defaults to 50.0 µm.
+        /// Explicit flag always wins (ADR-0004 §Decision(c)).
         #[arg(long)]
         layer_height: Option<f32>,
         /// Printer profile name (file stem under <data-dir>/printers/).
         /// Triggers data-dir resolution per ADR-0004.
         #[arg(long)]
         printer: Option<String>,
+        /// Resin profile name (file stem under <data-dir>/resins/). Per ADR-0005,
+        /// layer_height lives on the resin's recipe — pass --resin to source the
+        /// layer height from the resin profile when --layer-height is omitted.
+        #[arg(long)]
+        resin: Option<String>,
         /// Profile data directory (stage (a) of the ADR-0004 resolution chain).
         #[arg(long)]
         data_dir: Option<std::path::PathBuf>,
@@ -260,40 +267,121 @@ fn main() {
 
     match cli.command {
         Commands::Inspect { domain } => match domain {
-            InspectDomain::Cure { dp, ec, energy, resin, data_dir, json } => {
-                cmd_cure(dp, ec, energy, resin.as_deref(), data_dir.as_deref(), json)
-            }
+            InspectDomain::Cure {
+                dp,
+                ec,
+                energy,
+                resin,
+                data_dir,
+                json,
+            } => cmd_cure(dp, ec, energy, resin.as_deref(), data_dir.as_deref(), json),
             InspectDomain::Force {
-                area, sigma, speed, ref_speed, sealed_area,
-                tip_radius, n_supports, tensile,
-                printer, resin, data_dir, json,
+                area,
+                sigma,
+                speed,
+                ref_speed,
+                sealed_area,
+                tip_radius,
+                n_supports,
+                tensile,
+                printer,
+                resin,
+                data_dir,
+                json,
             } => cmd_force(
-                area, sigma, speed, ref_speed, sealed_area,
-                tip_radius, n_supports, tensile,
-                printer.as_deref(), resin.as_deref(), data_dir.as_deref(), json,
+                area,
+                sigma,
+                speed,
+                ref_speed,
+                sealed_area,
+                tip_radius,
+                n_supports,
+                tensile,
+                printer.as_deref(),
+                resin.as_deref(),
+                data_dir.as_deref(),
+                json,
             ),
             InspectDomain::Thermal {
-                layers, exposure, lift_cycle, ambient,
-                delta_t, tau, viscosity, ea,
-                printer, resin, data_dir, json,
+                layers,
+                exposure,
+                lift_cycle,
+                ambient,
+                delta_t,
+                tau,
+                viscosity,
+                ea,
+                printer,
+                resin,
+                data_dir,
+                json,
             } => cmd_thermal(
-                layers, exposure, lift_cycle, ambient, delta_t, tau, viscosity, ea,
-                printer.as_deref(), resin.as_deref(), data_dir.as_deref(), json,
+                layers,
+                exposure,
+                lift_cycle,
+                ambient,
+                delta_t,
+                tau,
+                viscosity,
+                ea,
+                printer.as_deref(),
+                resin.as_deref(),
+                data_dir.as_deref(),
+                json,
             ),
-            InspectDomain::Zaxis { force, stiffness, layer_height, printer, data_dir, json } => {
-                cmd_zaxis(force, stiffness, layer_height, printer.as_deref(), data_dir.as_deref(), json)
-            }
-            InspectDomain::Athena { file, from, to, json } => {
-                cmd_athena(&file, from, to, json)
-            }
-            InspectDomain::Layers { file, from, to, stats, json } => {
-                cmd_inspect_layers(&file, from, to, stats, json)
-            }
+            InspectDomain::Zaxis {
+                force,
+                stiffness,
+                layer_height,
+                printer,
+                resin,
+                data_dir,
+                json,
+            } => cmd_zaxis(
+                force,
+                stiffness,
+                layer_height,
+                printer.as_deref(),
+                resin.as_deref(),
+                data_dir.as_deref(),
+                json,
+            ),
+            InspectDomain::Athena {
+                file,
+                from,
+                to,
+                json,
+            } => cmd_athena(&file, from, to, json),
+            InspectDomain::Layers {
+                file,
+                from,
+                to,
+                stats,
+                json,
+            } => cmd_inspect_layers(&file, from, to, stats, json),
         },
         Commands::Report { report_type } => match report_type {
-            ReportType::Health { stl, file, resin, printer, data_dir, tip_radius, n_supports, ambient, json } => {
-                cmd_report_health(stl.as_deref(), file.as_deref(), &resin, &printer, data_dir.as_deref(), tip_radius, n_supports, ambient, json)
-            }
+            ReportType::Health {
+                stl,
+                file,
+                resin,
+                printer,
+                data_dir,
+                tip_radius,
+                n_supports,
+                ambient,
+                json,
+            } => cmd_report_health(
+                stl.as_deref(),
+                file.as_deref(),
+                &resin,
+                &printer,
+                data_dir.as_deref(),
+                tip_radius,
+                n_supports,
+                ambient,
+                json,
+            ),
         },
     }
 }
@@ -312,10 +400,13 @@ fn cmd_cure(
     // ADR-0004 precedence. Resolve data-dir only when --resin is set.
     let resin = resin_name.map(|name| {
         let dir = profile_loader::resolve_data_dir(data_dir).unwrap_or_else(|e| {
-            eprintln!("{e}"); std::process::exit(1);
+            eprintln!("{e}");
+            std::process::exit(1);
         });
-        profile_loader::load_resin(&dir, name)
-            .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1) })
+        profile_loader::load_resin(&dir, name).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1)
+        })
     });
 
     // clap's required_unless_present="resin" guarantees dp+ec are Some OR resin is Some.
@@ -329,15 +420,24 @@ fn cmd_cure(
 
     let dp = match PenetrationDepth::new(dp_val) {
         Ok(v) => v,
-        Err(e) => { eprintln!("invalid penetration depth: {e}"); std::process::exit(2); }
+        Err(e) => {
+            eprintln!("invalid penetration depth: {e}");
+            std::process::exit(2);
+        }
     };
     let ec_val = match Energy::new(ec_val) {
         Ok(v) => v,
-        Err(e) => { eprintln!("invalid critical energy: {e}"); std::process::exit(2); }
+        Err(e) => {
+            eprintln!("invalid critical energy: {e}");
+            std::process::exit(2);
+        }
     };
     let e = match Energy::new(energy) {
         Ok(v) => v,
-        Err(err) => { eprintln!("invalid energy: {err}"); std::process::exit(2); }
+        Err(err) => {
+            eprintln!("invalid energy: {err}");
+            std::process::exit(2);
+        }
     };
     let cd = CureCalculator::cure_depth(dp, e, ec_val);
 
@@ -387,30 +487,45 @@ fn cmd_force(
 
     // ADR-0004 precedence. Resolve data-dir only when a profile is named.
     let data_dir_resolved = if printer_name.is_some() || resin_name.is_some() {
-        Some(profile_loader::resolve_data_dir(data_dir).unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }))
+        Some(
+            profile_loader::resolve_data_dir(data_dir).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }),
+        )
     } else {
         None
     };
-    let printer = printer_name.map(|n| {
+    // ADR-0005: cmd_force no longer reads recipe fields from --printer — all speed/exposure
+    // come from --resin. --printer still triggers data-dir resolution for symmetry with the
+    // other subcommands but is otherwise unused by cmd_force today. Underscore-prefix to
+    // document the intentional drop without losing the side-effect of failing fast on a
+    // broken printer TOML.
+    let _printer = printer_name.map(|n| {
         profile_loader::load_printer(data_dir_resolved.as_deref().expect("resolved"), n)
-            .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1) })
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1)
+            })
     });
     let resin = resin_name.map(|n| {
         profile_loader::load_resin(data_dir_resolved.as_deref().expect("resolved"), n)
-            .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1) })
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1)
+            })
     });
 
     let sigma = sigma
         .or_else(|| resin.as_ref().map(|r| r.peel_adhesion_kpa()))
         .unwrap_or(13.0);
+    // ADR-0005: lift_speed is a recipe field (moved from PrinterProfile to ResinProfile.recipe).
     let speed = speed
-        .or_else(|| printer.as_ref().map(|p| p.lift_speed_mm_min()))
+        .or_else(|| resin.as_ref().map(|r| r.recipe().lift_speed_mm_min()))
         .unwrap_or(60.0);
+    // ADR-0005: ref_lift_speed is resin chemistry metadata (moved from PrinterProfile to ResinProfile).
     let ref_speed = ref_speed
-        .or_else(|| printer.as_ref().map(|p| p.ref_lift_speed_mm_min()))
+        .or_else(|| resin.as_ref().map(|r| r.ref_lift_speed_mm_min()))
         .unwrap_or(60.0);
     let tensile = tensile
         .or_else(|| resin.as_ref().map(|r| r.tensile_strength_mpa()))
@@ -419,11 +534,17 @@ fn cmd_force(
     let speed_factor = PeelForceCalculator::lift_speed_factor(speed, ref_speed);
     let area_val = match CrossSectionArea::new(area) {
         Ok(v) => v,
-        Err(e) => { eprintln!("invalid area: {e}"); std::process::exit(2); }
+        Err(e) => {
+            eprintln!("invalid area: {e}");
+            std::process::exit(2);
+        }
     };
     let sealed_area_val = match CrossSectionArea::new(sealed_area) {
         Ok(v) => v,
-        Err(e) => { eprintln!("invalid sealed area: {e}"); std::process::exit(2); }
+        Err(e) => {
+            eprintln!("invalid sealed area: {e}");
+            std::process::exit(2);
+        }
     };
     let peel = PeelForceCalculator::peel_force(sigma, area_val, speed_factor);
     let suction = PeelForceCalculator::suction_force(
@@ -463,11 +584,17 @@ fn cmd_force(
                 .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")
         );
     } else {
-        println!("Peel force: {peel} (adhesion) + {} (suction) = {total} (total)", suction);
+        println!(
+            "Peel force: {peel} (adhesion) + {} (suction) = {total} (total)",
+            suction
+        );
         println!("  σ = {sigma} kPa, A = {area:.1} mm², f(v) = {speed_factor:.3}");
         if let (Some(cap), Some(sf)) = (capacity, safety) {
             println!("  Support capacity: {cap}");
-            println!("  Safety factor: {sf} — {}", if sf.is_safe() { "SAFE" } else { "FAIL" });
+            println!(
+                "  Safety factor: {sf} — {}",
+                if sf.is_safe() { "SAFE" } else { "FAIL" }
+            );
         }
     }
 }
@@ -494,34 +621,47 @@ fn cmd_thermal(
 
     // ADR-0004 precedence. Resolution triggered only when --printer or --resin is set.
     let data_dir_resolved = if printer_name.is_some() || resin_name.is_some() {
-        Some(profile_loader::resolve_data_dir(data_dir).unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }))
+        Some(
+            profile_loader::resolve_data_dir(data_dir).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }),
+        )
     } else {
         None
     };
     let printer = printer_name.map(|n| {
         profile_loader::load_printer(
-            data_dir_resolved.as_deref().expect("printer name triggered resolution above"),
+            data_dir_resolved
+                .as_deref()
+                .expect("printer name triggered resolution above"),
             n,
         )
-        .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1) })
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1)
+        })
     });
     let resin = resin_name.map(|n| {
         profile_loader::load_resin(
-            data_dir_resolved.as_deref().expect("resin name triggered resolution above"),
+            data_dir_resolved
+                .as_deref()
+                .expect("resin name triggered resolution above"),
             n,
         )
-        .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1) })
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1)
+        })
     });
 
     // Precedence: explicit flag > profile > default (ADR-0004 §Decision(c)).
+    // ADR-0005: exposure + lift_cycle are recipe fields (moved to ResinProfile.recipe).
     let exposure = exposure
-        .or_else(|| printer.as_ref().map(|p| p.normal_exposure_sec()))
+        .or_else(|| resin.as_ref().map(|r| r.recipe().normal_exposure_sec()))
         .unwrap_or(2.5);
     let lift_cycle = lift_cycle
-        .or_else(|| printer.as_ref().map(|p| p.lift_cycle_sec()))
+        .or_else(|| resin.as_ref().map(|r| r.recipe().lift_cycle_sec()))
         .unwrap_or(7.5);
     let delta_t = delta_t
         .or_else(|| printer.as_ref().map(|p| p.delta_t_steady_c()))
@@ -538,7 +678,10 @@ fn cmd_thermal(
 
     let tau_val = match ThermalTimeConstant::new(tau) {
         Ok(v) => v,
-        Err(e) => { eprintln!("invalid thermal time constant: {e}"); std::process::exit(2); }
+        Err(e) => {
+            eprintln!("invalid thermal time constant: {e}");
+            std::process::exit(2);
+        }
     };
     // Degradation warnings use the explicit resin if given; otherwise generic-standard.
     let resin_defaults = resin.unwrap_or_else(ResinProfile::generic_standard);
@@ -590,11 +733,20 @@ fn cmd_thermal(
                 .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")
         );
     } else {
-        println!("Vat thermal profile ({layers} layers, duty cycle {:.0}%)", duty * 100.0);
+        println!(
+            "Vat thermal profile ({layers} layers, duty cycle {:.0}%)",
+            duty * 100.0
+        );
         println!("  Ambient: {ambient}°C, ΔT steady: {delta_t}°C, τ: {tau}s");
         println!();
-        println!("{:>6}  {:>8}  {:>8}  {:>10}  {:>8}", "Layer", "Time", "Temp", "Viscosity", "µ/µ₀");
-        println!("{:>6}  {:>8}  {:>8}  {:>10}  {:>8}", "", "(min)", "(°C)", "(mPa·s)", "");
+        println!(
+            "{:>6}  {:>8}  {:>8}  {:>10}  {:>8}",
+            "Layer", "Time", "Temp", "Viscosity", "µ/µ₀"
+        );
+        println!(
+            "{:>6}  {:>8}  {:>8}  {:>10}  {:>8}",
+            "", "(min)", "(°C)", "(mPa·s)", ""
+        );
         println!("{}", "-".repeat(50));
 
         for &l in &sample_layers {
@@ -604,20 +756,32 @@ fn cmd_thermal(
             let time_min = l as f32 * (exposure + lift_cycle) / 60.0;
             let mu_ratio = ThermalCalculator::viscosity_ratio(ambient, t.value(), ea);
             let mu = viscosity * mu_ratio;
-            let warn = if resin_defaults.is_degradation_risk(t) { " ⚠" } else { "" };
+            let warn = if resin_defaults.is_degradation_risk(t) {
+                " ⚠"
+            } else {
+                ""
+            };
             println!(
                 "{:>6}  {:>7.1}  {:>7.1}  {:>9.1}  {:>7.2}{}",
-                l, time_min, t.value(), mu, mu_ratio, warn
+                l,
+                time_min,
+                t.value(),
+                mu,
+                mu_ratio,
+                warn
             );
         }
     }
 }
 
+// CLI handler — per-arg mapping to clap subcommand. Profile loaders follow ADR-0004.
+#[allow(clippy::too_many_arguments)]
 fn cmd_zaxis(
     force: f32,
     stiffness: Option<f32>,
     layer_height: Option<f32>,
     printer_name: Option<&str>,
+    resin_name: Option<&str>,
     data_dir: Option<&std::path::Path>,
     json: bool,
 ) {
@@ -626,27 +790,55 @@ fn cmd_zaxis(
 
     // Precedence (ADR-0004 §Decision(c)):
     //   explicit flag > profile-sourced > built-in default.
-    // Data-dir resolution only when --printer is set (ADR-0004 §Decision(b)).
+    // Data-dir resolution when --printer OR --resin is set (ADR-0004 §Decision(b)).
+    let data_dir_resolved = if printer_name.is_some() || resin_name.is_some() {
+        Some(
+            profile_loader::resolve_data_dir(data_dir).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }),
+        )
+    } else {
+        None
+    };
     let printer = printer_name.map(|name| {
-        let dir = profile_loader::resolve_data_dir(data_dir).unwrap_or_else(|e| {
+        profile_loader::load_printer(
+            data_dir_resolved
+                .as_deref()
+                .expect("printer name triggered resolution"),
+            name,
+        )
+        .unwrap_or_else(|e| {
             eprintln!("{e}");
-            std::process::exit(1);
-        });
-        profile_loader::load_printer(&dir, name).unwrap_or_else(|e| {
+            std::process::exit(1)
+        })
+    });
+    // ADR-0005: layer_height is a recipe field. --resin sources it from the resin's recipe.
+    let resin = resin_name.map(|name| {
+        profile_loader::load_resin(
+            data_dir_resolved
+                .as_deref()
+                .expect("resin name triggered resolution"),
+            name,
+        )
+        .unwrap_or_else(|e| {
             eprintln!("{e}");
-            std::process::exit(1);
+            std::process::exit(1)
         })
     });
     let stiffness = stiffness
         .or_else(|| printer.as_ref().map(|p| p.z_stiffness_n_per_mm()))
         .unwrap_or(460.0);
     let layer_height = layer_height
-        .or_else(|| printer.as_ref().map(|p| p.layer_height_um()))
+        .or_else(|| resin.as_ref().map(|r| r.recipe().layer_height_um()))
         .unwrap_or(50.0);
 
     let force_val = match PeelForce::new(force) {
         Ok(v) => v,
-        Err(e) => { eprintln!("invalid force: {e}"); std::process::exit(2); }
+        Err(e) => {
+            eprintln!("invalid force: {e}");
+            std::process::exit(2);
+        }
     };
     let dz = ZAxisCompensator::deflection_um(force_val, stiffness);
     let h_eff = ZAxisCompensator::effective_layer_height_um(layer_height, dz);
@@ -735,9 +927,15 @@ fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
 // unconditional here because both --printer and --resin have clap defaults.
 #[allow(clippy::too_many_arguments)]
 fn cmd_report_health(
-    path: Option<&str>, file_path: Option<&str>, resin_name: &str, printer_name: &str,
+    path: Option<&str>,
+    file_path: Option<&str>,
+    resin_name: &str,
+    printer_name: &str,
     data_dir: Option<&std::path::Path>,
-    tip_radius: f32, n_supports: u32, ambient: f32, json: bool,
+    tip_radius: f32,
+    n_supports: u32,
+    ambient: f32,
+    json: bool,
 ) {
     use resinsim_core::app::SimulationRunner;
     use resinsim_core::entities::Severity;
@@ -766,7 +964,10 @@ fn cmd_report_health(
             std::process::exit(1);
         }
     };
-    let supports = SupportConfig { tip_radius_mm: tip_radius, n_supports };
+    let supports = SupportConfig {
+        tip_radius_mm: tip_radius,
+        n_supports,
+    };
     let plate = PlateAdhesionProfile::default_textured();
 
     let path = file_path.or(path).unwrap_or_else(|| {
@@ -774,7 +975,14 @@ fn cmd_report_health(
         std::process::exit(1);
     });
 
-    let sim = match SimulationRunner::run_auto(Path::new(path), &resin, &printer, &supports, &plate, ambient) {
+    let sim = match SimulationRunner::run_auto(
+        Path::new(path),
+        &resin,
+        &printer,
+        &supports,
+        &plate,
+        ambient,
+    ) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -785,14 +993,18 @@ fn cmd_report_health(
     let summary = sim.summary();
 
     if json {
-        let failures: Vec<serde_json::Value> = sim.failures().iter().map(|f| {
-            serde_json::json!({
-                "layer": f.layer,
-                "type": format!("{:?}", f.failure_type),
-                "severity": format!("{:?}", f.severity),
-                "message": f.message,
+        let failures: Vec<serde_json::Value> = sim
+            .failures()
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "layer": f.layer,
+                    "type": format!("{:?}", f.failure_type),
+                    "severity": format!("{:?}", f.severity),
+                    "message": f.message,
+                })
             })
-        }).collect();
+            .collect();
 
         let result = serde_json::json!({
             "stl": path,
@@ -821,8 +1033,14 @@ fn cmd_report_health(
         println!("  Supports: {} x {:.1}mm radius", n_supports, tip_radius);
         println!();
         println!("Summary ({} layers):", summary.total_layers);
-        println!("  Max peel force: {:.1} N at layer {}", summary.max_peel_force_n, summary.max_force_layer);
-        println!("  Min safety factor: {:.2} at layer {}", summary.min_safety_factor, summary.min_safety_layer);
+        println!(
+            "  Max peel force: {:.1} N at layer {}",
+            summary.max_peel_force_n, summary.max_force_layer
+        );
+        println!(
+            "  Min safety factor: {:.2} at layer {}",
+            summary.min_safety_factor, summary.min_safety_layer
+        );
         println!("  Max temperature: {:.1}°C", summary.max_temperature_c);
         println!("  Max Z deflection: {:.1} µm", summary.max_z_deflection_um);
         println!();
@@ -869,9 +1087,10 @@ fn cmd_inspect_layers(file: &str, from: Option<u32>, to: Option<u32>, stats: boo
         }
     };
 
-    let filtered: Vec<&sliced::LayerInput> = layers.iter().filter(|l| {
-        l.index >= from.unwrap_or(0) && l.index <= to.unwrap_or(u32::MAX)
-    }).collect();
+    let filtered: Vec<&sliced::LayerInput> = layers
+        .iter()
+        .filter(|l| l.index >= from.unwrap_or(0) && l.index <= to.unwrap_or(u32::MAX))
+        .collect();
 
     if stats || json {
         let areas: Vec<f64> = filtered.iter().map(|l| l.cross_section_area_mm2).collect();
@@ -885,12 +1104,12 @@ fn cmd_inspect_layers(file: &str, from: Option<u32>, to: Option<u32>, stats: boo
                 "info": {
                     "format": info.format,
                     "total_layers": info.total_layers,
-                    "layer_height_um": info.layer_height_um,
+                    "layer_height_um": info.recipe.layer_height_um(),
                     "resolution": [info.resolution_xy.0, info.resolution_xy.1],
                     "bed_size_mm": [info.bed_size_mm.0, info.bed_size_mm.1],
-                    "normal_exposure_sec": info.normal_exposure_sec,
-                    "bottom_exposure_sec": info.bottom_exposure_sec,
-                    "bottom_layer_count": info.bottom_layer_count,
+                    "normal_exposure_sec": info.recipe.normal_exposure_sec(),
+                    "bottom_exposure_sec": info.recipe.bottom_exposure_sec(),
+                    "bottom_layer_count": info.recipe.bottom_layer_count(),
                 },
                 "stats": {
                     "filtered_layers": filtered.len(),
@@ -911,16 +1130,26 @@ fn cmd_inspect_layers(file: &str, from: Option<u32>, to: Option<u32>, stats: boo
             println!();
             println!("Layer stats ({} layers):", filtered.len());
             println!("  Area: {min_area:.1} — {max_area:.1} mm² (mean {mean_area:.1})");
-            println!("  Exposure: {:.2}s (normal), {:.2}s (bottom)", info.normal_exposure_sec, info.bottom_exposure_sec);
+            println!(
+                "  Exposure: {:.2}s (normal), {:.2}s (bottom)",
+                info.recipe.normal_exposure_sec(),
+                info.recipe.bottom_exposure_sec(),
+            );
         }
     } else {
         println!("Sliced file: {file}");
         println!("  {info}");
         println!();
-        println!("{:>6}  {:>10}  {:>8}  {:>8}", "Layer", "Area (mm²)", "Exp (s)", "Z (mm)");
+        println!(
+            "{:>6}  {:>10}  {:>8}  {:>8}",
+            "Layer", "Area (mm²)", "Exp (s)", "Z (mm)"
+        );
         println!("{}", "-".repeat(40));
         for l in &filtered {
-            println!("{:>6}  {:>10.2}  {:>8.2}  {:>8.3}", l.index, l.cross_section_area_mm2, l.exposure_sec, l.z_mm);
+            println!(
+                "{:>6}  {:>10.2}  {:>8.2}  {:>8.3}",
+                l.index, l.cross_section_area_mm2, l.exposure_sec, l.z_mm
+            );
         }
     }
 }

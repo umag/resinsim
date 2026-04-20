@@ -49,7 +49,9 @@ impl ScreenHeatFlux {
             return Err(format!("screen heat flux must be finite, got {watts}"));
         }
         if watts < 0.0 {
-            return Err(format!("screen heat flux must be non-negative, got {watts}"));
+            return Err(format!(
+                "screen heat flux must be non-negative, got {watts}"
+            ));
         }
         Ok(Self(watts))
     }

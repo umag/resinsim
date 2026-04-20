@@ -26,8 +26,9 @@ impl CureCalculator {
             "cure_depth: energy must be positive and finite, got {}",
             energy.value()
         );
-        CureDepth::new(dp.value() * (energy.value() / critical_energy.value()).ln())
-            .expect("Beer-Lambert with validated dp, energy, critical_energy always yields finite result")
+        CureDepth::new(dp.value() * (energy.value() / critical_energy.value()).ln()).expect(
+            "Beer-Lambert with validated dp, energy, critical_energy always yields finite result",
+        )
     }
 
     /// Compute UV intensity at depth z into the resin.
@@ -37,7 +38,12 @@ impl CureCalculator {
     }
 
     /// Check if cure depth is sufficient for a given layer height.
-    pub fn is_sufficient(dp: PenetrationDepth, energy: Energy, critical_energy: Energy, layer_height_um: f32) -> bool {
+    pub fn is_sufficient(
+        dp: PenetrationDepth,
+        energy: Energy,
+        critical_energy: Energy,
+        layer_height_um: f32,
+    ) -> bool {
         Self::cure_depth(dp, energy, critical_energy).is_sufficient(layer_height_um)
     }
 }
@@ -60,33 +66,22 @@ mod tests {
     #[test]
     fn cure_depth_100um_when_dp_100_and_e_equals_e_times_ec() {
         // KB-103: Dp=100, E=e×Ec → Cd = 100 × ln(e) = 100.0
-        let cd = CureCalculator::cure_depth(
-            dp(100.0),
-            energy(std::f32::consts::E * 10.0),
-            energy(10.0),
-        );
+        let cd =
+            CureCalculator::cure_depth(dp(100.0), energy(std::f32::consts::E * 10.0), energy(10.0));
         assert!((cd.value() - 100.0).abs() < 0.1);
     }
 
     #[test]
     fn cure_depth_zero_when_e_equals_ec() {
         // KB-103: E = Ec → ln(1) = 0
-        let cd = CureCalculator::cure_depth(
-            dp(100.0),
-            energy(10.0),
-            energy(10.0),
-        );
+        let cd = CureCalculator::cure_depth(dp(100.0), energy(10.0), energy(10.0));
         assert!((cd.value() - 0.0).abs() < 1e-6);
     }
 
     #[test]
     fn cure_depth_negative_when_undercured() {
         // KB-103: E < Ec → negative (undercured)
-        let cd = CureCalculator::cure_depth(
-            dp(100.0),
-            energy(5.0),
-            energy(10.0),
-        );
+        let cd = CureCalculator::cure_depth(dp(100.0), energy(5.0), energy(10.0));
         assert!(cd.value() < 0.0);
         assert!((cd.value() - (-69.3)).abs() < 0.1);
     }
@@ -95,11 +90,7 @@ mod tests {
     fn cure_depth_liqcreate_premium_black() {
         // KB-100: Dp=170µm, Ec=5.0 mJ/cm² at 405nm
         // KB-103 vector: E=10.0 → Cd = 170 × ln(10/5) = 170 × 0.693 = 117.7
-        let cd = CureCalculator::cure_depth(
-            dp(170.0),
-            energy(10.0),
-            energy(5.0),
-        );
+        let cd = CureCalculator::cure_depth(dp(170.0), energy(10.0), energy(5.0));
         assert!((cd.value() - 117.83).abs() < 0.1);
     }
 
@@ -107,11 +98,7 @@ mod tests {
     fn cure_depth_premium_white() {
         // KB-100: Dp=350µm, Ec=6.87 mJ/cm² at 405nm
         // KB-103 vector: E=20.0 → Cd = 350 × ln(20/6.87) = 350 × 1.068 = 373.7
-        let cd = CureCalculator::cure_depth(
-            dp(350.0),
-            energy(20.0),
-            energy(6.87),
-        );
+        let cd = CureCalculator::cure_depth(dp(350.0), energy(20.0), energy(6.87));
         assert!((cd.value() - 373.7).abs() < 0.5);
     }
 
@@ -119,11 +106,7 @@ mod tests {
     fn cure_depth_pr48_academic() {
         // KB-101: PR48 at 365nm, Dp=42µm, Ec=18.3 mJ/cm²
         // KB-103 vector: E=50.0 → Cd = 42 × ln(50/18.3) = 42 × 1.005 = 42.2
-        let cd = CureCalculator::cure_depth(
-            dp(42.0),
-            energy(50.0),
-            energy(18.3),
-        );
+        let cd = CureCalculator::cure_depth(dp(42.0), energy(50.0), energy(18.3));
         assert!((cd.value() - 42.2).abs() < 0.2);
     }
 
@@ -131,11 +114,7 @@ mod tests {
     fn cure_depth_veroclear_deep_penetration() {
         // KB-101: VeroClear at 405nm, Dp=568µm, Ec=6.9 mJ/cm²
         // KB-103 vector: E=50.0 → Cd = 568 × ln(50/6.9) = 568 × 1.981 = 1125.2
-        let cd = CureCalculator::cure_depth(
-            dp(568.0),
-            energy(50.0),
-            energy(6.9),
-        );
+        let cd = CureCalculator::cure_depth(dp(568.0), energy(50.0), energy(6.9));
         assert!((cd.value() - 1125.0).abs() < 5.0);
     }
 
@@ -146,11 +125,7 @@ mod tests {
     fn cure_depth_panics_on_zero_critical_energy_bypass() {
         // unsafe: only way to construct Energy(0.0) for testing the runtime guard directly
         let zero_ec: Energy = unsafe { std::mem::transmute(0.0f32) };
-        let _ = CureCalculator::cure_depth(
-            dp(100.0),
-            energy(10.0),
-            zero_ec,
-        );
+        let _ = CureCalculator::cure_depth(dp(100.0), energy(10.0), zero_ec);
     }
 
     // --- KB-103 intensity test vectors ---

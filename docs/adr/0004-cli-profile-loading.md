@@ -6,7 +6,9 @@ date: 2026-04-18
 # ADR-0004: CLI profile loading — 4-stage data-dir resolution and explicit-wins precedence
 
 ## Status
-Accepted
+Accepted. Builds on: none. Followed by: ADR-0005 (three-axis printer/resin/recipe split),
+which extends the name-based loading contract to cover the new `[recipe]` table
+on `ResinProfile` and the hardware-envelope range fields on `PrinterProfile`.
 
 ## Context
 

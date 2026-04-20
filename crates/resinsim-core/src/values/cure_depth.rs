@@ -57,7 +57,10 @@ impl Energy {
 
     /// Scale energy by a dimensionless factor. Factor must be positive and finite.
     pub fn scale(&self, factor: f32) -> Self {
-        assert!(factor > 0.0 && factor.is_finite(), "scale factor must be positive and finite, got {factor}");
+        assert!(
+            factor > 0.0 && factor.is_finite(),
+            "scale factor must be positive and finite, got {factor}"
+        );
         Self(self.0 * factor)
     }
 
@@ -161,8 +164,9 @@ mod tests {
     #[test]
     fn energy_from_exposure_computes_dose() {
         // KB-121: 4.0 mW/cm² × 2.5s = 10.0 mJ/cm²
-        let e = Energy::from_exposure(4.0, 2.5)
-            .expect("test fixture: irradiance 4.0 mW/cm² × 2.5s is in Energy::from_exposure domain");
+        let e = Energy::from_exposure(4.0, 2.5).expect(
+            "test fixture: irradiance 4.0 mW/cm² × 2.5s is in Energy::from_exposure domain",
+        );
         assert!((e.value() - 10.0).abs() < 1e-6);
     }
 
@@ -219,8 +223,9 @@ mod tests {
 
     #[test]
     fn from_exposure_valid() {
-        let e = Energy::from_exposure(4.0, 2.5)
-            .expect("test fixture: irradiance 4.0 mW/cm² × 2.5s is in Energy::from_exposure domain");
+        let e = Energy::from_exposure(4.0, 2.5).expect(
+            "test fixture: irradiance 4.0 mW/cm² × 2.5s is in Energy::from_exposure domain",
+        );
         assert!((e.value() - 10.0).abs() < 1e-5);
     }
 

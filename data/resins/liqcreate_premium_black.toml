@@ -9,6 +9,7 @@ critical_energy_mj_cm2 = 5.0
 # Mechanical — KB-140: estimated from Liqcreate range
 tensile_strength_mpa = 40.0
 peel_adhesion_kpa = 13.0
+ref_lift_speed_mm_min = 60.0       # measurement speed for peel_adhesion_kpa (KB-112, ADR-0005 §3)
 
 # Shrinkage — KB-142
 linear_shrinkage_pct = 1.5
@@ -24,3 +25,19 @@ density_g_cm3 = 1.1
 # Thermal safety thresholds — KB-150
 degradation_temp_c = 50.0
 min_safe_temp_c = 15.0
+
+# Recipe (ADR-0005 Axis 2b) — Liqcreate's published recommended recipe for Premium
+# Black on 4K-class printers. Higher viscosity (300 mPa·s) argues for slower lift.
+# Source: Liqcreate technical data sheet + KB-100 Dp/Ec for exposure calibration.
+[recipe]
+layer_height_um = 50.0
+bottom_layer_count = 6
+transition_layers = 3
+normal_exposure_sec = 2.5
+bottom_exposure_sec = 28.0
+wait_before_cure_sec = 0.5
+wait_before_release_sec = 1.2
+wait_after_release_sec = 0.0
+lift_speed_mm_min = 55.0
+lift_cycle_sec = 7.8
+lift_distance_mm = 5.0

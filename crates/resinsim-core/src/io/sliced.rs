@@ -2,8 +2,15 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::entities::Recipe;
+
 /// Per-layer data extracted from a sliced file (CTB, SL1, GOO).
 /// Format-independent — the simulation consumes this regardless of source.
+///
+/// Retains flat recipe-shaped fields by design (ADR-0005 §4): per-layer values can
+/// legitimately differ from the Recipe default (e.g. transition layers with their own
+/// exposure schedule). Collapsing them under Recipe would misrepresent per-layer
+/// override semantics. Only `SlicedFileInfo` header gains a nested Recipe.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayerInput {
     pub index: u32,
@@ -15,18 +22,23 @@ pub struct LayerInput {
 }
 
 /// Header metadata extracted from a sliced file.
+///
+/// Recipe-shaped fields (layer_height, exposure times, lift speed, bottom-layer count)
+/// are nested in `recipe: Recipe` per ADR-0005 §4. File-level metadata (format,
+/// layer count, resolution, pixel size, bed size) stays flat because it describes the
+/// sliced file itself, not the print recipe.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlicedFileInfo {
     pub format: String,
     pub total_layers: u32,
-    pub layer_height_um: f32,
     pub resolution_xy: (u32, u32),
     pub pixel_size_um: (f32, f32),
     pub bed_size_mm: (f32, f32),
-    pub normal_exposure_sec: f32,
-    pub bottom_exposure_sec: f32,
-    pub bottom_layer_count: u32,
-    pub lift_speed_mm_min: f32,
+    /// Recipe extracted from the sliced file header (ADR-0005 Axis 2b). CTB format
+    /// carries layer_height, normal/bottom exposure, bottom-layer count, and lift
+    /// speed; fields not present in the format (transition_layers, wait_*,
+    /// lift_cycle_sec, lift_distance_mm) take documented defaults in the parser.
+    pub recipe: Recipe,
 }
 
 impl LayerInput {
@@ -85,7 +97,7 @@ impl fmt::Display for SlicedFileInfo {
             self.resolution_xy.1,
             self.bed_size_mm.0,
             self.bed_size_mm.1,
-            self.layer_height_um,
+            self.recipe.layer_height_um(),
         )
     }
 }
@@ -145,29 +157,30 @@ mod tests {
         let info = SlicedFileInfo {
             format: "CTB".into(),
             total_layers: 1000,
-            layer_height_um: 50.0,
             resolution_xy: (7680, 4320),
             pixel_size_um: (28.5, 28.5),
             bed_size_mm: (219.0, 123.0),
-            normal_exposure_sec: 2.5,
-            bottom_exposure_sec: 25.0,
-            bottom_layer_count: 6,
-            lift_speed_mm_min: 60.0,
+            recipe: Recipe::generic_standard(),
         };
         // pixel area = (219/7680) × (123/4320) = 0.02852 × 0.02847 = 0.000812 mm²
         let pa = info.pixel_area_mm2();
-        assert!((pa - 0.000812).abs() < 0.00001,
-            "pixel area: got {pa:.6}");
+        assert!((pa - 0.000812).abs() < 0.00001, "pixel area: got {pa:.6}");
     }
 
     #[test]
     fn detect_ctb() {
-        assert_eq!(detect_format(std::path::Path::new("model.ctb")), Some("CTB"));
+        assert_eq!(
+            detect_format(std::path::Path::new("model.ctb")),
+            Some("CTB")
+        );
     }
 
     #[test]
     fn detect_stl() {
-        assert_eq!(detect_format(std::path::Path::new("model.stl")), Some("STL"));
+        assert_eq!(
+            detect_format(std::path::Path::new("model.stl")),
+            Some("STL")
+        );
     }
 
     #[test]

@@ -32,14 +32,19 @@ impl PrinterProfileRepository {
         let mut names: Vec<String> = entries
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
-            .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .filter_map(|e| {
+                e.path()
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+            })
             .collect();
         names.sort();
         Ok(names)
     }
 
     pub fn load_or_default(&self, name: &str) -> PrinterProfile {
-        self.load(name).unwrap_or_else(|_| PrinterProfile::generic_msla_4k())
+        self.load(name)
+            .unwrap_or_else(|_| PrinterProfile::generic_msla_4k())
     }
 }
 

@@ -1,6 +1,6 @@
 # Elegoo Mars 5 Ultra — 12K mono LCD, ParaLED matrix, triple linear rail Z-axis
-# Sources: Elegoo published specs (build volume, resolution, pixel pitch)
-# z_stiffness: estimated from triple-rail geometry — calibrate with Athena II data
+# Sources: Elegoo published specs (build volume, resolution, pixel pitch).
+# Hardware envelope only (ADR-0005). Recipe fields live on ResinProfile.recipe.
 
 name = "Elegoo Mars 5 Ultra"
 
@@ -8,17 +8,12 @@ name = "Elegoo Mars 5 Ultra"
 led_power_mw_cm2 = 20.0           # ParaLED matrix, 12K mono LCD
 pixel_pitch_um = 19.0              # 218.88 mm / 11520 px
 
-# Motion
-lift_speed_mm_min = 65.0
-ref_lift_speed_mm_min = 65.0
-lift_distance_mm = 6.0
-lift_cycle_sec = 6.5
-
-# Exposure defaults (override per-resin)
-normal_exposure_sec = 2.0
-bottom_exposure_sec = 30.0
-bottom_layer_count = 6
-layer_height_um = 50.0
+# Hardware envelope (ADR-0005 Axis 1)
+# Ranges derived from Elegoo spec sheet + published recipe range (Mars class).
+layer_height_range_um = { min = 10.0, max = 150.0 }
+exposure_range_sec = { min = 0.5, max = 60.0 }
+lift_speed_range_mm_min = { min = 10.0, max = 300.0 }
+bottom_layer_count_max = 20
 
 # Z-axis — triple linear rail (estimated; KB-131 Mars class = 460, Mars 5 Ultra ~900)
 z_stiffness_n_per_mm = 900.0

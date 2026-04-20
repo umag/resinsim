@@ -78,7 +78,15 @@ fn stage_b_env_wins_over_cwd() {
     // data/ (nextest CWD is the crate root).
     let data = workspace_data_dir();
     let out = Command::new(bin())
-        .args(["inspect", "zaxis", "--force", "46.8", "--printer", "athena_ii", "--json"])
+        .args([
+            "inspect",
+            "zaxis",
+            "--force",
+            "46.8",
+            "--printer",
+            "athena_ii",
+            "--json",
+        ])
         .env("RESINSIM_DATA_DIR", &data)
         .output()
         .expect("spawn");
@@ -97,7 +105,14 @@ fn all_stages_miss_hard_errors() {
     // Stages a-d all miss → hard error.
     let empty = tmpdir("all_miss");
     let out = Command::new(bin())
-        .args(["inspect", "zaxis", "--force", "46.8", "--printer", "athena_ii"])
+        .args([
+            "inspect",
+            "zaxis",
+            "--force",
+            "46.8",
+            "--printer",
+            "athena_ii",
+        ])
         .current_dir(&empty)
         .env_remove("RESINSIM_DATA_DIR")
         .output()
@@ -123,13 +138,24 @@ fn data_dir_is_file_not_dir_falls_through() {
     let file = tmp.join("not-a-dir.txt");
     std::fs::write(&file, "").expect("write");
     let out = Command::new(bin())
-        .args(["inspect", "zaxis", "--force", "46.8", "--printer", "athena_ii", "--data-dir"])
+        .args([
+            "inspect",
+            "zaxis",
+            "--force",
+            "46.8",
+            "--printer",
+            "athena_ii",
+            "--data-dir",
+        ])
         .arg(&file)
         .current_dir(&tmp)
         .env_remove("RESINSIM_DATA_DIR")
         .output()
         .expect("spawn");
-    assert!(!out.status.success(), "file-as-data-dir should fall through then hard error");
+    assert!(
+        !out.status.success(),
+        "file-as-data-dir should fall through then hard error"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("could not resolve"));
     std::fs::remove_dir_all(&tmp).ok();
@@ -173,11 +199,7 @@ fn report_health_athena_ii_uses_toml_stiffness() {
     std::fs::write(&stl, cube_60mm_stl()).expect("write stl");
     let data = workspace_data_dir();
     let out = Command::new(bin())
-        .args([
-            "report",
-            "health",
-            "--stl",
-        ])
+        .args(["report", "health", "--stl"])
         .arg(&stl)
         .args(["--data-dir"])
         .arg(&data)
@@ -198,13 +220,23 @@ fn report_health_athena_ii_uses_toml_stiffness() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // Athena II z_stiffness=1500 N/mm, lift_speed=90, ref_lift_speed=60 →
-    // speed factor (90/60)^0.182 ≈ 1.076, peel ≈ 50.36 N, deflection ≈ 33.6 µm.
-    // Pre-fix (silent fallback to generic_msla_4k k=460) was 101.7 µm.
+    // ADR-0005 (2026-04-20): lift_speed_mm_min + ref_lift_speed_mm_min moved off
+    // PrinterProfile. With no --resin flag the CLI defaults to resin=generic_standard,
+    // whose recipe has lift_speed_mm_min=60 (matching ref_lift_speed_mm_min=60). So
+    // speed factor = 1.0, peel ≈ 46.8 N, deflection ≈ 31.2 µm (still gated by Athena II
+    // z_stiffness=1500 N/mm — the original bug this test defends against).
+    //
+    // Pre-ADR-0005: Athena II's baked lift_speed=90 gave speed factor 1.076 → 33.6 µm.
+    // The 31.2 µm result is the CORRECT new behaviour — the resin recipe drives lift
+    // speed, not the printer; generic_standard at 60 mm/min happens to match ref_lift.
+    //
+    // Pre-ADR-0004 (the original regression this test defends against): silent fallback
+    // to generic_msla_4k k=460 produced 101.7 µm.
     let defl = extract_f64(&stdout, "\"max_z_deflection_um\":");
     assert!(
-        (32.0..=35.0).contains(&defl),
-        "expected ~33.6 µm Athena II deflection, got {defl} (pre-fix was 101.7 µm — fix regressed)"
+        (29.0..=33.0).contains(&defl),
+        "expected ~31.2 µm Athena II deflection post-ADR-0005, got {defl} \
+         (pre-ADR-0004 silent-generic-fallback was 101.7 µm — that regression would re-appear as >100)"
     );
     std::fs::remove_dir_all(&cube).ok();
 }
@@ -221,11 +253,7 @@ fn report_health_unknown_printer_hard_errors_with_available_list() {
             "--data-dir",
         ])
         .arg(&data)
-        .args([
-            "--printer",
-            "bogus_printer_name",
-            "--json",
-        ])
+        .args(["--printer", "bogus_printer_name", "--json"])
         .output()
         .expect("spawn");
     assert!(!out.status.success());
@@ -268,7 +296,10 @@ fn explicit_stiffness_overrides_profile() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let k = extract_f64(&stdout, "\"stiffness_n_per_mm\":");
-    assert!((k - 200.0).abs() < 0.1, "explicit --stiffness=200 must win: got {k}");
+    assert!(
+        (k - 200.0).abs() < 0.1,
+        "explicit --stiffness=200 must win: got {k}"
+    );
 }
 
 #[test]
@@ -288,7 +319,10 @@ fn no_profile_flag_skips_resolution_even_with_bogus_env() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let k = extract_f64(&stdout, "\"stiffness_n_per_mm\":");
-    assert!((k - 460.0).abs() < 0.1, "built-in default 460 must apply: got {k}");
+    assert!(
+        (k - 460.0).abs() < 0.1,
+        "built-in default 460 must apply: got {k}"
+    );
 }
 
 // --- Helpers ---

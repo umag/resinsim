@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::entities::Recipe;
 use crate::values::VatTemperature;
 
 /// Default vat-temperature degradation threshold (°C). KB-150 — most standard
@@ -14,19 +15,30 @@ fn default_min_safe_temp_c() -> f32 {
     15.0
 }
 
-/// Physical properties of a resin formulation.
-/// Identity: name. Loaded from TOML profiles in data/resins/.
+/// Physical properties of a resin formulation (chemistry) + its recipe (ADR-0005, Axis 2).
+/// Identity: `name`. Loaded from TOML profiles in `data/resins/`.
+///
+/// # Chemistry vs Recipe
+///
+/// **Chemistry** fields describe immutable physical properties of the resin formulation
+/// (optics, mechanics, viscosity, thermal thresholds, peel-measurement metadata). They
+/// change only when the formulator changes the resin.
+///
+/// **Recipe** (nested `Recipe` VO) describes the concrete operating point for a print
+/// (exposure times, layer height, lift kinematics). It is chosen per-resin and may
+/// change between tuning sessions.
+///
+/// `ref_lift_speed_mm_min` is chemistry, not recipe — it is measurement metadata for
+/// `peel_adhesion_kpa` (KB-112 + KB-114). See ADR-0005 §3.
 ///
 /// # Validate-on-mutation contract
 ///
 /// Fields are `pub(crate)` — external code cannot construct or mutate a
-/// `ResinProfile`. Construction is restricted to the factory methods on this
-/// type (`generic_standard`, `elegoo_ceramic_grey_v2`) and to TOML
-/// deserialisation via `ResinProfileRepository`, both of which run
-/// `validate()` before returning. After any field mutation by intra-crate
-/// code (typically tests), `validate()` MUST be re-called before treating
-/// the profile as trusted by downstream services. `simulation_runner`
-/// provides defence-in-depth by calling `validate()` again at run entry.
+/// `ResinProfile`. Construction is restricted to the factory methods on this type and
+/// to TOML deserialisation via `ResinProfileRepository`, both of which run
+/// `validate()` before returning. After any field mutation by intra-crate code
+/// (typically tests), `validate()` MUST be re-called before treating the profile as
+/// trusted by downstream services.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResinProfile {
     pub(crate) name: String,
@@ -42,6 +54,12 @@ pub struct ResinProfile {
     pub(crate) tensile_strength_mpa: f32,
     /// Peel adhesion to FEP. Unit: kPa. KB-110.
     pub(crate) peel_adhesion_kpa: f32,
+    /// Reference speed at which `peel_adhesion_kpa` was measured. Unit: mm/min.
+    /// Chemistry metadata — see KB-112, KB-114, ADR-0005 §3. Moved from
+    /// `PrinterProfile` in the three-axis refactor: the peel-force model scales
+    /// `peel_adhesion_kpa` by `f_resin(v_lift) / f_resin(v_ref)`, so `v_ref`
+    /// travels with the adhesion measurement it was taken under.
+    pub(crate) ref_lift_speed_mm_min: f32,
 
     // Shrinkage
     /// Linear shrinkage. Unit: %. KB-142.
@@ -66,6 +84,11 @@ pub struct ResinProfile {
     /// Default 15 °C for typical standard resins.
     #[serde(default = "default_min_safe_temp_c")]
     pub(crate) min_safe_temp_c: f32,
+
+    /// Concrete operating point for this resin (ADR-0005 Axis 2b).
+    /// **Required** — no serde default. A legacy resin TOML missing `[recipe]` fails
+    /// to deserialise, surfacing the migration loudly per ADR-0005 Consequences.
+    pub(crate) recipe: Recipe,
 }
 
 impl ResinProfile {
@@ -74,23 +97,48 @@ impl ResinProfile {
         &self.name
     }
 
-    // --- Public field accessors ---
-    //
-    // Fields are `pub(crate)` per the validate-on-mutation contract. These
-    // accessors expose read-only access to external callers (e.g.
-    // resinsim-inspect's profile-sourced CLI defaults per ADR-0004).
+    // --- Public read-only accessors (pub(crate) fields per validate-on-mutation contract) ---
 
-    pub fn penetration_depth_um(&self) -> f32 { self.penetration_depth_um }
-    pub fn critical_energy_mj_cm2(&self) -> f32 { self.critical_energy_mj_cm2 }
-    pub fn tensile_strength_mpa(&self) -> f32 { self.tensile_strength_mpa }
-    pub fn peel_adhesion_kpa(&self) -> f32 { self.peel_adhesion_kpa }
-    pub fn linear_shrinkage_pct(&self) -> f32 { self.linear_shrinkage_pct }
-    pub fn viscosity_mpa_s(&self) -> f32 { self.viscosity_mpa_s }
-    pub fn reference_temp_c(&self) -> f32 { self.reference_temp_c }
-    pub fn activation_energy_kj_mol(&self) -> f32 { self.activation_energy_kj_mol }
-    pub fn density_g_cm3(&self) -> f32 { self.density_g_cm3 }
-    pub fn degradation_temp_c(&self) -> f32 { self.degradation_temp_c }
-    pub fn min_safe_temp_c(&self) -> f32 { self.min_safe_temp_c }
+    pub fn penetration_depth_um(&self) -> f32 {
+        self.penetration_depth_um
+    }
+    pub fn critical_energy_mj_cm2(&self) -> f32 {
+        self.critical_energy_mj_cm2
+    }
+    pub fn tensile_strength_mpa(&self) -> f32 {
+        self.tensile_strength_mpa
+    }
+    pub fn peel_adhesion_kpa(&self) -> f32 {
+        self.peel_adhesion_kpa
+    }
+    pub fn ref_lift_speed_mm_min(&self) -> f32 {
+        self.ref_lift_speed_mm_min
+    }
+    pub fn linear_shrinkage_pct(&self) -> f32 {
+        self.linear_shrinkage_pct
+    }
+    pub fn viscosity_mpa_s(&self) -> f32 {
+        self.viscosity_mpa_s
+    }
+    pub fn reference_temp_c(&self) -> f32 {
+        self.reference_temp_c
+    }
+    pub fn activation_energy_kj_mol(&self) -> f32 {
+        self.activation_energy_kj_mol
+    }
+    pub fn density_g_cm3(&self) -> f32 {
+        self.density_g_cm3
+    }
+    pub fn degradation_temp_c(&self) -> f32 {
+        self.degradation_temp_c
+    }
+    pub fn min_safe_temp_c(&self) -> f32 {
+        self.min_safe_temp_c
+    }
+    /// The concrete operating point (Recipe VO) for this resin.
+    pub fn recipe(&self) -> &Recipe {
+        &self.recipe
+    }
 
     /// Validate physical invariants. Must be called after deserialization from
     /// untrusted sources (e.g. TOML) to prevent NaN/inf propagation through
@@ -108,6 +156,7 @@ impl ResinProfile {
             (self.critical_energy_mj_cm2, "critical_energy_mj_cm2"),
             (self.tensile_strength_mpa, "tensile_strength_mpa"),
             (self.peel_adhesion_kpa, "peel_adhesion_kpa"),
+            (self.ref_lift_speed_mm_min, "ref_lift_speed_mm_min"),
             (self.viscosity_mpa_s, "viscosity_mpa_s"),
             (self.activation_energy_kj_mol, "activation_energy_kj_mol"),
             (self.density_g_cm3, "density_g_cm3"),
@@ -148,6 +197,7 @@ impl ResinProfile {
                 self.min_safe_temp_c, self.degradation_temp_c
             ));
         }
+        self.recipe.validate().map_err(|e| format!("recipe: {e}"))?;
         Ok(())
     }
 
@@ -162,22 +212,25 @@ impl ResinProfile {
     }
 
     /// Elegoo Ceramic Grey V2.
-    /// Sources: Elegoo published mechanical specs; optical/adhesion values
-    /// estimated from ceramic-filled resin literature (calibrate with Athena II).
+    /// Sources: Elegoo published mechanical specs; optical/adhesion values estimated
+    /// from ceramic-filled resin literature (calibrate with Athena II).
+    /// Recipe: ceramic-filled resin needs thinner layers + longer cure per ADR-0005.
     pub fn elegoo_ceramic_grey_v2() -> Self {
         Self {
             name: "Elegoo Ceramic Grey V2".into(),
-            penetration_depth_um: 145.0,   // ceramic particles scatter, shallower cure
+            penetration_depth_um: 145.0, // ceramic particles scatter, shallower cure
             critical_energy_mj_cm2: 5.5,
-            tensile_strength_mpa: 38.0,    // Elegoo published spec
-            peel_adhesion_kpa: 9.5,        // ceramic-filled: lower FEP adhesion than standard
-            linear_shrinkage_pct: 0.9,     // ceramic-constrained
-            viscosity_mpa_s: 350.0,        // higher viscosity from ceramic filler
+            tensile_strength_mpa: 38.0,  // Elegoo published spec
+            peel_adhesion_kpa: 9.5,      // ceramic-filled: lower FEP adhesion than standard
+            ref_lift_speed_mm_min: 60.0, // measurement speed for peel_adhesion_kpa (KB-112)
+            linear_shrinkage_pct: 0.9,   // ceramic-constrained
+            viscosity_mpa_s: 350.0,      // higher viscosity from ceramic filler
             reference_temp_c: 25.0,
             activation_energy_kj_mol: 52.0,
-            density_g_cm3: 1.25,           // ceramic filler increases density
+            density_g_cm3: 1.25, // ceramic filler increases density
             degradation_temp_c: default_degradation_temp_c(),
             min_safe_temp_c: default_min_safe_temp_c(),
+            recipe: Recipe::elegoo_ceramic_grey(),
         }
     }
 
@@ -185,17 +238,19 @@ impl ResinProfile {
     pub fn generic_standard() -> Self {
         Self {
             name: "Generic Standard".into(),
-            penetration_depth_um: 170.0,   // KB-100: Premium Black
-            critical_energy_mj_cm2: 5.0,   // KB-100: Premium Black
-            tensile_strength_mpa: 35.0,    // KB-140: conservative
-            peel_adhesion_kpa: 13.0,       // KB-110: standard FEP
-            linear_shrinkage_pct: 1.5,     // KB-142: standard range
-            viscosity_mpa_s: 200.0,        // KB-141: typical
+            penetration_depth_um: 170.0, // KB-100: Premium Black
+            critical_energy_mj_cm2: 5.0, // KB-100: Premium Black
+            tensile_strength_mpa: 35.0,  // KB-140: conservative
+            peel_adhesion_kpa: 13.0,     // KB-110: standard FEP
+            ref_lift_speed_mm_min: 60.0, // measurement speed for peel_adhesion_kpa
+            linear_shrinkage_pct: 1.5,   // KB-142: standard range
+            viscosity_mpa_s: 200.0,      // KB-141: typical
             reference_temp_c: 25.0,
             activation_energy_kj_mol: 52.0, // KB-150: derived from 82% drop
             density_g_cm3: 1.1,
             degradation_temp_c: default_degradation_temp_c(),
             min_safe_temp_c: default_min_safe_temp_c(),
+            recipe: Recipe::generic_standard(),
         }
     }
 }
@@ -209,6 +264,13 @@ mod tests {
         ResinProfile::generic_standard()
             .validate()
             .expect("ResinProfile::generic_standard() factory must satisfy validate()");
+    }
+
+    #[test]
+    fn elegoo_ceramic_grey_v2_passes_validation() {
+        ResinProfile::elegoo_ceramic_grey_v2()
+            .validate()
+            .expect("ResinProfile::elegoo_ceramic_grey_v2() factory must satisfy validate()");
     }
 
     #[test]
@@ -270,6 +332,31 @@ mod tests {
     }
 
     #[test]
+    fn nan_ref_lift_speed_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.ref_lift_speed_mm_min = f32::NAN;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn zero_ref_lift_speed_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.ref_lift_speed_mm_min = 0.0;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn validate_delegates_to_recipe() {
+        let mut p = ResinProfile::generic_standard();
+        p.recipe.normal_exposure_sec = f32::NAN;
+        let err = p.validate().expect_err("NaN in recipe must bubble up");
+        assert!(
+            err.contains("recipe"),
+            "error prefixed with 'recipe': {err}"
+        );
+    }
+
+    #[test]
     fn is_degradation_risk_uses_profile_threshold() {
         let mut p = ResinProfile::generic_standard();
         p.degradation_temp_c = 40.0;
@@ -294,11 +381,6 @@ mod tests {
     }
 
     // Contract demonstration — see ResinProfile struct doc comment.
-    // Distinct from `empty_name_rejected` (which constructs invalid from scratch)
-    // and from the numeric NaN/range tests: this mutates a previously-VALID
-    // profile via the only mutation surface remaining after T1-F5 (intra-crate
-    // field access) and demonstrates that the contract requires re-running
-    // validate() before treating the profile as trusted.
     #[test]
     fn validate_after_mutation_contract() {
         let mut p = ResinProfile::generic_standard();
@@ -311,23 +393,26 @@ mod tests {
         );
     }
 
-    // --- Legacy-TOML serde(default) regression tests (T1-F6) ---
+    // --- Legacy-TOML serde(default) regression tests (T1-F6 block, updated for ADR-0005).
     //
-    // KB-150 added `degradation_temp_c` and `min_safe_temp_c` after legacy
-    // resin TOMLs were already in the wild. `#[serde(default)]` makes these
-    // fields optional so old files parse; these tests lock that parse-layer
-    // contract so a future schema change cannot silently shift defaults or
-    // cross the ordering invariant without a test catching it.
+    // KB-150 added `degradation_temp_c` + `min_safe_temp_c` via #[serde(default)] so
+    // legacy TOMLs parse. ADR-0005 adds a REQUIRED `[recipe]` table (no serde(default))
+    // — pre-refactor resin TOMLs without `[recipe]` must fail LOUDLY. The fixture below
+    // embeds a valid `[recipe]` table so these tests continue exercising thermal-ordering
+    // invariants; new tests below assert that the missing-`[recipe]` case fails to parse.
 
-    /// Baseline: TOML without the two thermal-threshold fields present.
-    /// Used by the three regression cases below.
-    fn legacy_toml_without_thermal_thresholds() -> String {
+    /// Root-level (non-recipe) legacy TOML with no thermal thresholds present — allows
+    /// tests to insert extra root-level fields (e.g. min_safe_temp_c) BEFORE the [recipe]
+    /// table is appended. Without this split, an append-to-end pattern would place
+    /// extra root fields inside the [recipe] table and they would not hit ResinProfile.
+    fn legacy_toml_root_without_thermal_thresholds() -> String {
         r#"
 name = "Legacy Resin"
 penetration_depth_um = 170.0
 critical_energy_mj_cm2 = 5.0
 tensile_strength_mpa = 35.0
 peel_adhesion_kpa = 13.0
+ref_lift_speed_mm_min = 60.0
 linear_shrinkage_pct = 1.5
 viscosity_mpa_s = 200.0
 reference_temp_c = 25.0
@@ -335,6 +420,34 @@ activation_energy_kj_mol = 52.0
 density_g_cm3 = 1.1
 "#
         .to_string()
+    }
+
+    /// Valid [recipe] table appended to `legacy_toml_root_*` fixtures.
+    fn valid_recipe_table() -> &'static str {
+        r#"
+[recipe]
+layer_height_um = 50.0
+bottom_layer_count = 6
+transition_layers = 3
+normal_exposure_sec = 2.5
+bottom_exposure_sec = 25.0
+wait_before_cure_sec = 0.5
+wait_before_release_sec = 1.0
+wait_after_release_sec = 0.0
+lift_speed_mm_min = 60.0
+lift_cycle_sec = 7.5
+lift_distance_mm = 5.0
+"#
+    }
+
+    /// Baseline legacy TOML updated per ADR-0005 — keeps thermal-threshold fields absent
+    /// (to exercise KB-150 serde defaults) but includes `[recipe]` so deserialize succeeds.
+    fn legacy_toml_without_thermal_thresholds() -> String {
+        format!(
+            "{}{}",
+            legacy_toml_root_without_thermal_thresholds(),
+            valid_recipe_table()
+        )
     }
 
     #[test]
@@ -351,11 +464,13 @@ density_g_cm3 = 1.1
 
     #[test]
     fn legacy_toml_partial_missing_applies_single_default() {
-        // Only min_safe_temp_c explicit (below the default degradation_temp_c).
-        // serde applies default for the absent degradation_temp_c.
+        // Append min_safe_temp_c to the ROOT fixture (before the [recipe] table) —
+        // ResinProfile.min_safe_temp_c is a root field. Appending after [recipe] would
+        // misplace it inside the recipe table (checked by this test's assertions).
         let toml_str = format!(
-            "{}\nmin_safe_temp_c = 12.0\n",
-            legacy_toml_without_thermal_thresholds()
+            "{}\nmin_safe_temp_c = 12.0\n{}",
+            legacy_toml_root_without_thermal_thresholds(),
+            valid_recipe_table()
         );
         let p: ResinProfile =
             toml::from_str(&toml_str).expect("partial-legacy TOML must parse with serde defaults");
@@ -367,14 +482,10 @@ density_g_cm3 = 1.1
 
     #[test]
     fn legacy_toml_invariant_crossing_rejected_by_validate() {
-        // Only min_safe_temp_c explicit at 55.0, above the serde-applied
-        // default degradation_temp_c (50.0) — validate() must reject on
-        // ordering. Locks the parse-path invariant at its most fragile seam:
-        // any future change to the default degradation_temp_c that narrows
-        // the allowed min_safe range would be caught by this test.
         let toml_str = format!(
-            "{}\nmin_safe_temp_c = 55.0\n",
-            legacy_toml_without_thermal_thresholds()
+            "{}\nmin_safe_temp_c = 55.0\n{}",
+            legacy_toml_root_without_thermal_thresholds(),
+            valid_recipe_table()
         );
         let p: ResinProfile =
             toml::from_str(&toml_str).expect("parse must succeed; validate() is the gate");
@@ -386,6 +497,49 @@ density_g_cm3 = 1.1
         assert!(
             err.contains("min_safe_temp_c") && err.contains("degradation_temp_c"),
             "error must identify both offending fields; got: {err}"
+        );
+    }
+
+    // --- New ADR-0005 test: pre-refactor resin TOML (no [recipe] table) fails loudly. ---
+
+    #[test]
+    fn legacy_toml_missing_recipe_rejected() {
+        // Pre-refactor resin TOML — no [recipe] table. Must fail to parse because
+        // Recipe is required (no serde default).
+        let toml_str = r#"
+name = "Pre-refactor Legacy Resin"
+penetration_depth_um = 170.0
+critical_energy_mj_cm2 = 5.0
+tensile_strength_mpa = 35.0
+peel_adhesion_kpa = 13.0
+ref_lift_speed_mm_min = 60.0
+linear_shrinkage_pct = 1.5
+viscosity_mpa_s = 200.0
+reference_temp_c = 25.0
+activation_energy_kj_mol = 52.0
+density_g_cm3 = 1.1
+"#;
+        let result: Result<ResinProfile, _> = toml::from_str(toml_str);
+        let err = result.expect_err("legacy TOML without [recipe] must fail to parse");
+        let err_msg = format!("{err}");
+        assert!(
+            err_msg.contains("recipe"),
+            "parse error must name the missing recipe field: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn legacy_toml_with_nan_recipe_field_rejected() {
+        let toml_str = legacy_toml_without_thermal_thresholds()
+            .replace("normal_exposure_sec = 2.5", "normal_exposure_sec = nan");
+        let p: ResinProfile =
+            toml::from_str(&toml_str).expect("TOML parse succeeds; validate() is the gate");
+        let err = p
+            .validate()
+            .expect_err("NaN in recipe field must fail validate()");
+        assert!(
+            err.contains("recipe") && err.contains("normal_exposure_sec"),
+            "error must name recipe + field: {err}"
         );
     }
 }

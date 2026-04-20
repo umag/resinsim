@@ -5,6 +5,13 @@ date: 2026-04-18
 
 # UAT: Legacy resin TOML loads with thermal defaults and enforces ordering
 
+**Scope note (2026-04-21, ADR-0005).** "Legacy" in this UAT means *KB-150-era*: resins
+written before the `degradation_temp_c` / `min_safe_temp_c` fields were added. Such TOMLs
+must still include the `[recipe]` table introduced in ADR-0005 to deserialise — the
+"missing thermal thresholds" allowance is orthogonal to the "missing recipe" refusal.
+For the ADR-0005 migration contract (pre-refactor TOMLs without `[recipe]` fail loudly),
+see [legacy-resin-toml-without-recipe.md](legacy-resin-toml-without-recipe.md).
+
 ## UAT-1: Legacy TOML defaulting
 
 **Rationale.** T1-F6 identified that `degradation_temp_c` and

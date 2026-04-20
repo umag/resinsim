@@ -1,12 +1,12 @@
 use crate::entities::{
-    FailureEvent, FailureType, LayerResult, PrinterProfile, ResinProfile, Severity,
+    FailureEvent, FailureType, LayerResult, PrinterProfile, Recipe, ResinProfile, Severity,
 };
-use crate::services::{
-    BuildPlate, CureCalculator, PeelForceCalculator, ThermalCalculator, ZAxisCompensator,
-    UniformityCalculator,
-};
-use crate::services::uniformity_calculator::UniformityProfile;
 use crate::services::build_plate::PlateAdhesionProfile;
+use crate::services::uniformity_calculator::UniformityProfile;
+use crate::services::{
+    BuildPlate, CureCalculator, PeelForceCalculator, ThermalCalculator, UniformityCalculator,
+    ZAxisCompensator,
+};
 use crate::values::{
     CrossSectionArea, Energy, PeelForce, PenetrationDepth, SafetyFactor, ThermalTimeConstant,
 };
@@ -44,7 +44,7 @@ pub struct LayerOverrides {
 
 impl FailurePredictor {
     /// Simulate a single layer and return result + failures.
-    // The 9 arguments each name a distinct physical input; bundling them into a
+    // The 10 arguments each name a distinct physical input; bundling them into a
     // `PredictLayerInputs` struct would move the collection point one frame up
     // without reducing the caller's parameter count. Documented as accepted.
     #[allow(clippy::too_many_arguments)]
@@ -55,6 +55,7 @@ impl FailurePredictor {
         overrides: &LayerOverrides,
         resin: &ResinProfile,
         printer: &PrinterProfile,
+        recipe: &Recipe,
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
@@ -69,8 +70,8 @@ impl FailurePredictor {
             printer.delta_t_steady_c,
             tau,
             layer,
-            printer.normal_exposure_sec,
-            printer.lift_cycle_sec,
+            recipe.normal_exposure_sec(),
+            recipe.lift_cycle_sec(),
         );
         let viscosity = ThermalCalculator::viscosity_at_temperature(
             resin.viscosity_mpa_s,
@@ -93,29 +94,31 @@ impl FailurePredictor {
         }
 
         // --- Cure depth ---
-        let exposure_sec = overrides.exposure_sec.unwrap_or(
-            if layer < printer.bottom_layer_count {
-                printer.bottom_exposure_sec
-            } else {
-                printer.normal_exposure_sec
-            },
-        );
+        let exposure_sec =
+            overrides
+                .exposure_sec
+                .unwrap_or(if layer < recipe.bottom_layer_count() {
+                    recipe.bottom_exposure_sec()
+                } else {
+                    recipe.normal_exposure_sec()
+                });
         let energy = Energy::from_exposure(printer.led_power_mw_cm2, exposure_sec)
-            .expect("PrinterProfile::validate() guarantees led_power_mw_cm2 > 0; exposure_sec from profile or override is positive");
+            .expect("PrinterProfile::validate() guarantees led_power_mw_cm2 > 0; exposure_sec from recipe or override is positive");
         let dp = PenetrationDepth::new(resin.penetration_depth_um)
             .expect("ResinProfile::validate() guarantees penetration_depth_um > 0");
         let ec = Energy::new(resin.critical_energy_mj_cm2)
             .expect("ResinProfile::validate() guarantees critical_energy_mj_cm2 > 0");
         let cure_depth = CureCalculator::cure_depth(dp, energy, ec);
 
-        if !cure_depth.is_sufficient(printer.layer_height_um) {
+        if !cure_depth.is_sufficient(recipe.layer_height_um()) {
             failures.push(FailureEvent {
                 layer,
                 failure_type: FailureType::InsufficientCure,
                 severity: Severity::Critical,
                 message: format!(
                     "Cure depth {:.1} µm < layer height {} µm",
-                    cure_depth.value(), printer.layer_height_um
+                    cure_depth.value(),
+                    recipe.layer_height_um()
                 ),
             });
         }
@@ -127,8 +130,8 @@ impl FailurePredictor {
             let corner_energy = energy.scale(corner_factor);
             let cd = CureCalculator::cure_depth(dp, corner_energy, ec);
             // Warn if center is sufficient but corner is not
-            if cure_depth.is_sufficient(printer.layer_height_um)
-                && !cd.is_sufficient(printer.layer_height_um)
+            if cure_depth.is_sufficient(recipe.layer_height_um())
+                && !cd.is_sufficient(recipe.layer_height_um())
             {
                 failures.push(FailureEvent {
                     layer,
@@ -136,7 +139,7 @@ impl FailurePredictor {
                     severity: Severity::Warning,
                     message: format!(
                         "Center cure {:.1} µm OK but edge cure {:.1} µm < {} µm layer height ({:.0}% LCD variation)",
-                        cure_depth.value(), cd.value(), printer.layer_height_um,
+                        cure_depth.value(), cd.value(), recipe.layer_height_um(),
                         printer.lcd_uniformity_variation * 100.0,
                     ),
                 });
@@ -147,15 +150,16 @@ impl FailurePredictor {
         };
 
         // --- Peel force ---
-        let lift_speed = overrides.lift_speed_mm_min.unwrap_or(printer.lift_speed_mm_min);
-        let speed_factor = PeelForceCalculator::lift_speed_factor(
-            lift_speed,
-            printer.ref_lift_speed_mm_min,
-        );
+        let lift_speed = overrides
+            .lift_speed_mm_min
+            .unwrap_or(recipe.lift_speed_mm_min());
+        let speed_factor =
+            PeelForceCalculator::lift_speed_factor(lift_speed, resin.ref_lift_speed_mm_min);
         let peel = PeelForceCalculator::peel_force(resin.peel_adhesion_kpa, area, speed_factor);
         let suction_n = overrides.suction_force_n.unwrap_or(0.0);
-        let suction = PeelForce::new(suction_n)
-            .expect("suction_force_n from SuctionDetector is non-negative; default 0.0 is non-negative");
+        let suction = PeelForce::new(suction_n).expect(
+            "suction_force_n from SuctionDetector is non-negative; default 0.0 is non-negative",
+        );
         let total_force = PeelForceCalculator::total_force(peel, suction);
 
         // --- Holding capacity: build plate adhesion + supports ---
@@ -172,7 +176,12 @@ impl FailurePredictor {
 
         if let Some(safety) = safety.filter(|s| !s.is_safe()) {
             let source = if plate_cap > 0.0 && support_cap.value() > 0.0 {
-                format!("plate {:.1} N + supports {:.1} N = {:.1} N", plate_cap, support_cap.value(), total_capacity)
+                format!(
+                    "plate {:.1} N + supports {:.1} N = {:.1} N",
+                    plate_cap,
+                    support_cap.value(),
+                    total_capacity
+                )
             } else if plate_cap > 0.0 {
                 format!("plate adhesion {:.1} N (no supports)", plate_cap)
             } else {
@@ -184,7 +193,9 @@ impl FailurePredictor {
                 severity: Severity::Critical,
                 message: format!(
                     "Peel force {:.1} N exceeds capacity {} (SF={:.2})",
-                    total_force.value(), source, safety.value()
+                    total_force.value(),
+                    source,
+                    safety.value()
                 ),
             });
         }
@@ -202,14 +213,18 @@ impl FailurePredictor {
                 severity,
                 message: format!(
                     "Sealed cavity suction {:.1} N (peel adhesion {:.1} N, total {:.1} N)",
-                    suction_n, peel.value(), total_force.value()
+                    suction_n,
+                    peel.value(),
+                    total_force.value()
                 ),
             });
         }
 
         // --- Z-axis deflection ---
-        let z_deflection = ZAxisCompensator::deflection_um(total_force, printer.z_stiffness_n_per_mm);
-        let effective_height = ZAxisCompensator::effective_layer_height_um(printer.layer_height_um, z_deflection);
+        let z_deflection =
+            ZAxisCompensator::deflection_um(total_force, printer.z_stiffness_n_per_mm);
+        let effective_height =
+            ZAxisCompensator::effective_layer_height_um(recipe.layer_height_um(), z_deflection);
 
         if effective_height <= 0.0 {
             let (severity, note) = if overrides.is_raft {
@@ -223,7 +238,8 @@ impl FailurePredictor {
                 severity,
                 message: format!(
                     "Z deflection {:.1} µm exceeds layer height {} µm{note}",
-                    z_deflection, printer.layer_height_um
+                    z_deflection,
+                    recipe.layer_height_um()
                 ),
             });
         }
@@ -235,7 +251,10 @@ impl FailurePredictor {
                 layer,
                 failure_type: FailureType::RapidAreaIncrease,
                 severity: Severity::Warning,
-                message: format!("Area increased by {:.1} mm² (>{:.0} threshold)", delta, AREA_DELTA_WARN_MM2),
+                message: format!(
+                    "Area increased by {:.1} mm² (>{:.0} threshold)",
+                    delta, AREA_DELTA_WARN_MM2
+                ),
             });
         }
 
@@ -272,6 +291,10 @@ mod tests {
         PrinterProfile::generic_msla_4k()
     }
 
+    fn test_recipe() -> Recipe {
+        Recipe::generic_standard()
+    }
+
     fn test_supports() -> SupportConfig {
         SupportConfig {
             tip_radius_mm: 0.2,
@@ -291,10 +314,21 @@ mod tests {
     #[test]
     fn small_area_layer_no_failures() {
         let (result, failures) = FailurePredictor::predict_layer(
-            50, area(100.0), area(95.0),
-            &LayerOverrides::default(), &test_resin(), &test_printer(), &test_supports(), &test_plate(), 22.0,
+            50,
+            area(100.0),
+            area(95.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            &test_supports(),
+            &test_plate(),
+            22.0,
         );
-        assert!(failures.is_empty(), "expected no failures, got: {failures:?}");
+        assert!(
+            failures.is_empty(),
+            "expected no failures, got: {failures:?}"
+        );
         assert!(result.safety_factor > 1.0);
         assert!(result.cure_depth_um > 50.0);
     }
@@ -311,11 +345,21 @@ mod tests {
             interlayer_bond_kpa: 0.0,
         };
         let (_, failures) = FailurePredictor::predict_layer(
-            100, area(8000.0), area(7900.0),
-            &LayerOverrides::default(), &test_resin(), &test_printer(), &test_supports(), &no_plate, 22.0,
+            100,
+            area(8000.0),
+            area(7900.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            &test_supports(),
+            &no_plate,
+            22.0,
         );
         assert!(
-            failures.iter().any(|f| f.failure_type == FailureType::SupportOverload),
+            failures
+                .iter()
+                .any(|f| f.failure_type == FailureType::SupportOverload),
             "expected SupportOverload, got: {failures:?}"
         );
     }
@@ -323,11 +367,21 @@ mod tests {
     #[test]
     fn rapid_area_increase_warns() {
         let (_, failures) = FailurePredictor::predict_layer(
-            50, area(250.0), area(100.0),
-            &LayerOverrides::default(), &test_resin(), &test_printer(), &test_supports(), &test_plate(), 22.0,
+            50,
+            area(250.0),
+            area(100.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            &test_supports(),
+            &test_plate(),
+            22.0,
         );
         assert!(
-            failures.iter().any(|f| f.failure_type == FailureType::RapidAreaIncrease),
+            failures
+                .iter()
+                .any(|f| f.failure_type == FailureType::RapidAreaIncrease),
             "expected RapidAreaIncrease warning"
         );
     }
@@ -335,12 +389,28 @@ mod tests {
     #[test]
     fn bottom_layer_uses_bottom_exposure() {
         let (result, _) = FailurePredictor::predict_layer(
-            2, area(100.0), area(100.0),
-            &LayerOverrides::default(), &test_resin(), &test_printer(), &test_supports(), &test_plate(), 22.0,
+            2,
+            area(100.0),
+            area(100.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            &test_supports(),
+            &test_plate(),
+            22.0,
         );
         let (normal_result, _) = FailurePredictor::predict_layer(
-            50, area(100.0), area(100.0),
-            &LayerOverrides::default(), &test_resin(), &test_printer(), &test_supports(), &test_plate(), 22.0,
+            50,
+            area(100.0),
+            area(100.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            &test_supports(),
+            &test_plate(),
+            22.0,
         );
         assert!(result.cure_depth_um > normal_result.cure_depth_um * 4.0);
     }
@@ -348,12 +418,28 @@ mod tests {
     #[test]
     fn later_layers_have_higher_temperature() {
         let (early, _) = FailurePredictor::predict_layer(
-            10, area(100.0), area(100.0),
-            &LayerOverrides::default(), &test_resin(), &test_printer(), &test_supports(), &test_plate(), 22.0,
+            10,
+            area(100.0),
+            area(100.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            &test_supports(),
+            &test_plate(),
+            22.0,
         );
         let (late, _) = FailurePredictor::predict_layer(
-            500, area(100.0), area(100.0),
-            &LayerOverrides::default(), &test_resin(), &test_printer(), &test_supports(), &test_plate(), 22.0,
+            500,
+            area(100.0),
+            area(100.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            &test_supports(),
+            &test_plate(),
+            22.0,
         );
         assert!(late.vat_temperature_c > early.vat_temperature_c);
         assert!(late.viscosity_mpa_s < early.viscosity_mpa_s);
@@ -364,11 +450,21 @@ mod tests {
         let mut printer = test_printer();
         printer.z_stiffness_n_per_mm = 460.0;
         let (_, failures) = FailurePredictor::predict_layer(
-            100, area(10000.0), area(9900.0),
-            &LayerOverrides::default(), &test_resin(), &printer, &test_supports(), &test_plate(), 22.0,
+            100,
+            area(10000.0),
+            area(9900.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &printer,
+            &test_recipe(),
+            &test_supports(),
+            &test_plate(),
+            22.0,
         );
         assert!(
-            failures.iter().any(|f| f.failure_type == FailureType::ZAxisCatastrophic),
+            failures
+                .iter()
+                .any(|f| f.failure_type == FailureType::ZAxisCatastrophic),
             "expected ZAxisCatastrophic, got: {failures:?}"
         );
     }
@@ -379,31 +475,59 @@ mod tests {
         // No supports, but plate adhesion = 100 kPa × 2500 = 250 N (bottom)
         // Interlayer = 50 kPa × 2500 = 125 N (normal layers)
         // Both >> 32.5 N → no SupportOverload
-        let no_supports = SupportConfig { tip_radius_mm: 0.0, n_supports: 0 };
+        let no_supports = SupportConfig {
+            tip_radius_mm: 0.0,
+            n_supports: 0,
+        };
         let (result, failures) = FailurePredictor::predict_layer(
-            0, area(2500.0), area(0.0),
-            &LayerOverrides::default(), &test_resin(), &test_printer(), &no_supports, &test_plate(), 22.0,
+            0,
+            area(2500.0),
+            area(0.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            &no_supports,
+            &test_plate(),
+            22.0,
         );
-        let overloads: Vec<_> = failures.iter()
+        let overloads: Vec<_> = failures
+            .iter()
             .filter(|f| f.failure_type == FailureType::SupportOverload)
             .collect();
-        assert!(overloads.is_empty(),
-            "plate adhesion should hold 50mm cube without supports, got: {overloads:?}");
+        assert!(
+            overloads.is_empty(),
+            "plate adhesion should hold 50mm cube without supports, got: {overloads:?}"
+        );
         assert!(result.safety_factor > 1.0);
     }
 
     #[test]
     fn no_supports_normal_layer_interlayer_holds() {
-        let no_supports = SupportConfig { tip_radius_mm: 0.0, n_supports: 0 };
+        let no_supports = SupportConfig {
+            tip_radius_mm: 0.0,
+            n_supports: 0,
+        };
         let (result, failures) = FailurePredictor::predict_layer(
-            50, area(2500.0), area(2500.0),
-            &LayerOverrides::default(), &test_resin(), &test_printer(), &no_supports, &test_plate(), 22.0,
+            50,
+            area(2500.0),
+            area(2500.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            &no_supports,
+            &test_plate(),
+            22.0,
         );
-        let overloads: Vec<_> = failures.iter()
+        let overloads: Vec<_> = failures
+            .iter()
             .filter(|f| f.failure_type == FailureType::SupportOverload)
             .collect();
-        assert!(overloads.is_empty(),
-            "interlayer bond should hold normal layers, got: {overloads:?}");
+        assert!(
+            overloads.is_empty(),
+            "interlayer bond should hold normal layers, got: {overloads:?}"
+        );
         assert!(result.safety_factor > 1.0);
     }
 
@@ -411,11 +535,23 @@ mod tests {
     fn worst_cure_depth_less_than_center() {
         // With 22% uniformity variation, worst cure should be less than center
         let (result, _) = FailurePredictor::predict_layer(
-            50, area(100.0), area(100.0),
-            &LayerOverrides::default(), &test_resin(), &test_printer(), &test_supports(), &test_plate(), 22.0,
+            50,
+            area(100.0),
+            area(100.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            &test_supports(),
+            &test_plate(),
+            22.0,
         );
-        assert!(result.worst_cure_depth_um < result.cure_depth_um,
-            "worst {:.1} should be < center {:.1}", result.worst_cure_depth_um, result.cure_depth_um);
+        assert!(
+            result.worst_cure_depth_um < result.cure_depth_um,
+            "worst {:.1} should be < center {:.1}",
+            result.worst_cure_depth_um,
+            result.cure_depth_um
+        );
     }
 
     #[test]
@@ -423,11 +559,21 @@ mod tests {
         let mut printer = test_printer();
         printer.lcd_uniformity_variation = 0.0;
         let (result, _) = FailurePredictor::predict_layer(
-            50, area(100.0), area(100.0),
-            &LayerOverrides::default(), &test_resin(), &printer, &test_supports(), &test_plate(), 22.0,
+            50,
+            area(100.0),
+            area(100.0),
+            &LayerOverrides::default(),
+            &test_resin(),
+            &printer,
+            &test_recipe(),
+            &test_supports(),
+            &test_plate(),
+            22.0,
         );
-        assert!((result.worst_cure_depth_um - result.cure_depth_um).abs() < 0.01,
-            "with 0% variation, worst should equal center");
+        assert!(
+            (result.worst_cure_depth_um - result.cure_depth_um).abs() < 0.01,
+            "with 0% variation, worst should equal center"
+        );
     }
 
     #[test]
@@ -446,13 +592,31 @@ mod tests {
             ..Default::default()
         };
         let (result, failures) = FailurePredictor::predict_layer(
-            50, area(100.0), area(100.0),
-            &overrides, &test_resin(), &printer, &test_supports(), &test_plate(), 22.0,
+            50,
+            area(100.0),
+            area(100.0),
+            &overrides,
+            &test_resin(),
+            &printer,
+            &test_recipe(),
+            &test_supports(),
+            &test_plate(),
+            22.0,
         );
-        assert!(result.cure_depth_um > 50.0, "center should pass: {:.1}", result.cure_depth_um);
-        assert!(result.worst_cure_depth_um < 50.0, "corner should fail: {:.1}", result.worst_cure_depth_um);
         assert!(
-            failures.iter().any(|f| f.failure_type == FailureType::NonUniformCure),
+            result.cure_depth_um > 50.0,
+            "center should pass: {:.1}",
+            result.cure_depth_um
+        );
+        assert!(
+            result.worst_cure_depth_um < 50.0,
+            "corner should fail: {:.1}",
+            result.worst_cure_depth_um
+        );
+        assert!(
+            failures
+                .iter()
+                .any(|f| f.failure_type == FailureType::NonUniformCure),
             "expected NonUniformCure, got: {failures:?}"
         );
     }

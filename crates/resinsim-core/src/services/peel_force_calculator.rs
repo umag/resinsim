@@ -25,7 +25,10 @@ impl PeelForceCalculator {
     /// Suction force from a sealed cavity against FEP.
     /// KB-114: F_suction = ΔP (kPa) × A_sealed (mm²) → Newtons.
     /// Max ΔP ≈ 101 kPa (atmospheric pressure).
-    pub fn suction_force(pressure_differential_kpa: f32, sealed_area: CrossSectionArea) -> PeelForce {
+    pub fn suction_force(
+        pressure_differential_kpa: f32,
+        sealed_area: CrossSectionArea,
+    ) -> PeelForce {
         PeelForce::new(pressure_differential_kpa * sealed_area.value() as f32 * 1e-3)
             .expect("pressure differential and area are non-negative by construction")
     }

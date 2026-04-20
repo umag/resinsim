@@ -83,10 +83,7 @@ impl BuildPlate {
 
     /// Total holding capacity: build plate/interlayer + supports.
     /// This is what the FailurePredictor should use instead of just support capacity.
-    pub fn total_capacity(
-        plate_capacity_n: f32,
-        support_capacity_n: f32,
-    ) -> f32 {
+    pub fn total_capacity(plate_capacity_n: f32, support_capacity_n: f32) -> f32 {
         // Plate adhesion and supports act in parallel
         plate_capacity_n + support_capacity_n
     }
@@ -125,7 +122,10 @@ mod tests {
         for layer in 0..p.bottom_layer_count {
             let cap = BuildPlate::holding_capacity(layer, area(1000.0), &p);
             // 100 kPa × 1000 mm² = 100 N
-            assert!((cap - 100.0).abs() < 0.01, "layer {layer} should use plate adhesion");
+            assert!(
+                (cap - 100.0).abs() < 0.01,
+                "layer {layer} should use plate adhesion"
+            );
         }
     }
 
@@ -154,7 +154,10 @@ mod tests {
         // Bottom plate adhesion: 100 kPa × 2500 mm² = 250 N >> 32.5 N
         let plate_cap = BuildPlate::holding_capacity(0, area(2500.0), &profile());
         let total = BuildPlate::total_capacity(plate_cap, 0.0); // no supports
-        assert!(total > 32.5, "plate adhesion ({total} N) should hold 32.5 N peel force");
+        assert!(
+            total > 32.5,
+            "plate adhesion ({total} N) should hold 32.5 N peel force"
+        );
     }
 
     #[test]
@@ -162,7 +165,10 @@ mod tests {
         // Normal layers: interlayer bond 50 kPa × 2500 mm² = 125 N > 32.5 N
         let interlayer_cap = BuildPlate::holding_capacity(50, area(2500.0), &profile());
         let total = BuildPlate::total_capacity(interlayer_cap, 0.0);
-        assert!(total > 32.5, "interlayer bond ({total} N) should hold 32.5 N peel force");
+        assert!(
+            total > 32.5,
+            "interlayer bond ({total} N) should hold 32.5 N peel force"
+        );
     }
 
     #[test]

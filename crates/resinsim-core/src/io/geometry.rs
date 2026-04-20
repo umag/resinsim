@@ -150,23 +150,71 @@ mod tests {
 
         vec![
             // Bottom (z=0)
-            Triangle { v0: v[0], v1: v[2], v2: v[1] },
-            Triangle { v0: v[0], v1: v[3], v2: v[2] },
+            Triangle {
+                v0: v[0],
+                v1: v[2],
+                v2: v[1],
+            },
+            Triangle {
+                v0: v[0],
+                v1: v[3],
+                v2: v[2],
+            },
             // Top (z=1)
-            Triangle { v0: v[4], v1: v[5], v2: v[6] },
-            Triangle { v0: v[4], v1: v[6], v2: v[7] },
+            Triangle {
+                v0: v[4],
+                v1: v[5],
+                v2: v[6],
+            },
+            Triangle {
+                v0: v[4],
+                v1: v[6],
+                v2: v[7],
+            },
             // Front (y=0)
-            Triangle { v0: v[0], v1: v[1], v2: v[5] },
-            Triangle { v0: v[0], v1: v[5], v2: v[4] },
+            Triangle {
+                v0: v[0],
+                v1: v[1],
+                v2: v[5],
+            },
+            Triangle {
+                v0: v[0],
+                v1: v[5],
+                v2: v[4],
+            },
             // Back (y=1)
-            Triangle { v0: v[3], v1: v[7], v2: v[6] },
-            Triangle { v0: v[3], v1: v[6], v2: v[2] },
+            Triangle {
+                v0: v[3],
+                v1: v[7],
+                v2: v[6],
+            },
+            Triangle {
+                v0: v[3],
+                v1: v[6],
+                v2: v[2],
+            },
             // Left (x=0)
-            Triangle { v0: v[0], v1: v[4], v2: v[7] },
-            Triangle { v0: v[0], v1: v[7], v2: v[3] },
+            Triangle {
+                v0: v[0],
+                v1: v[4],
+                v2: v[7],
+            },
+            Triangle {
+                v0: v[0],
+                v1: v[7],
+                v2: v[3],
+            },
             // Right (x=1)
-            Triangle { v0: v[1], v1: v[2], v2: v[6] },
-            Triangle { v0: v[1], v1: v[6], v2: v[5] },
+            Triangle {
+                v0: v[1],
+                v1: v[2],
+                v2: v[6],
+            },
+            Triangle {
+                v0: v[1],
+                v1: v[6],
+                v2: v[5],
+            },
         ]
     }
 
@@ -175,7 +223,11 @@ mod tests {
         let tris = unit_cube();
         let area = cross_section_at_z(&tris, 0.5);
         // 1mm × 1mm cube → cross section = 1.0 mm²
-        assert!((area.value() - 1.0).abs() < 0.01, "expected ~1.0, got {}", area.value());
+        assert!(
+            (area.value() - 1.0).abs() < 0.01,
+            "expected ~1.0, got {}",
+            area.value()
+        );
     }
 
     #[test]

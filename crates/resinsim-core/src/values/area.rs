@@ -17,7 +17,9 @@ impl CrossSectionArea {
             return Err(format!("cross-section area must be finite, got {mm2}"));
         }
         if mm2 < 0.0 {
-            return Err(format!("cross-section area must be non-negative, got {mm2}"));
+            return Err(format!(
+                "cross-section area must be non-negative, got {mm2}"
+            ));
         }
         Ok(Self(mm2))
     }
@@ -29,7 +31,9 @@ impl CrossSectionArea {
             return Err(format!("circle diameter must be finite, got {diameter_mm}"));
         }
         if diameter_mm < 0.0 {
-            return Err(format!("circle diameter must be non-negative, got {diameter_mm}"));
+            return Err(format!(
+                "circle diameter must be non-negative, got {diameter_mm}"
+            ));
         }
         Ok(Self(std::f64::consts::PI * (diameter_mm / 2.0).powi(2)))
     }

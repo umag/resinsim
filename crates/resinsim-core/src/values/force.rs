@@ -39,7 +39,9 @@ impl SupportCapacity {
             return Err(format!("support capacity must be finite, got {newtons}"));
         }
         if newtons < 0.0 {
-            return Err(format!("support capacity must be non-negative, got {newtons}"));
+            return Err(format!(
+                "support capacity must be non-negative, got {newtons}"
+            ));
         }
         Ok(Self(newtons))
     }

@@ -129,11 +129,12 @@ impl UniformityCalculator {
         let cd_center = Self::cure_depth_at_position(
             profile.plate_width_mm / 2.0,
             profile.plate_depth_mm / 2.0,
-            nominal_energy, dp, ec, profile,
+            nominal_energy,
+            dp,
+            ec,
+            profile,
         );
-        let cd_corner = Self::cure_depth_at_position(
-            0.0, 0.0, nominal_energy, dp, ec, profile,
-        );
+        let cd_corner = Self::cure_depth_at_position(0.0, 0.0, nominal_energy, dp, ec, profile);
         cd_center.value() - cd_corner.value()
     }
 }
@@ -143,8 +144,7 @@ mod tests {
     use super::*;
 
     fn dp_170() -> PenetrationDepth {
-        PenetrationDepth::new(170.0)
-            .expect("test fixture: 170.0 µm is in PenetrationDepth domain")
+        PenetrationDepth::new(170.0).expect("test fixture: 170.0 µm is in PenetrationDepth domain")
     }
 
     fn ec_5() -> Energy {
@@ -195,12 +195,8 @@ mod tests {
         let ec = ec_5();
         let e = e_10();
 
-        let cd_center = UniformityCalculator::cure_depth_at_position(
-            96.0, 60.0, e, dp, ec, &p,
-        );
-        let cd_corner = UniformityCalculator::cure_depth_at_position(
-            0.0, 0.0, e, dp, ec, &p,
-        );
+        let cd_center = UniformityCalculator::cure_depth_at_position(96.0, 60.0, e, dp, ec, &p);
+        let cd_corner = UniformityCalculator::cure_depth_at_position(0.0, 0.0, e, dp, ec, &p);
 
         assert!(cd_center.value() > cd_corner.value());
     }
@@ -216,7 +212,10 @@ mod tests {
         let e = e_10();
 
         let spread = UniformityCalculator::cure_depth_spread(e, dp, ec, &p);
-        assert!(spread > 30.0, "Saturn 1 spread should be significant, got {spread:.1}");
+        assert!(
+            spread > 30.0,
+            "Saturn 1 spread should be significant, got {spread:.1}"
+        );
     }
 
     #[test]
@@ -225,12 +224,10 @@ mod tests {
         let ec = ec_5();
         let e = e_10();
 
-        let spread_s1 = UniformityCalculator::cure_depth_spread(
-            e, dp, ec, &UniformityProfile::saturn_1(),
-        );
-        let spread_s2 = UniformityCalculator::cure_depth_spread(
-            e, dp, ec, &UniformityProfile::saturn_2(),
-        );
+        let spread_s1 =
+            UniformityCalculator::cure_depth_spread(e, dp, ec, &UniformityProfile::saturn_1());
+        let spread_s2 =
+            UniformityCalculator::cure_depth_spread(e, dp, ec, &UniformityProfile::saturn_2());
 
         assert!(spread_s1 > spread_s2,
             "Saturn 1 (34%) should have more spread than Saturn 2 (22%): {spread_s1:.1} vs {spread_s2:.1}");

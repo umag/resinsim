@@ -5,7 +5,36 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
+use crate::entities::Recipe;
 use crate::io::sliced::{LayerInput, SlicedFileInfo};
+
+/// Build a Recipe from CTB-parsed fields. Fields not present in CTB format
+/// (transition_layers, wait_*, lift_cycle_sec, lift_distance_mm) take documented
+/// defaults. Per ADR-0005 §4.
+// CTB parser fuses 4 parsed + 6 default values; bundling into a struct would
+// obscure which values come from bytes vs defaults.
+#[allow(clippy::too_many_arguments)]
+fn ctb_recipe(
+    layer_height_um: f32,
+    bottom_layer_count: u32,
+    normal_exposure_sec: f32,
+    bottom_exposure_sec: f32,
+    lift_speed_mm_min: f32,
+) -> Result<Recipe, String> {
+    Recipe::new(
+        layer_height_um,
+        bottom_layer_count,
+        3, // transition_layers — CTB does not carry; RERF default
+        normal_exposure_sec,
+        bottom_exposure_sec,
+        0.5, // wait_before_cure_sec — CTB does not carry
+        1.0, // wait_before_release_sec — CTB does not carry
+        0.0, // wait_after_release_sec — CTB does not carry
+        lift_speed_mm_min,
+        7.5, // lift_cycle_sec — CTB does not carry
+        5.0, // lift_distance_mm — CTB does not carry
+    )
+}
 
 // --- Magic bytes ---
 const CTB_MAGIC_V2_V3: u32 = 0x12FD_0086;
@@ -57,12 +86,15 @@ fn xor_deobfuscate<const N: usize>(input: [u8; N]) -> [u8; N] {
 }
 
 fn aes_decrypt(bytes: &mut [u8]) -> Result<(), String> {
-    use aes::Aes256;
     use aes::cipher::block_padding::NoPadding;
     use aes::cipher::{BlockDecryptMut, KeyIvInit};
+    use aes::Aes256;
 
     if bytes.is_empty() || !bytes.len().is_multiple_of(16) {
-        return Err(format!("AES block must be multiple of 16 bytes, got {}", bytes.len()));
+        return Err(format!(
+            "AES block must be multiple of 16 bytes, got {}",
+            bytes.len()
+        ));
     }
     let key = xor_deobfuscate(CTB_AES_DEFAULT_KEY_XOR);
     let iv = xor_deobfuscate(CTB_AES_DEFAULT_IV_XOR);
@@ -120,19 +152,31 @@ fn rle_count_lit_pixels(data: &[u8]) -> u64 {
             if b0 & 0x80 == 0 {
                 b0 as u64
             } else if b0 & 0xc0 == 0x80 {
-                if i >= data.len() { break; }
-                let b1 = data[i]; i += 1;
+                if i >= data.len() {
+                    break;
+                }
+                let b1 = data[i];
+                i += 1;
                 ((b0 as u64 & 0x7f) << 8) | b1 as u64
             } else if b0 & 0xe0 == 0xc0 {
-                if i + 1 > data.len() { break; }
-                let b1 = data[i]; i += 1;
-                let b2 = data[i]; i += 1;
+                if i + 1 > data.len() {
+                    break;
+                }
+                let b1 = data[i];
+                i += 1;
+                let b2 = data[i];
+                i += 1;
                 ((b0 as u64 & 0x3f) << 16) | ((b1 as u64) << 8) | b2 as u64
             } else {
-                if i + 2 > data.len() { break; }
-                let b1 = data[i]; i += 1;
-                let b2 = data[i]; i += 1;
-                let b3 = data[i]; i += 1;
+                if i + 2 > data.len() {
+                    break;
+                }
+                let b1 = data[i];
+                i += 1;
+                let b2 = data[i];
+                i += 1;
+                let b3 = data[i];
+                i += 1;
                 ((b0 as u64 & 0x1f) << 24) | ((b1 as u64) << 16) | ((b2 as u64) << 8) | b3 as u64
             }
         };
@@ -146,8 +190,7 @@ fn rle_count_lit_pixels(data: &[u8]) -> u64 {
 
 /// Parse a CTB file (any version) and extract per-layer data.
 pub fn parse_ctb(path: &Path) -> Result<(SlicedFileInfo, Vec<LayerInput>), String> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("failed to open CTB: {e}"))?;
+    let mut file = std::fs::File::open(path).map_err(|e| format!("failed to open CTB: {e}"))?;
 
     let mut magic_bytes = [0u8; 4];
     file.read_exact(&mut magic_bytes)
@@ -162,9 +205,11 @@ pub fn parse_ctb(path: &Path) -> Result<(SlicedFileInfo, Vec<LayerInput>), Strin
 }
 
 fn parse_plain(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<LayerInput>), String> {
-    file.seek(SeekFrom::Start(0)).map_err(|e| format!("seek: {e}"))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| format!("seek: {e}"))?;
     let mut header = [0u8; CTB_HEADER_SIZE];
-    file.read_exact(&mut header).map_err(|e| format!("header read: {e}"))?;
+    file.read_exact(&mut header)
+        .map_err(|e| format!("header read: {e}"))?;
 
     let bed_x = read_f32_le(&header, 8);
     let bed_y = read_f32_le(&header, 12);
@@ -183,22 +228,30 @@ fn parse_plain(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<LayerInp
     let info = SlicedFileInfo {
         format: "CTB".into(),
         total_layers: layer_count,
-        layer_height_um: layer_height_mm * 1000.0,
         resolution_xy: (width_px, height_px),
-        pixel_size_um: (bed_x / width_px as f32 * 1000.0, bed_y / height_px as f32 * 1000.0),
+        pixel_size_um: (
+            bed_x / width_px as f32 * 1000.0,
+            bed_y / height_px as f32 * 1000.0,
+        ),
         bed_size_mm: (bed_x, bed_y),
-        normal_exposure_sec: exposure_sec,
-        bottom_exposure_sec,
-        bottom_layer_count: bottom_layers,
-        lift_speed_mm_min: 60.0, // default, not in basic header
+        recipe: ctb_recipe(
+            layer_height_mm * 1000.0,
+            bottom_layers,
+            exposure_sec,
+            bottom_exposure_sec,
+            60.0, // lift_speed_mm_min — not in basic header; documented default
+        )
+        .map_err(|e| format!("CTB recipe invalid: {e}"))?,
     };
 
     let mut layers = Vec::with_capacity(layer_count as usize);
     for i in 0..layer_count {
         let def_offset = layers_def_off as u64 + i as u64 * CTB_LAYER_DEF_SIZE as u64;
-        file.seek(SeekFrom::Start(def_offset)).map_err(|e| format!("layer def seek: {e}"))?;
+        file.seek(SeekFrom::Start(def_offset))
+            .map_err(|e| format!("layer def seek: {e}"))?;
         let mut layer_def = [0u8; CTB_LAYER_DEF_SIZE];
-        file.read_exact(&mut layer_def).map_err(|e| format!("layer def read: {e}"))?;
+        file.read_exact(&mut layer_def)
+            .map_err(|e| format!("layer def read: {e}"))?;
 
         let z_mm = read_f32_le(&layer_def, 0);
         let layer_exposure = read_f32_le(&layer_def, 4);
@@ -207,9 +260,11 @@ fn parse_plain(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<LayerInp
         let page_number = read_u32_le(&layer_def, 20);
 
         let abs_data = page_number as u64 * CTB_PAGE_SIZE + data_page_rel as u64;
-        file.seek(SeekFrom::Start(abs_data)).map_err(|e| format!("layer data seek: {e}"))?;
+        file.seek(SeekFrom::Start(abs_data))
+            .map_err(|e| format!("layer data seek: {e}"))?;
         let mut rle_bytes = vec![0u8; encoded_len as usize];
-        file.read_exact(&mut rle_bytes).map_err(|e| format!("layer data read: {e}"))?;
+        file.read_exact(&mut rle_bytes)
+            .map_err(|e| format!("layer data read: {e}"))?;
 
         ctb_layer_rle_xor(xor_key, i, &mut rle_bytes);
         let lit_pixels = rle_count_lit_pixels(&rle_bytes);
@@ -229,9 +284,11 @@ fn parse_plain(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<LayerInp
 }
 
 fn parse_encrypted(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<LayerInput>), String> {
-    file.seek(SeekFrom::Start(CTB_ENCRYPTED_SETTINGS_OFFSET)).map_err(|e| format!("seek: {e}"))?;
+    file.seek(SeekFrom::Start(CTB_ENCRYPTED_SETTINGS_OFFSET))
+        .map_err(|e| format!("seek: {e}"))?;
     let mut settings = vec![0u8; CTB_ENCRYPTED_SETTINGS_SIZE];
-    file.read_exact(&mut settings).map_err(|e| format!("settings read: {e}"))?;
+    file.read_exact(&mut settings)
+        .map_err(|e| format!("settings read: {e}"))?;
     aes_decrypt(&mut settings)?;
 
     let layer_pointers_off = read_u32_le(&settings, 8);
@@ -267,17 +324,21 @@ fn parse_encrypted(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<Laye
     let mut layers = Vec::with_capacity(layer_count as usize);
     for i in 0..layer_count {
         let ptr_offset = layer_pointers_off as u64 + i as u64 * 16;
-        file.seek(SeekFrom::Start(ptr_offset)).map_err(|e| format!("ptr seek: {e}"))?;
+        file.seek(SeekFrom::Start(ptr_offset))
+            .map_err(|e| format!("ptr seek: {e}"))?;
         let mut pointer = [0u8; 16];
-        file.read_exact(&mut pointer).map_err(|e| format!("ptr read: {e}"))?;
+        file.read_exact(&mut pointer)
+            .map_err(|e| format!("ptr read: {e}"))?;
 
         let def_page_rel = read_u32_le(&pointer, 0);
         let def_page = read_u32_le(&pointer, 4);
         let abs_def = def_page as u64 * CTB_PAGE_SIZE + def_page_rel as u64;
 
-        file.seek(SeekFrom::Start(abs_def)).map_err(|e| format!("layer def seek: {e}"))?;
+        file.seek(SeekFrom::Start(abs_def))
+            .map_err(|e| format!("layer def seek: {e}"))?;
         let mut layer_def = [0u8; CTB_ENCRYPTED_LAYER_DEF_SIZE];
-        file.read_exact(&mut layer_def).map_err(|e| format!("layer def read: {e}"))?;
+        file.read_exact(&mut layer_def)
+            .map_err(|e| format!("layer def read: {e}"))?;
 
         let z_mm = read_f32_le(&layer_def, 4);
         let layer_exposure = read_f32_le(&layer_def, 8);
@@ -286,9 +347,11 @@ fn parse_encrypted(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<Laye
         let encoded_len = read_u32_le(&layer_def, 24);
 
         let abs_data = data_page as u64 * CTB_PAGE_SIZE + data_page_rel as u64;
-        file.seek(SeekFrom::Start(abs_data)).map_err(|e| format!("layer data seek: {e}"))?;
+        file.seek(SeekFrom::Start(abs_data))
+            .map_err(|e| format!("layer data seek: {e}"))?;
         let mut rle_bytes = vec![0u8; encoded_len as usize];
-        file.read_exact(&mut rle_bytes).map_err(|e| format!("layer data read: {e}"))?;
+        file.read_exact(&mut rle_bytes)
+            .map_err(|e| format!("layer data read: {e}"))?;
 
         ctb_layer_rle_xor(xor_key, i, &mut rle_bytes);
         let lit_pixels = rle_count_lit_pixels(&rle_bytes);
@@ -320,19 +383,28 @@ fn parse_encrypted(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<Laye
     // Derive exposure from layer data
     let normal_exp = layers.last().map(|l| l.exposure_sec).unwrap_or(2.0);
     let bottom_exp = layers.first().map(|l| l.exposure_sec).unwrap_or(25.0);
-    let bottom_count = layers.iter().take_while(|l| l.exposure_sec > normal_exp * 1.5).count() as u32;
+    let bottom_count = layers
+        .iter()
+        .take_while(|l| l.exposure_sec > normal_exp * 1.5)
+        .count() as u32;
 
     let info = SlicedFileInfo {
         format: "CTB (encrypted)".into(),
         total_layers: layer_count,
-        layer_height_um: lh_um,
         resolution_xy: (width_px, height_px),
-        pixel_size_um: (bed_x / width_px as f32 * 1000.0, bed_y / height_px as f32 * 1000.0),
+        pixel_size_um: (
+            bed_x / width_px as f32 * 1000.0,
+            bed_y / height_px as f32 * 1000.0,
+        ),
         bed_size_mm: (bed_x, bed_y),
-        normal_exposure_sec: normal_exp,
-        bottom_exposure_sec: bottom_exp,
-        bottom_layer_count: bottom_count,
-        lift_speed_mm_min: 60.0,
+        recipe: ctb_recipe(
+            lh_um,
+            bottom_count,
+            normal_exp,
+            bottom_exp,
+            60.0, // lift_speed_mm_min — encrypted CTB does not expose; documented default
+        )
+        .map_err(|e| format!("CTB (encrypted) recipe invalid: {e}"))?,
     };
 
     Ok((info, layers))

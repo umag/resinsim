@@ -233,7 +233,10 @@ mod tests {
             .collect();
 
         let risks = SuctionDetector::detect_from_areas(&areas, None);
-        assert!(risks.is_empty(), "sphere should have no suction (gradual area change)");
+        assert!(
+            risks.is_empty(),
+            "sphere should have no suction (gradual area change)"
+        );
     }
 
     #[test]

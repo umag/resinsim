@@ -12,6 +12,7 @@ critical_energy_mj_cm2 = 5.5
 # Mechanical — Elegoo published spec
 tensile_strength_mpa = 38.0
 peel_adhesion_kpa = 9.5            # ceramic-filled: lower FEP adhesion than standard 13.0
+ref_lift_speed_mm_min = 60.0       # measurement speed for peel_adhesion_kpa (KB-112, ADR-0005 §3)
 
 # Shrinkage — ceramic-constrained
 linear_shrinkage_pct = 0.9
@@ -27,3 +28,19 @@ density_g_cm3 = 1.25
 # Thermal safety thresholds
 degradation_temp_c = 50.0
 min_safe_temp_c = 15.0
+
+# Recipe (ADR-0005 Axis 2b) — ceramic-filled resin needs thinner layers + longer cure.
+# Sources: Elegoo vendor recommendation for ceramic-filled Mars-class resins; KB-100
+# penetration depth (145 µm) supports thinner layers; higher viscosity (KB-141) slows peel.
+[recipe]
+layer_height_um = 40.0
+bottom_layer_count = 8
+transition_layers = 4
+normal_exposure_sec = 3.2
+bottom_exposure_sec = 35.0
+wait_before_cure_sec = 0.8
+wait_before_release_sec = 1.5
+wait_after_release_sec = 0.0
+lift_speed_mm_min = 50.0
+lift_cycle_sec = 8.5
+lift_distance_mm = 5.0

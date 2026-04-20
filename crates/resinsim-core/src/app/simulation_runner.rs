@@ -4,6 +4,7 @@ use crate::entities::{PrinterProfile, ResinProfile};
 use crate::io::{geometry, sliced::LayerInput, stl};
 use crate::services::build_plate::PlateAdhesionProfile;
 use crate::services::failure_predictor::{FailurePredictor, LayerOverrides, SupportConfig};
+use crate::services::pairing_validator;
 use crate::services::suction_detector::SuctionDetector;
 use crate::simulation::PrintSimulation;
 use crate::values::CrossSectionArea;
@@ -15,6 +16,14 @@ pub struct SimulationRunner;
 
 impl SimulationRunner {
     /// Run full simulation on an STL file.
+    ///
+    /// Ordering (ADR-0005 Consequences):
+    ///   1. `resin.validate()` + `printer.validate()`
+    ///   2. `pairing_validator::validate_pairing(printer, recipe)` — fail fast with ALL
+    ///      violations BEFORE any geometry is sliced.
+    ///   3. `slice_areas(..., recipe.layer_height_um)` — uses the recipe, not the
+    ///      printer (which no longer carries a layer_height).
+    ///   4. `run_from_areas(...)` with already-validated profiles.
     pub fn run_stl(
         stl_path: &std::path::Path,
         resin: &ResinProfile,
@@ -23,14 +32,22 @@ impl SimulationRunner {
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
     ) -> Result<PrintSimulation, String> {
+        resin.validate().map_err(|e| format!("resin: {e}"))?;
+        printer.validate().map_err(|e| format!("printer: {e}"))?;
+        pairing_validator::validate_pairing(printer, resin.recipe())
+            .map_err(|violations| format!("pairing: {}", violations.join("; ")))?;
+
         let triangles = stl::load_stl(stl_path)?;
         let bbox = stl::bounding_box(&triangles);
-        let areas = geometry::slice_areas(&triangles, &bbox, printer.layer_height_um);
+        let areas = geometry::slice_areas(&triangles, &bbox, resin.recipe().layer_height_um());
 
         Self::run_from_areas(&areas, resin, printer, supports, plate, ambient_c)
     }
 
     /// Run simulation from pre-computed per-layer areas.
+    ///
+    /// Also callable as the inner loop from `run_stl` (which runs pairing beforehand);
+    /// revalidation here is defence-in-depth per ADR-0005 §5.
     pub fn run_from_areas(
         areas: &[CrossSectionArea],
         resin: &ResinProfile,
@@ -41,6 +58,9 @@ impl SimulationRunner {
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
         printer.validate().map_err(|e| format!("printer: {e}"))?;
+        pairing_validator::validate_pairing(printer, resin.recipe())
+            .map_err(|violations| format!("pairing: {}", violations.join("; ")))?;
+        let recipe = resin.recipe();
 
         // Pre-pass: detect suction risks and raft layers
         let suction_map = Self::build_suction_map(areas);
@@ -56,8 +76,8 @@ impl SimulationRunner {
                 ..Default::default()
             };
             let (result, failures) = FailurePredictor::predict_layer(
-                i as u32, area, prev_area,
-                &overrides, resin, printer, supports, plate, ambient_c,
+                i as u32, area, prev_area, &overrides, resin, printer, recipe, supports, plate,
+                ambient_c,
             );
             sim.add_layer(result, failures);
             prev_area = area;
@@ -67,7 +87,9 @@ impl SimulationRunner {
     }
 
     /// Run simulation from parsed LayerInputs (from CTB or other sliced files).
-    /// Uses per-layer exposure and lift speed from the sliced file.
+    /// Uses per-layer exposure and lift speed from the sliced file; baseline recipe
+    /// values (layer_height_um, bottom_exposure_sec, bottom_layer_count) come from
+    /// `resin.recipe()`.
     pub fn run_from_layer_inputs(
         layers: &[LayerInput],
         resin: &ResinProfile,
@@ -78,11 +100,17 @@ impl SimulationRunner {
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
         printer.validate().map_err(|e| format!("printer: {e}"))?;
+        pairing_validator::validate_pairing(printer, resin.recipe())
+            .map_err(|violations| format!("pairing: {}", violations.join("; ")))?;
+        let recipe = resin.recipe();
 
         // Pre-pass: detect suction risks and raft layers
-        let areas: Vec<CrossSectionArea> = layers.iter()
-            .map(|li| CrossSectionArea::new(li.cross_section_area_mm2)
-                .map_err(|e| format!("layer {}: {e}", li.index)))
+        let areas: Vec<CrossSectionArea> = layers
+            .iter()
+            .map(|li| {
+                CrossSectionArea::new(li.cross_section_area_mm2)
+                    .map_err(|e| format!("layer {}: {e}", li.index))
+            })
             .collect::<Result<_, _>>()?;
         let suction_map = Self::build_suction_map(&areas);
         let raft_end = Self::detect_raft_end(&areas);
@@ -98,8 +126,8 @@ impl SimulationRunner {
                 is_raft: li.index < raft_end,
             };
             let (result, failures) = FailurePredictor::predict_layer(
-                li.index, area, prev_area,
-                &overrides, resin, printer, supports, plate, ambient_c,
+                li.index, area, prev_area, &overrides, resin, printer, recipe, supports, plate,
+                ambient_c,
             );
             sim.add_layer(result, failures);
             prev_area = area;
@@ -111,7 +139,10 @@ impl SimulationRunner {
     /// Run SuctionDetector heuristic pre-pass and build a layer→force map.
     fn build_suction_map(areas: &[CrossSectionArea]) -> HashMap<u32, f32> {
         let risks = SuctionDetector::detect_from_areas(areas, None);
-        risks.into_iter().map(|r| (r.layer, r.suction_force_n)).collect()
+        risks
+            .into_iter()
+            .map(|r| (r.layer, r.suction_force_n))
+            .collect()
     }
 
     /// Detect raft layers: initial layers with large constant area followed
@@ -195,8 +226,10 @@ mod tests {
         let layers = sim.layers();
         let first_force = layers[10].total_force_n;
         let last_force = layers[99].total_force_n;
-        assert!((first_force - last_force).abs() < 0.1,
-            "force should be ~constant: first={first_force}, last={last_force}");
+        assert!(
+            (first_force - last_force).abs() < 0.1,
+            "force should be ~constant: first={first_force}, last={last_force}"
+        );
     }
 
     #[test]
@@ -207,8 +240,11 @@ mod tests {
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 30 }, &default_plate(), 22.0,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let summary = sim.summary();
-        assert!(summary.max_force_layer > 80 && summary.max_force_layer < 120,
-            "max force should be near equator, got layer {}", summary.max_force_layer);
+        assert!(
+            summary.max_force_layer > 80 && summary.max_force_layer < 120,
+            "max force should be near equator, got layer {}",
+            summary.max_force_layer
+        );
     }
 
     #[test]
@@ -218,7 +254,11 @@ mod tests {
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
-        assert_eq!(sim.summary().critical_failures, 0, "small cube should have no failures");
+        assert_eq!(
+            sim.summary().critical_failures,
+            0,
+            "small cube should have no failures"
+        );
     }
 
     #[test]
@@ -231,10 +271,15 @@ mod tests {
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 5 }, &default_plate(), 22.0,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
-        let overload_count = sim.failures().iter()
+        let overload_count = sim
+            .failures()
+            .iter()
             .filter(|f| f.failure_type == crate::entities::FailureType::SupportOverload)
             .count();
-        assert_eq!(overload_count, 0, "interlayer bond should prevent support overload");
+        assert_eq!(
+            overload_count, 0,
+            "interlayer bond should prevent support overload"
+        );
     }
 
     #[test]
@@ -242,18 +287,28 @@ mod tests {
         // Remove both plate adhesion and supports → guaranteed failure
         let areas = cube_areas(50, 500.0);
         let no_plate = PlateAdhesionProfile {
-            plate_adhesion_kpa: 0.0, bottom_layer_count: 0, interlayer_bond_kpa: 0.0,
+            plate_adhesion_kpa: 0.0,
+            bottom_layer_count: 0,
+            interlayer_bond_kpa: 0.0,
         };
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.0, n_supports: 0 }, &no_plate, 22.0,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
-        assert!(sim.summary().critical_failures > 0, "no supports + no plate should fail");
+        assert!(
+            sim.summary().critical_failures > 0,
+            "no supports + no plate should fail"
+        );
     }
 
     /// Simulate a hollow cup: solid base transitions to thin ring walls.
     /// SuctionDetector should flag the transition layer.
-    fn hollow_cup_areas(n_layers: usize, base_layers: usize, base_area: f64, wall_area: f64) -> Vec<CrossSectionArea> {
+    fn hollow_cup_areas(
+        n_layers: usize,
+        base_layers: usize,
+        base_area: f64,
+        wall_area: f64,
+    ) -> Vec<CrossSectionArea> {
         (0..n_layers)
             .map(|i| {
                 if i < base_layers {
@@ -274,11 +329,16 @@ mod tests {
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 }, &default_plate(), 22.0,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
-        let suction_events: Vec<_> = sim.failures().iter()
+        let suction_events: Vec<_> = sim
+            .failures()
+            .iter()
             .filter(|f| f.failure_type == crate::entities::FailureType::SuctionCup)
             .collect();
-        assert!(!suction_events.is_empty(),
-            "hollow cup should trigger suction warning, got: {:?}", sim.failures());
+        assert!(
+            !suction_events.is_empty(),
+            "hollow cup should trigger suction warning, got: {:?}",
+            sim.failures()
+        );
         // Suction should be at transition layer (5)
         assert_eq!(suction_events[0].layer, 5);
     }
@@ -290,7 +350,9 @@ mod tests {
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
-        let suction_count = sim.failures().iter()
+        let suction_count = sim
+            .failures()
+            .iter()
             .filter(|f| f.failure_type == crate::entities::FailureType::SuctionCup)
             .count();
         assert_eq!(suction_count, 0, "solid cube should have no suction");
@@ -308,10 +370,15 @@ mod tests {
         // Layer 5 has suction, layer 6 has same wall area but no new suction trigger
         // Both have same peel from adhesion, but layer 5 should have suction force added
         let layer_5 = &layers[5];
-        assert!(layer_5.suction_force_n > 0.0,
-            "layer 5 should have suction force, got {}", layer_5.suction_force_n);
-        assert!(layer_5.total_force_n > layer_5.peel_force_n,
-            "total should exceed peel when suction present");
+        assert!(
+            layer_5.suction_force_n > 0.0,
+            "layer 5 should have suction force, got {}",
+            layer_5.suction_force_n
+        );
+        assert!(
+            layer_5.total_force_n > layer_5.peel_force_n,
+            "total should exceed peel when suction present"
+        );
     }
 
     #[test]
@@ -348,9 +415,78 @@ mod tests {
         printer.lcd_uniformity_variation = 2.0; // outside [0, 1]
         let areas = cube_areas(5, 100.0);
         let result = SimulationRunner::run_from_areas(
-            &areas, &ResinProfile::generic_standard(), &printer,
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 }, &default_plate(), 22.0,
+            &areas,
+            &ResinProfile::generic_standard(),
+            &printer,
+            &SupportConfig {
+                tip_radius_mm: 0.2,
+                n_supports: 10,
+            },
+            &default_plate(),
+            22.0,
         );
-        assert!(result.is_err(), "invalid profile should be rejected at entry point");
+        assert!(
+            result.is_err(),
+            "invalid profile should be rejected at entry point"
+        );
+    }
+
+    // --- ADR-0005: pairing runs before slicing. Locks the ordering invariant that
+    // a recipe outside the printer envelope fails fast at simulation entry, not
+    // after geometry has been sliced into layer areas. ---
+
+    #[test]
+    fn pairing_violation_returns_err_before_slice_areas() {
+        // Narrow printer envelope that excludes the resin's recipe layer height.
+        let mut printer = PrinterProfile::generic_msla_4k();
+        printer.layer_height_range_um = crate::values::FloatRange::new(100.0, 150.0)
+            .expect("test fixture: 100..150 µm range is valid");
+        let areas = cube_areas(5, 100.0);
+        // generic_standard recipe has layer_height_um = 50.0 → outside the narrowed range.
+        let err = SimulationRunner::run_from_areas(
+            &areas,
+            &ResinProfile::generic_standard(),
+            &printer,
+            &SupportConfig {
+                tip_radius_mm: 0.2,
+                n_supports: 10,
+            },
+            &default_plate(),
+            22.0,
+        )
+        .expect_err("pairing violation must fail simulation entry");
+        assert!(
+            err.starts_with("pairing:"),
+            "err must identify pairing stage: {err}"
+        );
+        assert!(
+            err.contains("layer_height_um"),
+            "err must name the offending recipe field: {err}"
+        );
+    }
+
+    #[test]
+    fn pairing_reports_all_violations_at_once() {
+        let mut printer = PrinterProfile::generic_msla_4k();
+        printer.layer_height_range_um = crate::values::FloatRange::new(100.0, 150.0)
+            .expect("test fixture: 100..150 µm range is valid");
+        printer.exposure_range_sec = crate::values::FloatRange::new(10.0, 60.0)
+            .expect("test fixture: 10..60 sec range is valid");
+        let areas = cube_areas(5, 100.0);
+        let err = SimulationRunner::run_from_areas(
+            &areas,
+            &ResinProfile::generic_standard(),
+            &printer,
+            &SupportConfig {
+                tip_radius_mm: 0.2,
+                n_supports: 10,
+            },
+            &default_plate(),
+            22.0,
+        )
+        .expect_err("multiple pairing violations must fail");
+        // Both layer_height AND exposure violate; violations are joined with "; ".
+        assert!(err.contains("layer_height_um"));
+        assert!(err.contains("normal_exposure_sec"));
     }
 }

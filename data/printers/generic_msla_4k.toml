@@ -1,4 +1,5 @@
 # Generic MSLA 4K Printer — conservative defaults from KB data
+# Hardware envelope only (ADR-0005). Recipe fields moved to ResinProfile.recipe.
 
 name = "Generic MSLA 4K"
 
@@ -6,17 +7,13 @@ name = "Generic MSLA 4K"
 led_power_mw_cm2 = 4.0
 pixel_pitch_um = 50.0
 
-# Motion
-lift_speed_mm_min = 60.0
-ref_lift_speed_mm_min = 60.0
-lift_distance_mm = 5.0
-lift_cycle_sec = 7.5
-
-# Exposure
-normal_exposure_sec = 2.5
-bottom_exposure_sec = 25.0
-bottom_layer_count = 6
-layer_height_um = 50.0
+# Hardware envelope (ADR-0005 Axis 1)
+# Ranges conservatively subsume the previous baked recipe (layer=50, exposure=2.5, lift=60)
+# which now lives in ResinProfile::generic_standard().recipe.
+layer_height_range_um = { min = 20.0, max = 100.0 }
+exposure_range_sec = { min = 1.0, max = 60.0 }
+lift_speed_range_mm_min = { min = 10.0, max = 200.0 }
+bottom_layer_count_max = 15
 
 # Z-axis — KB-131
 z_stiffness_n_per_mm = 460.0

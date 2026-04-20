@@ -63,9 +63,8 @@ pub fn resolve_data_dir(flag: Option<&Path>) -> Result<PathBuf, String> {
     }
 
     // All four miss — construct the hard-error message.
-    let mut msg = String::from(
-        "could not resolve profile data directory (ADR-0004). Candidates tried:\n",
-    );
+    let mut msg =
+        String::from("could not resolve profile data directory (ADR-0004). Candidates tried:\n");
     for (label, path) in &candidates {
         match path {
             Some(p) => msg.push_str(&format!("  - {label}: {} (does not exist)\n", p.display())),
@@ -86,13 +85,8 @@ pub fn resolve_data_dir(flag: Option<&Path>) -> Result<PathBuf, String> {
 /// and the sorted list of available profile names so typos surface immediately.
 pub fn load_printer(data_dir: &Path, name: &str) -> Result<PrinterProfile, String> {
     let repo = PrinterProfileRepository::new(&data_dir.join("printers"));
-    repo.load(name).map_err(|e| format_load_error(
-        data_dir,
-        "printer",
-        name,
-        &e,
-        repo.list().ok(),
-    ))
+    repo.load(name)
+        .map_err(|e| format_load_error(data_dir, "printer", name, &e, repo.list().ok()))
 }
 
 /// Load a resin profile TOML by name from `data_dir/resins/<name>.toml`.
@@ -100,13 +94,8 @@ pub fn load_printer(data_dir: &Path, name: &str) -> Result<PrinterProfile, Strin
 /// Same hard-error shape as `load_printer`.
 pub fn load_resin(data_dir: &Path, name: &str) -> Result<ResinProfile, String> {
     let repo = ResinProfileRepository::new(&data_dir.join("resins"));
-    repo.load(name).map_err(|e| format_load_error(
-        data_dir,
-        "resin",
-        name,
-        &e,
-        repo.list().ok(),
-    ))
+    repo.load(name)
+        .map_err(|e| format_load_error(data_dir, "resin", name, &e, repo.list().ok()))
 }
 
 fn format_load_error(
@@ -182,8 +171,8 @@ mod tests {
     fn load_printer_hard_errors_on_unknown_name() {
         let d = tmpdir();
         fs::create_dir_all(d.join("printers")).expect("mkdir printers");
-        let err = load_printer(&d, "no_such_printer")
-            .expect_err("unknown printer name must hard-error");
+        let err =
+            load_printer(&d, "no_such_printer").expect_err("unknown printer name must hard-error");
         assert!(err.contains("no_such_printer"), "err mentions name");
         assert!(err.contains("Available profiles"), "err lists available");
         fs::remove_dir_all(&d).ok();
@@ -193,20 +182,19 @@ mod tests {
     fn load_printer_loads_valid_toml() {
         let d = tmpdir();
         fs::create_dir_all(d.join("printers")).expect("mkdir");
+        // ADR-0005: PrinterProfile is hardware envelope only (ranges + scalars);
+        // recipe fields (layer_height_um, exposure_sec, lift_speed_mm_min, etc.) now
+        // live on ResinProfile.recipe, NOT PrinterProfile.
         fs::write(
             d.join("printers").join("test.toml"),
             r#"
 name = "Test Printer"
 led_power_mw_cm2 = 4.0
 pixel_pitch_um = 50.0
-lift_speed_mm_min = 60.0
-ref_lift_speed_mm_min = 60.0
-lift_distance_mm = 5.0
-lift_cycle_sec = 7.5
-normal_exposure_sec = 2.5
-bottom_exposure_sec = 25.0
-bottom_layer_count = 6
-layer_height_um = 50.0
+layer_height_range_um = { min = 20.0, max = 100.0 }
+exposure_range_sec = { min = 1.0, max = 60.0 }
+lift_speed_range_mm_min = { min = 10.0, max = 200.0 }
+bottom_layer_count_max = 15
 z_stiffness_n_per_mm = 460.0
 delta_t_steady_c = 10.0
 thermal_tau_sec = 1200.0

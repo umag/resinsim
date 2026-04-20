@@ -34,8 +34,8 @@ pub struct ForceStats {
 
 /// Load Athena II force data from a CSV file.
 pub fn load_force_csv(path: &std::path::Path) -> Result<Vec<ForceRecord>, String> {
-    let mut reader = csv::Reader::from_path(path)
-        .map_err(|e| format!("failed to open CSV: {e}"))?;
+    let mut reader =
+        csv::Reader::from_path(path).map_err(|e| format!("failed to open CSV: {e}"))?;
 
     let mut records = Vec::new();
     for result in reader.deserialize() {
@@ -77,7 +77,11 @@ pub fn force_stats(records: &[ForceRecord]) -> ForceStats {
         }
     }
 
-    let variance: f32 = records.iter().map(|r| (r.force_n - mean).powi(2)).sum::<f32>() / count as f32;
+    let variance: f32 = records
+        .iter()
+        .map(|r| (r.force_n - mean).powi(2))
+        .sum::<f32>()
+        / count as f32;
     let std_dev = variance.sqrt();
 
     ForceStats {
@@ -92,7 +96,10 @@ pub fn force_stats(records: &[ForceRecord]) -> ForceStats {
 
 /// Filter records to a layer range (inclusive).
 pub fn filter_layers(records: &[ForceRecord], from: u32, to: u32) -> Vec<&ForceRecord> {
-    records.iter().filter(|r| r.layer >= from && r.layer <= to).collect()
+    records
+        .iter()
+        .filter(|r| r.layer >= from && r.layer <= to)
+        .collect()
 }
 
 #[cfg(test)]

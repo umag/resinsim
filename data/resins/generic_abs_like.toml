@@ -9,6 +9,7 @@ critical_energy_mj_cm2 = 8.0
 # Mechanical — KB-140: Elegoo ABS-Like V2
 tensile_strength_mpa = 45.0
 peel_adhesion_kpa = 13.0
+ref_lift_speed_mm_min = 60.0       # measurement speed for peel_adhesion_kpa (KB-112, ADR-0005 §3)
 
 # Shrinkage — KB-142: Elegoo ABS-Like V2
 linear_shrinkage_pct = 2.4  # ~7.1% volumetric / 3
@@ -24,3 +25,19 @@ density_g_cm3 = 1.12
 # Thermal safety thresholds — KB-150
 degradation_temp_c = 50.0
 min_safe_temp_c = 15.0
+
+# Recipe (ADR-0005 Axis 2b) — ABS-like needs longer cure (higher Ec = 8.0), tougher
+# material typically benefits from heavier raft. Baseline values per Elegoo vendor
+# recommendations for ABS-Like V2; TODO: calibrate exposure on Athena II (E1).
+[recipe]
+layer_height_um = 50.0
+bottom_layer_count = 8
+transition_layers = 4
+normal_exposure_sec = 3.5
+bottom_exposure_sec = 35.0
+wait_before_cure_sec = 0.5
+wait_before_release_sec = 1.2
+wait_after_release_sec = 0.0
+lift_speed_mm_min = 55.0
+lift_cycle_sec = 8.0
+lift_distance_mm = 5.0
