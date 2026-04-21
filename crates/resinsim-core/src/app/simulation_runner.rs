@@ -148,25 +148,11 @@ impl SimulationRunner {
     /// Detect raft layers: initial layers with large constant area followed
     /// by a >50% area drop. Everything before the drop is raft.
     /// Returns the index of the first non-raft layer (0 if no raft detected).
+    ///
+    /// Thin delegate to `LayerPhase::detect_raft_end` (domain layer). Removed
+    /// in Phase B Step 7 in favour of `LayerPhase::classify_sequence` output.
     fn detect_raft_end(areas: &[CrossSectionArea]) -> u32 {
-        if areas.len() < 3 {
-            return 0;
-        }
-        let first_area = areas[0].value();
-        if first_area < 10.0 {
-            return 0; // no significant raft
-        }
-        for (i, a) in areas.iter().enumerate().skip(1) {
-            let ratio = a.value() / first_area;
-            if ratio < 0.5 {
-                return i as u32;
-            }
-            // Also break if area starts growing significantly (model started)
-            if a.value() > first_area * 1.2 {
-                return 0; // not a raft pattern
-            }
-        }
-        0 // constant area throughout — not a raft
+        crate::values::LayerPhase::detect_raft_end(areas)
     }
 
     /// Auto-detect format from file extension and run simulation.
