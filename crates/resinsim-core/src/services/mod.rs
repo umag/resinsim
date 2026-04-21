@@ -1,4 +1,5 @@
 pub mod build_plate;
+pub mod cavity_detector;
 pub mod cure_calculator;
 pub mod failure_predictor;
 pub mod pairing_validator;
@@ -9,6 +10,7 @@ pub mod uniformity_calculator;
 pub mod z_axis_compensator;
 
 pub use build_plate::BuildPlate;
+pub use cavity_detector::{CavityDetector, CavityError, CavityEvent};
 pub use cure_calculator::CureCalculator;
 pub use failure_predictor::FailurePredictor;
 pub use peel_force_calculator::PeelForceCalculator;
