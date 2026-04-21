@@ -1,8 +1,8 @@
 //! End-to-end integration tests for `SuctionDetector` → `CavityDetector` via
-//! `SimulationRunner`. Reproduces the triage empirical evidence for the
-//! suction-detector-raft-false-positive lifecycle.
+//! `SimulationRunner`. Abstract topology-regression tests; no dependency on
+//! specific external fixtures.
 //!
-//! Per plan v6 Step 1; bodies filled in at Phase B (Step 7).
+//! Per plan v6 Step 1.
 
 use resinsim_core::app::SimulationRunner;
 use resinsim_core::entities::{FailureType, PrinterProfile, ResinProfile};
@@ -19,13 +19,15 @@ fn void_mask(w: u32, h: u32, voxel: f32) -> LayerMask {
     LayerMask::new(w, h, voxel).expect("valid all-void mask")
 }
 
-/// The lilith-torso repro topology expressed as a self-contained LayerMask
-/// stack (CI-default — no external fixture needed). Pattern:
-/// - Layer 0-22: fully-solid raft plate (25×25 at 1mm voxel = 625 mm²).
-/// - Layer 23-30: 4 discrete 3×3 support columns with inter-column gaps
-///   touching the bbox lateral edges → should NOT be flagged as suction.
-/// - Layer 31-40: tapering model body above supports (solid block).
-fn lilith_torso_synthetic_layers(
+/// Raft-plus-fluid-permeable-supports topology: a fully-solid raft plate
+/// followed by discrete support columns arranged so the inter-column gaps
+/// reach the lateral bbox edges, then a solid model body above. This is the
+/// canonical false-positive pattern that the area-drop heuristic mis-flagged
+/// as a sealed cavity.
+///
+/// Expected: zero `SuctionCup` critical failures. The inter-column void is
+/// exterior-connected (drains to the vat laterally) and must never emit.
+fn raft_plus_columns_layer_inputs(
     exposure_sec: f32,
     layer_height_um: f32,
     lift_speed_mm_min: f32,
@@ -33,7 +35,6 @@ fn lilith_torso_synthetic_layers(
     let bed = 25u32;
     let voxel = 1.0_f32;
 
-    // Four support columns at (4..7), (4..7) / (4..7), (17..20) / (17..20), (4..7) / (17..20), (17..20)
     let mut column_mask = void_mask(bed, bed, voxel);
     for (cx, cy) in [(4, 4), (4, 17), (17, 4), (17, 17)] {
         for dx in 0..3 {
@@ -52,7 +53,6 @@ fn lilith_torso_synthetic_layers(
     let mut idx: u32 = 0;
     let layer_height_mm = layer_height_um / 1000.0;
     let mut z_mm = 0.0_f32;
-    // Raft
     for _ in 0..23 {
         layers.push(
             LayerInput::new(idx, raft_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
@@ -62,7 +62,6 @@ fn lilith_torso_synthetic_layers(
         idx += 1;
         z_mm += layer_height_mm;
     }
-    // Columns
     for _ in 0..8 {
         layers.push(
             LayerInput::new(idx, column_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
@@ -72,7 +71,6 @@ fn lilith_torso_synthetic_layers(
         idx += 1;
         z_mm += layer_height_mm;
     }
-    // Model body
     for _ in 0..10 {
         layers.push(
             LayerInput::new(idx, model_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
@@ -86,8 +84,8 @@ fn lilith_torso_synthetic_layers(
 }
 
 #[test]
-fn lilith_torso_synthetic_no_suction_critical() {
-    let layers = lilith_torso_synthetic_layers(2.5, 50.0, 60.0);
+fn raft_plus_fluid_permeable_supports_emits_no_suction_critical() {
+    let layers = raft_plus_columns_layer_inputs(2.5, 50.0, 60.0);
     let sim = SimulationRunner::run_from_layer_inputs(
         &layers,
         &ResinProfile::generic_standard(),
@@ -99,7 +97,7 @@ fn lilith_torso_synthetic_no_suction_critical() {
         &PlateAdhesionProfile::default_textured(),
         22.0,
     )
-    .expect("valid profiles + bounded inputs satisfy run_from_layer_inputs preconditions");
+    .expect("validated profiles satisfy run_from_layer_inputs preconditions");
 
     let suction_criticals: Vec<_> = sim
         .failures()
@@ -112,26 +110,24 @@ fn lilith_torso_synthetic_no_suction_critical() {
 
     assert!(
         suction_criticals.is_empty(),
-        "lilith-torso synthetic topology must emit zero SuctionCup criticals — \
-         the fix's load-bearing empirical claim. Got: {suction_criticals:#?}"
+        "raft + fluid-permeable supports must emit zero SuctionCup criticals — \
+         the false-positive reproduction the fix is targeting. Got: {suction_criticals:#?}"
     );
 }
 
-/// Optional end-to-end test against the real lilith-torso.ctb fixture, gated
-/// behind the `RESINSIM_REAL_CTB_FIXTURE` env var. Not part of default CI;
-/// documents how to reproduce the original triage evidence against the real
-/// RLE-decoded mask path.
+/// Optional end-to-end regression against an external CTB fixture, gated
+/// behind the `RESINSIM_EXTERNAL_CTB_FIXTURE` env var. Not part of default
+/// CI; documents how to verify the fix against a concrete real-world print.
 ///
-/// Example:
 /// ```sh
-/// RESINSIM_REAL_CTB_FIXTURE=/Users/mag1/Documents/3d/lilith-torso.ctb \
-///   cargo nextest run --run-ignored=all lilith_torso_real
+/// RESINSIM_EXTERNAL_CTB_FIXTURE=/path/to/any.ctb \
+///   cargo nextest run --run-ignored=all external_ctb
 /// ```
 #[test]
-#[ignore = "optional — requires RESINSIM_REAL_CTB_FIXTURE env var + real CTB fixture"]
-fn lilith_torso_real_ctb_no_suction_critical() {
-    let fixture_path = std::env::var("RESINSIM_REAL_CTB_FIXTURE")
-        .expect("RESINSIM_REAL_CTB_FIXTURE env var required for this test");
+#[ignore = "optional — requires RESINSIM_EXTERNAL_CTB_FIXTURE env var"]
+fn external_ctb_emits_no_suction_critical() {
+    let fixture_path = std::env::var("RESINSIM_EXTERNAL_CTB_FIXTURE")
+        .expect("RESINSIM_EXTERNAL_CTB_FIXTURE env var required for this test");
     let (_info, layers) = resinsim_core::io::ctb::parse_ctb(std::path::Path::new(&fixture_path))
         .expect("fixture parses");
 
@@ -159,7 +155,7 @@ fn lilith_torso_real_ctb_no_suction_critical() {
 
     assert!(
         suction_criticals.is_empty(),
-        "real lilith-torso.ctb must emit zero SuctionCup criticals — reproduces \
-         the triage fix. Got: {suction_criticals:#?}"
+        "external CTB must emit zero SuctionCup criticals for a successful real-world print. \
+         Got: {suction_criticals:#?}"
     );
 }

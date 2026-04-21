@@ -374,11 +374,14 @@ fn build_swiss_cheese(
 }
 
 proptest! {
+    // Small-scale proptest — fast inner loop for rapid iteration + shrinking.
+    #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
     /// Randomly drop up to 4 disjoint 3×3 sealed cavities inside a 12×12×10
     /// solid cube. For any subset that survives the disjointness/bounds
     /// filter, the detector must find exactly that many events.
     #[test]
-    fn proptest_swiss_cheese_cube(
+    fn proptest_swiss_cheese_small_cube(
         raw in prop::collection::vec(
             (1u32..9, 1u32..9, 1u32..8, 1u32..4),  // (x0, y0, z0, depth)
             0..4usize,
@@ -410,10 +413,134 @@ proptest! {
             events
         );
 
-        // Further: each event's sealed_area must equal 9.0 mm² (3×3 footprint
-        // × 1mm² voxel) since every cavity has the same cross-section.
         for e in &events {
             prop_assert!((e.sealed_area_mm2 - 9.0).abs() < 1e-6);
         }
     }
+}
+
+proptest! {
+    // Large-scale proptest — exercises the detector at build-plate
+    // dimensions (Elegoo Mars 5 Ultra: 218.88×122.88mm). At 1mm voxel:
+    // 219×123 cells per layer × up to 120 layers ≈ 3.2M voxels. Capped at
+    // 32 cases to keep total wall-clock under ~30s on developer hardware.
+    #![proptest_config(ProptestConfig {
+        cases: 32,
+        max_shrink_iters: 64,
+        ..ProptestConfig::default()
+    })]
+
+    /// Randomly drop up to 10 disjoint sealed cavities inside a cube sized
+    /// to Mars 5 Ultra's build volume at 1mm voxel resolution. Cavities are
+    /// 5×5 footprints with 2-8 layer depth. Exercises the detector's
+    /// scaling properties and the union-find correctness under many
+    /// simultaneous pockets.
+    #[test]
+    fn proptest_swiss_cheese_buildplate_scale(
+        raw in prop::collection::vec(
+            (1u32..215, 1u32..119, 1u32..115, 2u32..9),  // (x0, y0, z0, depth)
+            0..10usize,
+        )
+    ) {
+        let bed_w = 219u32;  // Mars 5 Ultra ≈ 218.88mm
+        let bed_h = 123u32;  // Mars 5 Ultra ≈ 122.88mm
+        let depth = 120u32;  // 60mm tall at 0.5mm layer height
+        let voxel = 1.0_f32;
+
+        let proposed: Vec<CavitySpec> = raw
+            .iter()
+            .map(|&(x0, y0, z0, d)| CavitySpec {
+                x0,
+                y0,
+                z0,
+                depth: d,
+            })
+            .collect();
+        let accepted = disjoint_cavity_specs_of_size(bed_w, bed_h, depth, &proposed, 5);
+
+        let stack = build_swiss_cheese_of_size(bed_w, bed_h, depth, voxel, &accepted, 5);
+        let events = CavityDetector::detect(&stack).expect("valid build-plate stack");
+
+        prop_assert_eq!(
+            events.len(),
+            accepted.len(),
+            "expected {} events on build-plate-scale cube, got {:?}",
+            accepted.len(),
+            events
+        );
+
+        // Each 5×5 cavity at 1mm voxel → 25 mm² sealed area.
+        for e in &events {
+            prop_assert!(
+                (e.sealed_area_mm2 - 25.0).abs() < 1e-6,
+                "sealed area {} mm² should be 25 mm²",
+                e.sealed_area_mm2
+            );
+        }
+    }
+}
+
+/// Generalised version of `disjoint_cavity_specs` with configurable cavity
+/// footprint side (in cells). Used by the large-scale proptest.
+fn disjoint_cavity_specs_of_size(
+    bed_w: u32,
+    bed_h: u32,
+    stack_depth: u32,
+    proposed: &[CavitySpec],
+    footprint: u32,
+) -> Vec<CavitySpec> {
+    let mut accepted: Vec<CavitySpec> = Vec::new();
+    for c in proposed {
+        if c.x0 == 0 || c.x0 + footprint >= bed_w {
+            continue;
+        }
+        if c.y0 == 0 || c.y0 + footprint >= bed_h {
+            continue;
+        }
+        if c.z0 == 0 || c.z0 + c.depth >= stack_depth {
+            continue;
+        }
+        let overlaps = accepted.iter().any(|a| {
+            let z_adjacent_or_overlap =
+                c.z0 < a.z0 + a.depth + 1 && a.z0 < c.z0 + c.depth + 1;
+            if !z_adjacent_or_overlap {
+                return false;
+            }
+            let x_clear = c.x0 + footprint + 1 <= a.x0 || a.x0 + footprint + 1 <= c.x0;
+            let y_clear = c.y0 + footprint + 1 <= a.y0 || a.y0 + footprint + 1 <= c.y0;
+            !(x_clear || y_clear)
+        });
+        if overlaps {
+            continue;
+        }
+        accepted.push(c.clone());
+    }
+    accepted
+}
+
+/// Generalised version of `build_swiss_cheese` with configurable cavity
+/// footprint side.
+fn build_swiss_cheese_of_size(
+    bed_w: u32,
+    bed_h: u32,
+    depth: u32,
+    voxel: f32,
+    specs: &[CavitySpec],
+    footprint: u32,
+) -> Vec<LayerMask> {
+    let mut stack: Vec<LayerMask> = (0..depth)
+        .map(|_| solid_mask(bed_w, bed_h, voxel))
+        .collect();
+    for spec in specs {
+        for dz in 0..spec.depth {
+            let layer_idx = (spec.z0 + dz) as usize;
+            let m = &mut stack[layer_idx];
+            for dx in 0..footprint {
+                for dy in 0..footprint {
+                    let _ = m.clear(spec.x0 + dx, spec.y0 + dy);
+                }
+            }
+        }
+    }
+    stack
 }
