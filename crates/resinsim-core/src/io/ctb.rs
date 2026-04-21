@@ -7,6 +7,7 @@ use std::path::Path;
 
 use crate::entities::Recipe;
 use crate::io::sliced::{LayerInput, SlicedFileInfo};
+use crate::values::{DEFAULT_VOXEL_SIZE_MM, LayerMask, MaskError};
 
 /// Build a Recipe from CTB-parsed fields. Fields not present in CTB format
 /// (transition_layers, wait_*, lift_cycle_sec, lift_distance_mm) take documented
@@ -129,6 +130,214 @@ fn ctb_layer_rle_xor(seed: u32, layer_index: u32, bytes: &mut [u8]) {
         for (i, b) in remainder.iter_mut().enumerate() {
             *b ^= kb[i];
         }
+    }
+}
+
+/// Decode an RLE run-length field starting at `data[*cursor]`. Advances
+/// `*cursor` past the consumed bytes. Returns None on truncated input.
+///
+/// Lifted from `rle_count_lit_pixels` and `rle_to_mask` — shared between
+/// both decoders.
+fn decode_run_len(data: &[u8], cursor: &mut usize, has_len: bool) -> Option<u64> {
+    if !has_len {
+        return Some(1);
+    }
+    if *cursor >= data.len() {
+        return None;
+    }
+    let b0 = data[*cursor];
+    *cursor += 1;
+    if b0 & 0x80 == 0 {
+        Some(b0 as u64)
+    } else if b0 & 0xc0 == 0x80 {
+        if *cursor >= data.len() {
+            return None;
+        }
+        let b1 = data[*cursor];
+        *cursor += 1;
+        Some(((b0 as u64 & 0x7f) << 8) | b1 as u64)
+    } else if b0 & 0xe0 == 0xc0 {
+        if *cursor + 1 > data.len() {
+            return None;
+        }
+        let b1 = data[*cursor];
+        *cursor += 1;
+        let b2 = data[*cursor];
+        *cursor += 1;
+        Some(((b0 as u64 & 0x3f) << 16) | ((b1 as u64) << 8) | b2 as u64)
+    } else {
+        if *cursor + 2 > data.len() {
+            return None;
+        }
+        let b1 = data[*cursor];
+        *cursor += 1;
+        let b2 = data[*cursor];
+        *cursor += 1;
+        let b3 = data[*cursor];
+        *cursor += 1;
+        Some(((b0 as u64 & 0x1f) << 24) | ((b1 as u64) << 16) | ((b2 as u64) << 8) | b3 as u64)
+    }
+}
+
+/// Decode a CTB RLE layer into a downsampled LayerMask at `voxel_size_mm`
+/// physical resolution.
+///
+/// Algorithm (Step 5 of suction-detector-raft-false-positive):
+/// - For each lit run in the RLE stream, determine which native pixel rows
+///   and columns it covers.
+/// - For each voxel cell intersecting the run, count the number of lit
+///   native pixels that fall inside its world-space footprint. Accumulate
+///   per-voxel lit-pixel counts in `lit_counts`.
+/// - After decoding, a voxel is marked solid iff `lit_counts[v] >=
+///   ceil(native_pixels_per_voxel / 2)` — the majority rule.
+///
+/// Memory trade-off (accepted 2026-04-21): one native-resolution temporary
+/// lit-count vector per layer. For a 4K MSLA at 0.5mm voxels on a 153×78mm
+/// bed: voxel grid ≈ 306×156 = 48K cells × 4 bytes = 192 KB per layer.
+/// The full `LayerMask` output is ~6 KB per layer (bit-packed).
+///
+/// Returns `Err(MaskError)` on malformed dimensions / voxel size.
+fn rle_to_mask(
+    rle_bytes: &[u8],
+    native_width_px: u32,
+    native_height_px: u32,
+    bed_x_mm: f32,
+    bed_y_mm: f32,
+    voxel_size_mm: f32,
+) -> Result<LayerMask, MaskError> {
+    if native_width_px == 0 || native_height_px == 0 {
+        return Err(MaskError::InvalidDimensions {
+            width: native_width_px,
+            height: native_height_px,
+        });
+    }
+    if !voxel_size_mm.is_finite() || voxel_size_mm <= 0.0 {
+        return Err(MaskError::InvalidVoxelSize(voxel_size_mm));
+    }
+    if !bed_x_mm.is_finite() || bed_x_mm <= 0.0 || !bed_y_mm.is_finite() || bed_y_mm <= 0.0 {
+        return Err(MaskError::InvalidDimensions {
+            width: bed_x_mm as u32,
+            height: bed_y_mm as u32,
+        });
+    }
+
+    let voxel_width = ((bed_x_mm / voxel_size_mm).ceil() as u32).max(1);
+    let voxel_height = ((bed_y_mm / voxel_size_mm).ceil() as u32).max(1);
+    let mut lit_counts = vec![0u32; (voxel_width as usize) * (voxel_height as usize)];
+
+    let px_w_mm = bed_x_mm / native_width_px as f32;
+    let px_h_mm = bed_y_mm / native_height_px as f32;
+    let native_per_voxel_x = voxel_size_mm / px_w_mm;
+    let native_per_voxel_y = voxel_size_mm / px_h_mm;
+    let native_per_voxel = (native_per_voxel_x * native_per_voxel_y).round().max(1.0) as u32;
+    // Majority threshold: at least half the native pixels in the voxel must be lit.
+    let threshold = native_per_voxel.div_ceil(2);
+
+    let total_pixels = (native_width_px as u64) * (native_height_px as u64);
+    let mut pixel_idx: u64 = 0;
+    let mut i = 0;
+    while i < rle_bytes.len() && pixel_idx < total_pixels {
+        let code = rle_bytes[i];
+        i += 1;
+        let pixel = (code & 0x7f) << 1;
+        let has_len = (code & 0x80) != 0;
+        let run_len = match decode_run_len(rle_bytes, &mut i, has_len) {
+            Some(n) => n,
+            None => break,
+        };
+
+        if pixel > 0 && run_len > 0 {
+            accumulate_lit_run(
+                pixel_idx,
+                run_len,
+                native_width_px,
+                native_height_px,
+                px_w_mm,
+                px_h_mm,
+                voxel_width,
+                voxel_height,
+                voxel_size_mm,
+                &mut lit_counts,
+            );
+        }
+        pixel_idx += run_len;
+    }
+
+    let mut mask = LayerMask::new(voxel_width, voxel_height, voxel_size_mm)?;
+    for vy in 0..voxel_height {
+        for vx in 0..voxel_width {
+            let c = lit_counts[(vy as usize) * voxel_width as usize + vx as usize];
+            if c >= threshold {
+                mask.set(vx, vy)?;
+            }
+        }
+    }
+    Ok(mask)
+}
+
+/// Accumulate lit-pixel counts from a single RLE lit run into `lit_counts`.
+/// Batches native pixels per voxel (not per-pixel iteration) to keep decoding
+/// tractable on dense layers.
+#[allow(clippy::too_many_arguments)]
+fn accumulate_lit_run(
+    pixel_idx: u64,
+    run_len: u64,
+    native_width_px: u32,
+    native_height_px: u32,
+    px_w_mm: f32,
+    px_h_mm: f32,
+    voxel_width: u32,
+    voxel_height: u32,
+    voxel_size_mm: f32,
+    lit_counts: &mut [u32],
+) {
+    let nw = native_width_px as u64;
+    let nh = native_height_px as u64;
+    let total = nw * nh;
+    let run_end = (pixel_idx + run_len).min(total);
+    let mut p = pixel_idx;
+
+    while p < run_end {
+        let row = p / nw;
+        if row >= nh {
+            break;
+        }
+        let col_start_in_row = p % nw;
+        // End of this row's portion of the run (exclusive)
+        let row_boundary = (row + 1) * nw;
+        let slice_end = run_end.min(row_boundary);
+        let col_end_in_row_excl = col_start_in_row + (slice_end - p);
+
+        // Map row → voxel row
+        let world_y = row as f32 * px_h_mm;
+        let vy_f = world_y / voxel_size_mm;
+        let vy = (vy_f as i64).clamp(0, voxel_height as i64 - 1) as u32;
+
+        // Map col range → voxel col range
+        let world_x_start = col_start_in_row as f32 * px_w_mm;
+        let world_x_end_excl = col_end_in_row_excl as f32 * px_w_mm;
+        let vx_start = ((world_x_start / voxel_size_mm) as i64)
+            .clamp(0, voxel_width as i64 - 1) as u32;
+        let vx_end = (((world_x_end_excl - f32::EPSILON) / voxel_size_mm) as i64)
+            .clamp(0, voxel_width as i64 - 1) as u32;
+
+        for vx in vx_start..=vx_end {
+            // Voxel's native-pixel column range [px_lo, px_hi)
+            let voxel_x_left = vx as f32 * voxel_size_mm;
+            let voxel_x_right = (vx + 1) as f32 * voxel_size_mm;
+            let px_lo = (voxel_x_left / px_w_mm).ceil() as u64;
+            let px_hi = (voxel_x_right / px_w_mm).ceil() as u64;
+            // Overlap with the run's portion in this row
+            let lo = px_lo.max(col_start_in_row);
+            let hi = px_hi.min(col_end_in_row_excl);
+            if hi > lo {
+                let add = (hi - lo) as u32;
+                let idx = (vy as usize) * voxel_width as usize + vx as usize;
+                lit_counts[idx] = lit_counts[idx].saturating_add(add);
+            }
+        }
+
+        p = slice_end;
     }
 }
 
@@ -269,6 +478,15 @@ fn parse_plain(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<LayerInp
         ctb_layer_rle_xor(xor_key, i, &mut rle_bytes);
         let lit_pixels = rle_count_lit_pixels(&rle_bytes);
         let area_mm2 = lit_pixels as f64 * pixel_area_mm2;
+        let mask = rle_to_mask(
+            &rle_bytes,
+            width_px,
+            height_px,
+            bed_x,
+            bed_y,
+            DEFAULT_VOXEL_SIZE_MM,
+        )
+        .ok();
 
         layers.push(LayerInput {
             index: i,
@@ -277,6 +495,7 @@ fn parse_plain(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<LayerInp
             lift_speed_mm_min: 60.0,
             layer_height_um: layer_height_mm * 1000.0,
             z_mm,
+            mask,
         });
     }
 
@@ -356,6 +575,15 @@ fn parse_encrypted(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<Laye
         ctb_layer_rle_xor(xor_key, i, &mut rle_bytes);
         let lit_pixels = rle_count_lit_pixels(&rle_bytes);
         let area_mm2 = lit_pixels as f64 * pixel_area_mm2;
+        let mask = rle_to_mask(
+            &rle_bytes,
+            width_px,
+            height_px,
+            bed_x,
+            bed_y,
+            DEFAULT_VOXEL_SIZE_MM,
+        )
+        .ok();
 
         layers.push(LayerInput {
             index: i,
@@ -364,6 +592,7 @@ fn parse_encrypted(file: &mut std::fs::File) -> Result<(SlicedFileInfo, Vec<Laye
             lift_speed_mm_min: 60.0,
             layer_height_um: 0.0, // filled in below
             z_mm,
+            mask,
         });
     }
 
@@ -461,5 +690,110 @@ mod tests {
         let original = data.clone();
         ctb_layer_rle_xor(0, 0, &mut data);
         assert_eq!(data, original);
+    }
+
+    // --- rle_to_mask tests (Step 5 of suction-detector-raft-false-positive) ---
+
+    #[test]
+    fn rle_to_mask_empty_rle_all_void() {
+        // 4×4 native, 2mm bed at 0.5mm voxel → 4×4 voxels.
+        let mask = rle_to_mask(&[], 4, 4, 2.0, 2.0, 0.5)
+            .expect("valid inputs yield a mask");
+        assert_eq!(mask.solid_cell_count(), 0);
+    }
+
+    #[test]
+    fn rle_to_mask_fully_solid_layer() {
+        // 4×4 native, pixel=128, has_len=true, len=16 (all 16 pixels lit).
+        let data = [0xC0, 0x10];
+        // 4×4 native at 1mm/pixel = 4mm×4mm bed; voxel_size=1mm → 4×4 voxels
+        // native_per_voxel = 1×1 = 1. threshold = 1. Every voxel has 1 lit
+        // pixel → all solid.
+        let mask = rle_to_mask(&data, 4, 4, 4.0, 4.0, 1.0)
+            .expect("valid 4×4 native, 4mm bed, 1mm voxel yields mask");
+        assert_eq!(mask.solid_cell_count(), 16);
+    }
+
+    #[test]
+    fn rle_to_mask_downsamples_majority_rule() {
+        // 4×4 native, left half lit (8 pixels), right half dark (8 pixels).
+        // At 2×2 voxels (voxel_size=2mm, bed=4mm, native=4×4), each voxel
+        // covers a 2×2 block of native pixels. Left voxels have 4 lit each,
+        // right voxels have 0 lit. Threshold = ceil(4/2) = 2.
+        // Expected: left column solid, right column void.
+        //
+        // Row-major layout: row0=[1,1,0,0], row1=[1,1,0,0], row2=[1,1,0,0], row3=[1,1,0,0]
+        // Encoded as 4 rows of [2 lit, 2 dark]:
+        let data = [
+            0xC0, 0x02, 0x80, 0x02, // row 0: 2 lit, 2 dark
+            0xC0, 0x02, 0x80, 0x02, // row 1
+            0xC0, 0x02, 0x80, 0x02, // row 2
+            0xC0, 0x02, 0x80, 0x02, // row 3
+        ];
+        let mask = rle_to_mask(&data, 4, 4, 4.0, 4.0, 2.0)
+            .expect("valid inputs yield a mask");
+        assert_eq!(mask.width_cells(), 2);
+        assert_eq!(mask.height_cells(), 2);
+        assert!(mask.is_solid(0, 0), "left column bottom");
+        assert!(mask.is_solid(0, 1), "left column top");
+        assert!(!mask.is_solid(1, 0), "right column bottom void");
+        assert!(!mask.is_solid(1, 1), "right column top void");
+    }
+
+    #[test]
+    fn rle_to_mask_sparse_below_threshold_stays_void() {
+        // 4×4 native, 1 lit pixel in a 2×2 voxel needing threshold=2 → void.
+        // native_per_voxel = 4; threshold = ceil(4/2) = 2. A single lit pixel
+        // doesn't reach majority.
+        //
+        // Row 0: 1 lit + 3 dark; rows 1-3 fully dark (16-4 = 12 dark)
+        let data = [
+            0x40, // 1 lit pixel (no length prefix)
+            0x80, 0x0F, // 15 dark
+        ];
+        let mask = rle_to_mask(&data, 4, 4, 4.0, 4.0, 2.0)
+            .expect("valid inputs yield a mask");
+        assert_eq!(mask.solid_cell_count(), 0);
+    }
+
+    #[test]
+    fn rle_to_mask_rejects_zero_native_width() {
+        let err = rle_to_mask(&[], 0, 4, 4.0, 4.0, 1.0);
+        assert!(matches!(err, Err(MaskError::InvalidDimensions { .. })));
+    }
+
+    #[test]
+    fn rle_to_mask_rejects_non_finite_voxel_size() {
+        assert!(matches!(
+            rle_to_mask(&[], 4, 4, 4.0, 4.0, 0.0),
+            Err(MaskError::InvalidVoxelSize(_))
+        ));
+        assert!(matches!(
+            rle_to_mask(&[], 4, 4, 4.0, 4.0, f32::NAN),
+            Err(MaskError::InvalidVoxelSize(_))
+        ));
+    }
+
+    #[test]
+    fn decode_run_len_single_byte() {
+        let data = [0x0A];
+        let mut cursor = 0;
+        assert_eq!(decode_run_len(&data, &mut cursor, true), Some(10));
+        assert_eq!(cursor, 1);
+    }
+
+    #[test]
+    fn decode_run_len_no_len_returns_one() {
+        let data = [];
+        let mut cursor = 0;
+        assert_eq!(decode_run_len(&data, &mut cursor, false), Some(1));
+        assert_eq!(cursor, 0);
+    }
+
+    #[test]
+    fn decode_run_len_truncated_returns_none() {
+        let data = [];
+        let mut cursor = 0;
+        assert_eq!(decode_run_len(&data, &mut cursor, true), None);
     }
 }

@@ -3,6 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::entities::Recipe;
+use crate::values::LayerMask;
 
 /// Per-layer data extracted from a sliced file (CTB, SL1, GOO).
 /// Format-independent — the simulation consumes this regardless of source.
@@ -11,6 +12,19 @@ use crate::entities::Recipe;
 /// legitimately differ from the Recipe default (e.g. transition layers with their own
 /// exposure schedule). Collapsing them under Recipe would misrepresent per-layer
 /// override semantics. Only `SlicedFileInfo` header gains a nested Recipe.
+///
+/// # Mask field (Step 5 of suction-detector-raft-false-positive)
+///
+/// `mask: Option<LayerMask>` is populated by mask-producing parsers (e.g. the
+/// extended CTB parser). Area-only parsers or test fixtures may leave it None;
+/// downstream consumers (`SimulationRunner::run_from_areas` adapter) synthesise
+/// a trivial fully-solid mask when None is observed. Phase B (Step 7)
+/// migrates `Option<LayerMask>` → `LayerMask` (required) once all producers
+/// emit masks.
+///
+/// The mask is `#[serde(skip)]` — it is large binary data, not meaningful for
+/// TOML / JSON persistence. Callers that serialise `LayerInput` (e.g. CLI
+/// `--json` output) see the area + recipe fields only.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayerInput {
     pub index: u32,
@@ -19,6 +33,8 @@ pub struct LayerInput {
     pub lift_speed_mm_min: f32,
     pub layer_height_um: f32,
     pub z_mm: f32,
+    #[serde(skip)]
+    pub mask: Option<LayerMask>,
 }
 
 /// Header metadata extracted from a sliced file.
@@ -63,7 +79,15 @@ impl LayerInput {
             lift_speed_mm_min,
             layer_height_um,
             z_mm,
+            mask: None,
         })
+    }
+
+    /// Attach a `LayerMask` to this input. Chainable builder for constructors
+    /// that also want to populate the 3D topology field.
+    pub fn with_mask(mut self, mask: LayerMask) -> Self {
+        self.mask = Some(mask);
+        self
     }
 }
 
