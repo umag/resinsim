@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::values::FloatRange;
+use crate::values::{DEFAULT_VOXEL_SIZE_MM, FloatRange};
+
+fn default_voxel_size_mm() -> f32 {
+    DEFAULT_VOXEL_SIZE_MM
+}
 
 /// Hardware envelope of a printer (ADR-0005, Axis 1).
 /// Identity: `name`. Loaded from TOML profiles in `data/printers/`.
@@ -57,6 +61,17 @@ pub struct PrinterProfile {
     // LCD uniformity — KB-120
     /// Peak-to-peak intensity variation as fraction (0.34 = 34%). 0.0 = ideal.
     pub(crate) lcd_uniformity_variation: f32,
+
+    /// Voxel resolution in mm for slicer mask output (Step 4 of
+    /// suction-detector-raft-false-positive). Controls memory budget of
+    /// per-layer `LayerMask` stacks used by `CavityDetector`. Finer values
+    /// catch thinner walls at the cost of memory; coarser values save memory
+    /// but may over-report solid area around sub-mm features.
+    ///
+    /// Default 0.5 mm (`DEFAULT_VOXEL_SIZE_MM`). Existing TOML profiles
+    /// without this field deserialise with the default via `#[serde(default)]`.
+    #[serde(default = "default_voxel_size_mm")]
+    pub(crate) voxel_size_mm: f32,
 }
 
 impl PrinterProfile {
@@ -96,6 +111,9 @@ impl PrinterProfile {
     }
     pub fn bottom_layer_count_max(&self) -> u32 {
         self.bottom_layer_count_max
+    }
+    pub fn voxel_size_mm(&self) -> f32 {
+        self.voxel_size_mm
     }
 
     /// Validate physical invariants. Must be called after deserialization from
@@ -146,6 +164,12 @@ impl PrinterProfile {
                 self.lcd_uniformity_variation
             ));
         }
+        if !self.voxel_size_mm.is_finite() || self.voxel_size_mm <= 0.0 {
+            return Err(format!(
+                "voxel_size_mm must be finite and > 0 (got {})",
+                self.voxel_size_mm
+            ));
+        }
         Ok(())
     }
 
@@ -169,6 +193,7 @@ impl PrinterProfile {
             delta_t_steady_c: 8.0,
             thermal_tau_sec: 1200.0,
             lcd_uniformity_variation: 0.12, // ParaLED, better than Saturn-class
+            voxel_size_mm: DEFAULT_VOXEL_SIZE_MM,
         }
     }
 
@@ -189,6 +214,7 @@ impl PrinterProfile {
             delta_t_steady_c: 10.0,         // KB-150: estimate
             thermal_tau_sec: 1200.0,        // KB-183: estimate
             lcd_uniformity_variation: 0.22, // KB-120: Saturn 2 class
+            voxel_size_mm: DEFAULT_VOXEL_SIZE_MM,
         }
     }
 }
