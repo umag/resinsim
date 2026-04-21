@@ -1,217 +1,419 @@
-//! TDD red tests for `CavityDetector` and integration with `SuctionDetector`.
-//!
-//! Per plan v6 Step 1 (suction-detector-raft-false-positive issue lifecycle).
-//!
-//! **State: red.** Tests are gated with `#[ignore]` and bodies are `todo!()` until
-//! the types they exercise exist. As each subsequent plan step lands, bodies
-//! are filled in:
-//!
-//! - Step 2 introduces `LayerMask`, `LayerGeometry` — mask-construction helpers become available.
-//! - Step 6 introduces `CavityDetector`, `CavityEvent`, `CavityError` — assertions become available.
-//! - Step 7 removes the `#[ignore]` gates and verifies tests go green.
-//!
-//! Reference: `/Users/mag1/dev_tmp/ora/resinsim/docs/patterns/phase-boundaries-for-ddd-refactors.md`
+//! Integration tests for `CavityDetector` — the 3D cavity-detection service
+//! at the heart of the suction-detector-raft-false-positive fix. Specs in
+//! plan v6 Step 1, bodies filled in across Steps 2-7 as the supporting types
+//! landed.
+
+use proptest::prelude::*;
+use resinsim_core::services::{CavityDetector, CavityError};
+use resinsim_core::values::LayerMask;
 
 // ---------------------------------------------------------------------------
-// Scenario (a): raft_plus_columns_no_suction
+// Mask construction helpers (public-API-only, live in this test file so the
+// primitives are visible to reviewers alongside the proptest).
 // ---------------------------------------------------------------------------
 
-/// Synthetic mask stack: raft (solid plate) layers 0-22, discrete support
-/// columns layers 23+. `CavityDetector` must return zero events — the gaps
-/// between columns touch the lateral bbox edge and drain to the vat.
-///
-/// This is the exact false-positive reproduction from triage: the raft→supports
-/// transition that the old area-drop heuristic flagged with 99 N of fabricated
-/// suction force. The 3D topology correctly identifies the inter-column void
-/// as exterior-connected.
-#[test]
-#[ignore = "awaiting LayerMask (Step 2) + CavityDetector (Step 6)"]
-fn raft_plus_columns_no_suction() {
-    todo!(
-        "Construct mask stack: layers 0-22 fully-solid plate (simulating raft); \
-         layers 23-49 with 20 discrete 3x3 solid squares (support columns) spread \
-         across the bbox with inter-column gaps touching the bbox lateral edges. \
-         Invoke CavityDetector::detect(&masks) and assert the Ok(Vec<CavityEvent>) \
-         returned contains zero events."
-    );
+fn solid_mask(w: u32, h: u32, voxel: f32) -> LayerMask {
+    LayerMask::new_all_solid(w, h, voxel).expect("valid all-solid mask")
 }
 
-// ---------------------------------------------------------------------------
-// Scenario (b): closed_cup_emits_one_event
-// ---------------------------------------------------------------------------
-
-/// Solid base, ring walls, solid top. Exactly one event at the layer sealing
-/// the cavity from below (FEP direction).
-#[test]
-#[ignore = "awaiting LayerMask (Step 2) + CavityDetector (Step 6)"]
-fn closed_cup_emits_one_event() {
-    todo!(
-        "Construct mask stack: layer 0 solid square (base); layers 1-5 ring mask \
-         (solid border, void interior); layer 6 solid square (top, seals cavity). \
-         Assert exactly one CavityEvent at layer 6 with sealed_area_mm2 matching \
-         the interior hole area within rounding tolerance."
-    );
+fn void_mask(w: u32, h: u32, voxel: f32) -> LayerMask {
+    LayerMask::new(w, h, voxel).expect("valid all-void mask")
 }
 
-// ---------------------------------------------------------------------------
-// Scenario (c): open_topped_cup_no_events
-// ---------------------------------------------------------------------------
-
-/// Solid base, ring walls, no closure. Zero events — wall peel is ring-peel
-/// without concentrated suction.
-#[test]
-#[ignore = "awaiting LayerMask (Step 2) + CavityDetector (Step 6)"]
-fn open_topped_cup_no_events() {
-    todo!(
-        "Construct mask stack: layer 0 solid (base); layers 1-10 ring mask; no \
-         solid closure. Assert CavityDetector returns zero events (pocket remains \
-         open at last layer → 'open at FEP' → no vacuum)."
-    );
+/// 4-connected ring: outer border solid, 1-cell-wide frame, interior void.
+/// For n=7 → outer frame solid, (1..6)×(1..6) = 25-cell interior void.
+fn ring_mask(n: u32, voxel: f32) -> LayerMask {
+    let mut m = solid_mask(n, n, voxel);
+    for x in 1..n - 1 {
+        for y in 1..n - 1 {
+            m.clear(x, y).expect("interior in bounds");
+        }
+    }
+    m
 }
 
-// ---------------------------------------------------------------------------
-// Scenario (d): fully_sealed_interior_pocket
-// ---------------------------------------------------------------------------
-
-/// Solid blob with a hollow core entirely inside it. One event at the
-/// bottom-sealing layer.
-#[test]
-#[ignore = "awaiting LayerMask (Step 2) + CavityDetector (Step 6)"]
-fn fully_sealed_interior_pocket() {
-    todo!(
-        "Construct mask stack: layer 0 solid (roof); layers 1-5 ring mask \
-         (walls); layer 6 solid (floor — seals from FEP). All outer bounds solid \
-         so lateral exterior is not reached. Assert one CavityEvent at layer 6."
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Scenario (e): two_disjoint_cups_two_events
-// ---------------------------------------------------------------------------
-
-/// Two closed cups side by side. Two separate events at respective closure layers.
-#[test]
-#[ignore = "awaiting LayerMask (Step 2) + CavityDetector (Step 6)"]
-fn two_disjoint_cups_two_events() {
-    todo!(
-        "Construct mask stack containing two spatially-separated closed cups \
-         (left cup and right cup, each with solid-base → ring-walls → solid-top). \
-         Assert exactly two CavityEvents, one per cup, at their respective closure \
-         layers."
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Scenario (f): lateral_touching_void_is_exterior
-// ---------------------------------------------------------------------------
-
-/// A void that extends to the bbox edge never emits — it is exterior-connected
-/// through the lateral vat.
-#[test]
-#[ignore = "awaiting LayerMask (Step 2) + CavityDetector (Step 6)"]
-fn lateral_touching_void_is_exterior() {
-    todo!(
-        "Construct mask stack where the void region extends to at least one \
-         lateral bbox face (x=0 OR x=max-1 OR y=0 OR y=max-1) across all layers. \
-         Even if 'closed' by a top layer, the lateral edge makes it exterior. \
-         Assert CavityDetector returns zero events."
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Scenario (g): proptest_known_topology_primitives
-// ---------------------------------------------------------------------------
-
-/// Proptest: construct mask stacks from primitives where the sealed-component
-/// count is analytically known from construction. Event count must equal the
-/// constructed count.
-///
-/// Primitives (per plan v6 Step 1):
-/// - `sealed_cube(n)`: solid mask at layers 0 and n-1; ring mask layers 1..n-2.
-///   Expected 1 event at layer n-1.
-/// - `open_tube(n)`: solid layer 0; ring layers 1..n-1; no closure. Expected 0.
-/// - `nested_rings(n, k)`: k concentric sealed cubes. Expected k events.
-/// - `stacked_cups(n, k)`: k sealed cubes along z with solid separators. Expected k events.
-///
-/// Each primitive has its own unit test asserting internal consistency
-/// (volume/area/layer-span) BEFORE it is used in this proptest.
-#[test]
-#[ignore = "awaiting LayerMask (Step 2) + CavityDetector (Step 6) + primitives"]
-fn proptest_known_topology_primitives() {
-    todo!(
-        "Use proptest::proptest! to generate arbitrary (kind, n, k) values, \
-         construct the corresponding primitive mask stack, invoke \
-         CavityDetector::detect, and assert event count equals the analytically \
-         known count for that primitive."
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Internal-consistency unit tests for each primitive
-// ---------------------------------------------------------------------------
+// --- Primitive: sealed_cube(n) ---
 //
-// These guard the primitives themselves against silent miscalibration.
-// If a primitive is constructed wrong, these tests flag it — not the proptest.
+// Solid mask at layers 0 and n-1; ring mask in between. Interior void is
+// fully enclosed on all sides. Expected: 1 event at layer n-1.
+fn sealed_cube(n: u32, voxel: f32) -> Vec<LayerMask> {
+    let mut stack = Vec::with_capacity(n as usize);
+    stack.push(solid_mask(n, n, voxel));
+    for _ in 1..n - 1 {
+        stack.push(ring_mask(n, voxel));
+    }
+    stack.push(solid_mask(n, n, voxel));
+    stack
+}
+
+// --- Primitive: open_tube(n) ---
+//
+// Solid mask at layer 0; ring mask layers 1..n-1; no closure. Expected: 0
+// events — pocket never closes from below.
+fn open_tube(n: u32, voxel: f32) -> Vec<LayerMask> {
+    let mut stack = Vec::with_capacity(n as usize);
+    stack.push(solid_mask(n, n, voxel));
+    for _ in 1..n {
+        stack.push(ring_mask(n, voxel));
+    }
+    stack
+}
+
+// --- Primitive: stacked_cups(n, k) ---
+//
+// k sealed cubes (each n layers tall, n×n cells) stacked along z with solid
+// separators. Expected: k events.
+fn stacked_cups(n: u32, k: u32, voxel: f32) -> Vec<LayerMask> {
+    let mut stack = Vec::new();
+    for _ in 0..k {
+        let cube = sealed_cube(n, voxel);
+        stack.extend(cube);
+        // No explicit separator needed — each sealed_cube already has a solid
+        // cap at its last layer, and the next cube's first layer is solid too,
+        // so the boundary is two solid layers. That keeps cavities disjoint.
+    }
+    stack
+}
+
+// ---------------------------------------------------------------------------
+// Primitive internal-consistency tests (resolves v4 MEDIUM — primitives
+// vetted before being used in the proptest).
+// ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "awaiting LayerMask (Step 2) + primitives"]
 fn sealed_cube_primitive_is_internally_consistent() {
-    todo!(
-        "Construct sealed_cube(n=10), assert: layer count = 10, layer 0 is fully \
-         solid, layer 9 is fully solid, layers 1..8 are rings (non-zero wall \
-         area, non-zero hole area), total void volume equals hole_area × 8 layers."
-    );
+    let stack = sealed_cube(7, 1.0);
+    assert_eq!(stack.len(), 7);
+    // Layer 0 and 6 are fully solid
+    assert_eq!(stack[0].solid_cell_count(), 49);
+    assert_eq!(stack[6].solid_cell_count(), 49);
+    // Layers 1..6 are rings (outer frame solid, 5×5 interior void)
+    for i in 1..6 {
+        assert_eq!(
+            stack[i].solid_cell_count(),
+            49 - 25,
+            "layer {i} ring wall count"
+        );
+    }
+    // Detector sees exactly one event at closure layer 6
+    let events = CavityDetector::detect(&stack).expect("valid primitive");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].layer, 6);
+    assert!((events[0].sealed_area_mm2 - 25.0).abs() < 1e-6);
 }
 
 #[test]
-#[ignore = "awaiting LayerMask (Step 2) + primitives"]
 fn open_tube_primitive_is_internally_consistent() {
-    todo!(
-        "Construct open_tube(n=10), assert: layer count = 10, layer 0 is fully \
-         solid (base), layers 1..9 are rings, last layer is a ring (not closed)."
-    );
+    let stack = open_tube(7, 1.0);
+    assert_eq!(stack.len(), 7);
+    assert_eq!(stack[0].solid_cell_count(), 49); // solid base
+    for i in 1..7 {
+        assert_eq!(stack[i].solid_cell_count(), 24, "layer {i} ring");
+    }
+    // No closure → no events
+    let events = CavityDetector::detect(&stack).expect("valid primitive");
+    assert!(events.is_empty());
 }
 
 #[test]
-#[ignore = "awaiting LayerMask (Step 2) + primitives"]
-fn nested_rings_primitive_is_internally_consistent() {
-    todo!(
-        "Construct nested_rings(n=10, k=3), assert: each ring has its own \
-         concentric void, void count = 3, voids are disjoint."
-    );
-}
-
-#[test]
-#[ignore = "awaiting LayerMask (Step 2) + primitives"]
 fn stacked_cups_primitive_is_internally_consistent() {
-    todo!(
-        "Construct stacked_cups(n=5, k=3), assert: total layer count ≈ 3*5 + 2 \
-         separators, 3 disjoint sealed voids along z."
+    let k = 3;
+    let stack = stacked_cups(5, k, 1.0);
+    // k cubes × 5 layers each = 15 total
+    assert_eq!(stack.len(), 15);
+    let events = CavityDetector::detect(&stack).expect("valid primitive");
+    assert_eq!(events.len(), k as usize, "got {events:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Scenarios (a)–(f) from plan v6 Step 1
+// ---------------------------------------------------------------------------
+
+#[test]
+fn raft_plus_columns_no_suction() {
+    // The lilith-torso reproduction scaled down: 11×11 bed, 1mm voxel.
+    // Raft (fully solid) → 5 layers of discrete support columns with
+    // inter-column gaps touching the bbox edges.
+    let raft = solid_mask(11, 11, 1.0);
+    let mut columns = void_mask(11, 11, 1.0);
+    columns.set(2, 2).expect("in bounds");
+    columns.set(2, 8).expect("in bounds");
+    columns.set(8, 2).expect("in bounds");
+    columns.set(8, 8).expect("in bounds");
+    let stack = vec![
+        raft,
+        columns.clone(),
+        columns.clone(),
+        columns.clone(),
+        columns.clone(),
+        columns,
+    ];
+    let events = CavityDetector::detect(&stack).expect("valid");
+    assert!(
+        events.is_empty(),
+        "raft+columns false-positive reproduction must emit zero: {events:?}"
+    );
+}
+
+#[test]
+fn closed_cup_emits_one_event() {
+    let events = CavityDetector::detect(&sealed_cube(7, 1.0)).expect("valid");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].layer, 6);
+    assert!((events[0].sealed_area_mm2 - 25.0).abs() < 1e-6);
+    // 50 kPa × 25 mm² × 1e-3 = 1.25 N
+    assert!((events[0].suction_force_n - 1.25).abs() < 1e-3);
+}
+
+#[test]
+fn open_topped_cup_no_events() {
+    let events = CavityDetector::detect(&open_tube(7, 1.0)).expect("valid");
+    assert!(events.is_empty());
+}
+
+#[test]
+fn fully_sealed_interior_pocket() {
+    // Same as sealed_cube — the "floor" at layer 0 acts as the FEP-side
+    // seal from the detector's perspective since we emit at the layer that
+    // closes the pocket from below.
+    let events = CavityDetector::detect(&sealed_cube(5, 1.0)).expect("valid");
+    assert_eq!(events.len(), 1);
+}
+
+#[test]
+fn two_disjoint_cups_two_events() {
+    let events = CavityDetector::detect(&stacked_cups(4, 2, 1.0)).expect("valid");
+    assert_eq!(events.len(), 2);
+    // Events should be at successive closure layers (3 and 7 for 4-layer cubes)
+    let layers: Vec<u32> = events.iter().map(|e| e.layer).collect();
+    assert_eq!(layers, vec![3, 7]);
+}
+
+#[test]
+fn lateral_touching_void_is_exterior() {
+    // Cup-like shape but interior void reaches the bbox edge via a gap in the wall.
+    let mut stack = Vec::new();
+    stack.push(solid_mask(7, 7, 1.0)); // floor
+    for _ in 0..3 {
+        let mut m = ring_mask(7, 1.0);
+        m.clear(3, 0).expect("cell on lateral edge"); // knock out a wall cell on the edge
+        stack.push(m);
+    }
+    stack.push(solid_mask(7, 7, 1.0)); // cap
+    let events = CavityDetector::detect(&stack).expect("valid");
+    assert!(
+        events.is_empty(),
+        "lateral-edge-touching void must not emit: {events:?}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// CavityDetector precondition test (resolves v5 MEDIUM)
+// CavityDetector preconditions (resolves v5 MEDIUM)
 // ---------------------------------------------------------------------------
 
-/// `CavityDetector::detect` must reject mixed-resolution inputs with
-/// `Err(CavityError::InconsistentMasks)`. Prevents silent wrong results.
 #[test]
-#[ignore = "awaiting LayerMask (Step 2) + CavityDetector (Step 6) + CavityError"]
+fn detect_rejects_empty_input() {
+    assert!(matches!(
+        CavityDetector::detect(&[]),
+        Err(CavityError::NoMasks)
+    ));
+}
+
+#[test]
 fn detect_rejects_mixed_voxel_sizes() {
-    todo!(
-        "Construct two LayerMasks with different voxel_size_mm (e.g. 0.5 vs 1.0). \
-         Invoke CavityDetector::detect(&[mask_a, mask_b]) and assert it returns \
-         Err(CavityError::InconsistentMasks)."
-    );
+    let a = LayerMask::new(4, 4, 0.5).expect("valid");
+    let b = LayerMask::new(4, 4, 1.0).expect("valid");
+    assert!(matches!(
+        CavityDetector::detect(&[a, b]),
+        Err(CavityError::InconsistentMasks { .. })
+    ));
 }
 
 #[test]
-#[ignore = "awaiting LayerMask (Step 2) + CavityDetector (Step 6) + CavityError"]
 fn detect_rejects_mismatched_dimensions() {
-    todo!(
-        "Construct two LayerMasks with same voxel_size_mm but different \
-         (width_cells, height_cells). Invoke CavityDetector::detect and assert \
-         Err(CavityError::InconsistentMasks)."
-    );
+    let a = LayerMask::new(4, 4, 0.5).expect("valid");
+    let b = LayerMask::new(5, 4, 0.5).expect("valid");
+    assert!(matches!(
+        CavityDetector::detect(&[a, b]),
+        Err(CavityError::InconsistentMasks { .. })
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Proptest: known-topology primitives (plan v6 Step 1 scenario (g))
+// ---------------------------------------------------------------------------
+
+proptest! {
+    /// For each primitive, the event count matches the analytical expectation.
+    /// Primitives are internally vetted by the dedicated consistency tests
+    /// above — so a failure here is a genuine detector bug, not a fixture bug.
+    #[test]
+    fn proptest_known_topology_primitives(n in 5u32..12, k in 1u32..5) {
+        // sealed_cube(n): expected 1 event
+        let events = CavityDetector::detect(&sealed_cube(n, 1.0))
+            .expect("sealed_cube(valid n) produces valid masks");
+        prop_assert_eq!(events.len(), 1, "sealed_cube({}) expected 1 event", n);
+
+        // open_tube(n): expected 0 events
+        let events = CavityDetector::detect(&open_tube(n, 1.0))
+            .expect("open_tube(valid n) produces valid masks");
+        prop_assert_eq!(events.len(), 0, "open_tube({}) expected 0 events", n);
+
+        // stacked_cups(n, k): expected k events
+        let events = CavityDetector::detect(&stacked_cups(n, k, 1.0))
+            .expect("stacked_cups(valid n, k) produces valid masks");
+        prop_assert_eq!(
+            events.len(),
+            k as usize,
+            "stacked_cups({}, {}) expected {} events",
+            n,
+            k,
+            k
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Proptest: swiss-cheese cube — randomly place N sealed cavities inside a
+// solid cube, assert the detector finds exactly N events.
+//
+// Construction (keeps each cavity sealed + disjoint):
+// - Start with a solid cube (w×w cells × depth layers).
+// - For each cavity: pick a random 3×3 XY footprint strictly inside the
+//   cube (not touching lateral edge), and a random layer range [z..z+len]
+//   strictly inside [1..depth-2] so layer 0 and layer depth-1 stay solid.
+// - For each chosen (x, y, z) in the cavity footprint × layer range, clear
+//   the cell in that layer's mask.
+// - Reject generated candidates whose cavity footprints would touch or
+//   overlap — keeps each cavity topologically distinct.
+//
+// Cavity sizes and placements are bounded so that for any valid sample:
+// - Every cavity is wholly enclosed by surrounding solid (floor at z-1,
+//   cap at z+len, walls on all 4 lateral sides within the same layer).
+// - No cavity touches the lateral bbox edge.
+// - No two cavities share cells.
+//
+// Expected: events.len() == N.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct CavitySpec {
+    // XY position of the 3×3 cavity footprint, top-left corner.
+    x0: u32,
+    y0: u32,
+    // Layer range [z0..z0 + depth) where cavity cells are void.
+    z0: u32,
+    depth: u32,
+}
+
+fn disjoint_cavity_specs(
+    bed_w: u32,
+    bed_h: u32,
+    stack_depth: u32,
+    proposed: &[CavitySpec],
+) -> Vec<CavitySpec> {
+    // Filter: (1) all cavity cells must stay strictly inside the bbox
+    //         (floor layer 0 solid, cap layer stack_depth-1 solid, no XY
+    //         edge). (2) topological separation — two cavities share a
+    //         pocket iff they are connected via any 6-neighbour void path
+    //         across the 3D grid. To keep them distinct we require EITHER
+    //         a z-gap of ≥1 solid layer between them, OR (for layers
+    //         within 1 of each other) a 1-cell XY gap.
+    let mut accepted: Vec<CavitySpec> = Vec::new();
+    for c in proposed {
+        // Spatial bounds check
+        if c.x0 == 0 || c.x0 + 3 >= bed_w {
+            continue;
+        }
+        if c.y0 == 0 || c.y0 + 3 >= bed_h {
+            continue;
+        }
+        if c.z0 == 0 || c.z0 + c.depth >= stack_depth {
+            continue;
+        }
+        // Topological separation: treat z-ranges as inflated by 1 on each
+        // side so that z-adjacent cavities (no solid separator) are still
+        // considered "overlapping" for the purposes of requiring XY clearance.
+        let overlaps = accepted.iter().any(|a| {
+            let z_adjacent_or_overlap =
+                c.z0 < a.z0 + a.depth + 1 && a.z0 < c.z0 + c.depth + 1;
+            if !z_adjacent_or_overlap {
+                return false;
+            }
+            let x_clear = c.x0 + 3 + 1 <= a.x0 || a.x0 + 3 + 1 <= c.x0;
+            let y_clear = c.y0 + 3 + 1 <= a.y0 || a.y0 + 3 + 1 <= c.y0;
+            !(x_clear || y_clear)
+        });
+        if overlaps {
+            continue;
+        }
+        accepted.push(c.clone());
+    }
+    accepted
+}
+
+fn build_swiss_cheese(
+    bed: u32,
+    depth: u32,
+    voxel: f32,
+    specs: &[CavitySpec],
+) -> Vec<LayerMask> {
+    let mut stack: Vec<LayerMask> = (0..depth).map(|_| solid_mask(bed, bed, voxel)).collect();
+    for spec in specs {
+        for dz in 0..spec.depth {
+            let layer_idx = (spec.z0 + dz) as usize;
+            let m = &mut stack[layer_idx];
+            for dx in 0..3 {
+                for dy in 0..3 {
+                    let _ = m.clear(spec.x0 + dx, spec.y0 + dy);
+                }
+            }
+        }
+    }
+    stack
+}
+
+proptest! {
+    /// Randomly drop up to 4 disjoint 3×3 sealed cavities inside a 12×12×10
+    /// solid cube. For any subset that survives the disjointness/bounds
+    /// filter, the detector must find exactly that many events.
+    #[test]
+    fn proptest_swiss_cheese_cube(
+        raw in prop::collection::vec(
+            (1u32..9, 1u32..9, 1u32..8, 1u32..4),  // (x0, y0, z0, depth)
+            0..4usize,
+        )
+    ) {
+        let bed = 12u32;
+        let depth = 10u32;
+        let voxel = 1.0_f32;
+        let proposed: Vec<CavitySpec> = raw
+            .iter()
+            .map(|&(x0, y0, z0, d)| CavitySpec {
+                x0,
+                y0,
+                z0,
+                depth: d,
+            })
+            .collect();
+        let accepted = disjoint_cavity_specs(bed, bed, depth, &proposed);
+
+        let stack = build_swiss_cheese(bed, depth, voxel, &accepted);
+        let events = CavityDetector::detect(&stack).expect("valid swiss-cheese cube");
+
+        prop_assert_eq!(
+            events.len(),
+            accepted.len(),
+            "expected {} events for {} disjoint cavities, got {:?}",
+            accepted.len(),
+            accepted.len(),
+            events
+        );
+
+        // Further: each event's sealed_area must equal 9.0 mm² (3×3 footprint
+        // × 1mm² voxel) since every cavity has the same cross-section.
+        for e in &events {
+            prop_assert!((e.sealed_area_mm2 - 9.0).abs() < 1e-6);
+        }
+    }
 }

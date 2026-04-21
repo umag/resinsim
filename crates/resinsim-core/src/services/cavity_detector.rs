@@ -103,6 +103,22 @@ use crate::values::LayerMask;
 /// work for resin/FEP-specific tuning.
 pub const VACUUM_PRESSURE_KPA: f64 = 50.0;
 
+/// Minimum sealed-cavity cross-section to emit as a [`CavityEvent`].
+///
+/// Cavities smaller than this produce suction force below the physical
+/// noise floor of typical MSLA hardware (e.g., 1 mm² × 50 kPa = 0.05 N —
+/// orders of magnitude below the build-plate motor's lift reserve and
+/// dwarfed by peel adhesion). Downstream severity grading in
+/// `FailurePredictor` already thresholds at 1 N; events below that can't
+/// change the failure outcome. Dropping them at detection time keeps the
+/// output focused on force magnitudes that matter to the user.
+///
+/// Physical rationale: aligns with the principle that a suction cup only
+/// matters when it overpowers the lift mechanism. 1 mm² is a conservative
+/// noise floor; voxel-edge artefacts (single-cell components from
+/// downsampling rounding) are filtered out.
+pub const MIN_SEALED_AREA_MM2: f64 = 1.0;
+
 /// Errors returned by [`CavityDetector::detect`].
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum CavityError {
@@ -319,6 +335,11 @@ impl CavityDetector {
                     continue;
                 }
                 let sealed_area = (sealed_cells as f64) * voxel_area;
+                if sealed_area < MIN_SEALED_AREA_MM2 {
+                    // Below physical noise floor — small cavities do not overpower
+                    // the lift mechanism. See MIN_SEALED_AREA_MM2 rustdoc.
+                    continue;
+                }
                 let suction_force = (VACUUM_PRESSURE_KPA * sealed_area * 1e-3) as f32;
                 events.push(CavityEvent {
                     layer: k as u32,
@@ -592,6 +613,25 @@ mod tests {
         // edge → exterior → no events. Even when the raft "seals" the void
         // from above, the lateral edge keeps it exterior.
         assert!(events.is_empty(), "got unexpected events: {events:?}");
+    }
+
+    #[test]
+    fn below_min_sealed_area_threshold_no_event() {
+        // Construct a sealed cavity whose interior is 1 cell (1 mm² at 1 mm
+        // voxel) — below MIN_SEALED_AREA_MM2 (1.0 mm²).
+        // Actually at MIN = 1.0 and 1 cell = 1.0 mm², this is exactly at the
+        // threshold. Make the voxel smaller so we're clearly below.
+        let mut floor =
+            LayerMask::new_all_solid(3, 3, 0.5).expect("valid");
+        let _ = floor; // unused dimension check
+        let mut floor = LayerMask::new_all_solid(3, 3, 0.5).expect("valid");
+        let mut wall = LayerMask::new_all_solid(3, 3, 0.5).expect("valid");
+        wall.clear(1, 1).expect("in bounds"); // interior void = 1 cell × 0.25 mm² = 0.25 mm²
+        let cap = LayerMask::new_all_solid(3, 3, 0.5).expect("valid");
+        let _ = floor.solid_area_mm2();
+        let stack = vec![floor, wall.clone(), wall, cap];
+        let events = CavityDetector::detect(&stack).expect("valid");
+        assert!(events.is_empty(), "sub-threshold cavity should not emit: {events:?}");
     }
 
     #[test]

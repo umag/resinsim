@@ -7,7 +7,7 @@ use crate::services::failure_predictor::{FailurePredictor, LayerOverrides, Suppo
 use crate::services::pairing_validator;
 use crate::services::suction_detector::SuctionDetector;
 use crate::simulation::PrintSimulation;
-use crate::values::CrossSectionArea;
+use crate::values::{CrossSectionArea, LayerMask, LayerPhase};
 
 /// Application service: orchestrates a full simulation run.
 /// Loads geometry, slices it, runs FailurePredictor per layer,
@@ -21,9 +21,9 @@ impl SimulationRunner {
     ///   1. `resin.validate()` + `printer.validate()`
     ///   2. `pairing_validator::validate_pairing(printer, recipe)` — fail fast with ALL
     ///      violations BEFORE any geometry is sliced.
-    ///   3. `slice_areas(..., recipe.layer_height_um)` — uses the recipe, not the
-    ///      printer (which no longer carries a layer_height).
-    ///   4. `run_from_areas(...)` with already-validated profiles.
+    ///   3. `slice_layers(..., recipe.layer_height_um, printer.voxel_size_mm)` — uses
+    ///      the recipe + printer's configured voxel resolution.
+    ///   4. Run FailurePredictor with mask-based SuctionDetector pre-pass.
     pub fn run_stl(
         stl_path: &std::path::Path,
         resin: &ResinProfile,
@@ -36,18 +36,40 @@ impl SimulationRunner {
         printer.validate().map_err(|e| format!("printer: {e}"))?;
         pairing_validator::validate_pairing(printer, resin.recipe())
             .map_err(|violations| format!("pairing: {}", violations.join("; ")))?;
+        let recipe = resin.recipe();
 
         let triangles = stl::load_stl(stl_path)?;
         let bbox = stl::bounding_box(&triangles);
-        let areas = geometry::slice_areas(&triangles, &bbox, resin.recipe().layer_height_um());
-
-        Self::run_from_areas(&areas, resin, printer, supports, plate, ambient_c)
+        let geometries = geometry::slice_layers(
+            &triangles,
+            &bbox,
+            recipe.layer_height_um(),
+            printer.voxel_size_mm(),
+        );
+        let areas: Vec<CrossSectionArea> = geometries.iter().map(|g| g.area).collect();
+        let masks: Vec<LayerMask> = geometries.into_iter().map(|g| g.mask).collect();
+        Self::run_inner(
+            &areas,
+            &masks,
+            None,
+            resin,
+            printer,
+            supports,
+            plate,
+            ambient_c,
+        )
     }
 
-    /// Run simulation from pre-computed per-layer areas.
+    /// Run simulation from pre-computed per-layer areas (area-only entry point).
     ///
-    /// Also callable as the inner loop from `run_stl` (which runs pairing beforehand);
-    /// revalidation here is defence-in-depth per ADR-0005 §5.
+    /// Mask-synthesising adapter (Phase B, Step 7, suction-detector-raft-false-positive):
+    /// each area is represented as a fully-solid 1×1 LayerMask at the printer's
+    /// voxel resolution. Fully-solid masks produce zero cavity events — correct
+    /// for test fixtures whose areas represent solid cross-sections (e.g.
+    /// `cube_areas`, `sphere_areas`). Callers that want to exercise cavity
+    /// detection use [`run_from_layer_inputs`] with a bespoke LayerMask stack.
+    ///
+    /// Revalidation here is defence-in-depth per ADR-0005 §5.
     pub fn run_from_areas(
         areas: &[CrossSectionArea],
         resin: &ResinProfile,
@@ -60,36 +82,23 @@ impl SimulationRunner {
         printer.validate().map_err(|e| format!("printer: {e}"))?;
         pairing_validator::validate_pairing(printer, resin.recipe())
             .map_err(|violations| format!("pairing: {}", violations.join("; ")))?;
-        let recipe = resin.recipe();
 
-        // Pre-pass: detect suction risks and raft layers
-        let suction_map = Self::build_suction_map(areas);
-        let raft_end = Self::detect_raft_end(areas);
-
-        let mut sim = PrintSimulation::new();
-        let mut prev_area = CrossSectionArea::new(0.0).expect("zero is valid");
-
-        for (i, &area) in areas.iter().enumerate() {
-            let overrides = LayerOverrides {
-                suction_force_n: suction_map.get(&(i as u32)).copied(),
-                is_raft: (i as u32) < raft_end,
-                ..Default::default()
-            };
-            let (result, failures) = FailurePredictor::predict_layer(
-                i as u32, area, prev_area, &overrides, resin, printer, recipe, supports, plate,
-                ambient_c,
-            );
-            sim.add_layer(result, failures);
-            prev_area = area;
-        }
-
-        Ok(sim)
+        let masks: Vec<LayerMask> = (0..areas.len())
+            .map(|_| {
+                LayerMask::new_all_solid(1, 1, printer.voxel_size_mm())
+                    .expect("1×1 all-solid mask at validated positive voxel_size_mm constructs")
+            })
+            .collect();
+        Self::run_inner(areas, &masks, None, resin, printer, supports, plate, ambient_c)
     }
 
     /// Run simulation from parsed LayerInputs (from CTB or other sliced files).
+    ///
     /// Uses per-layer exposure and lift speed from the sliced file; baseline recipe
     /// values (layer_height_um, bottom_exposure_sec, bottom_layer_count) come from
-    /// `resin.recipe()`.
+    /// `resin.recipe()`. Each `LayerInput` should carry a populated `mask` for
+    /// cavity detection; inputs without a mask get a synthesised fully-solid 1×1
+    /// mask at `printer.voxel_size_mm()` (no cavity events emitted for those layers).
     pub fn run_from_layer_inputs(
         layers: &[LayerInput],
         resin: &ResinProfile,
@@ -102,9 +111,7 @@ impl SimulationRunner {
         printer.validate().map_err(|e| format!("printer: {e}"))?;
         pairing_validator::validate_pairing(printer, resin.recipe())
             .map_err(|violations| format!("pairing: {}", violations.join("; ")))?;
-        let recipe = resin.recipe();
 
-        // Pre-pass: detect suction risks and raft layers
         let areas: Vec<CrossSectionArea> = layers
             .iter()
             .map(|li| {
@@ -112,21 +119,79 @@ impl SimulationRunner {
                     .map_err(|e| format!("layer {}: {e}", li.index))
             })
             .collect::<Result<_, _>>()?;
-        let suction_map = Self::build_suction_map(&areas);
-        let raft_end = Self::detect_raft_end(&areas);
+
+        // Collect masks from LayerInputs, synthesising a fully-solid fallback
+        // for any layer that doesn't carry one. Fallback voxel resolution must
+        // match the mask-carrying layers to satisfy CavityDetector's consistency
+        // precondition; pick it from the first carrying layer, or from
+        // printer.voxel_size_mm() if none.
+        let printer_voxel = printer.voxel_size_mm();
+        let carrying_voxel = layers
+            .iter()
+            .find_map(|li| li.mask.as_ref().map(|m| m.voxel_size_mm()))
+            .unwrap_or(printer_voxel);
+        let carrying_dims = layers
+            .iter()
+            .find_map(|li| li.mask.as_ref().map(|m| (m.width_cells(), m.height_cells())))
+            .unwrap_or((1, 1));
+        let masks: Vec<LayerMask> = layers
+            .iter()
+            .map(|li| match &li.mask {
+                Some(m) => m.clone(),
+                None => LayerMask::new_all_solid(carrying_dims.0, carrying_dims.1, carrying_voxel)
+                    .expect("consistent dims + positive voxel_size yields valid all-solid mask"),
+            })
+            .collect();
+
+        let per_layer_overrides: Vec<(f32, f32)> = layers
+            .iter()
+            .map(|li| (li.exposure_sec, li.lift_speed_mm_min))
+            .collect();
+        Self::run_inner(
+            &areas,
+            &masks,
+            Some(&per_layer_overrides),
+            resin,
+            printer,
+            supports,
+            plate,
+            ambient_c,
+        )
+    }
+
+    /// Internal: run the simulation given resolved areas + masks. Every public
+    /// entry point converges here.
+    #[allow(clippy::too_many_arguments)]
+    fn run_inner(
+        areas: &[CrossSectionArea],
+        masks: &[LayerMask],
+        per_layer_overrides: Option<&[(f32, f32)]>,
+        resin: &ResinProfile,
+        printer: &PrinterProfile,
+        supports: &SupportConfig,
+        plate: &PlateAdhesionProfile,
+        ambient_c: f32,
+    ) -> Result<PrintSimulation, String> {
+        let recipe = resin.recipe();
+        let suction_map = Self::build_suction_map(masks)?;
+        let phases = LayerPhase::classify_sequence(areas, recipe);
 
         let mut sim = PrintSimulation::new();
         let mut prev_area = CrossSectionArea::new(0.0).expect("zero is valid");
 
-        for (li, area) in layers.iter().zip(areas.iter().copied()) {
+        for (i, &area) in areas.iter().enumerate() {
+            let (exposure_override, lift_speed_override) = per_layer_overrides
+                .and_then(|pl| pl.get(i).copied())
+                .map(|(e, l)| (Some(e), Some(l)))
+                .unwrap_or((None, None));
             let overrides = LayerOverrides {
-                exposure_sec: Some(li.exposure_sec),
-                lift_speed_mm_min: Some(li.lift_speed_mm_min),
-                suction_force_n: suction_map.get(&li.index).copied(),
-                is_raft: li.index < raft_end,
+                exposure_sec: exposure_override,
+                lift_speed_mm_min: lift_speed_override,
+                suction_force_n: suction_map.get(&(i as u32)).copied(),
+                is_raft: matches!(phases.get(i), Some(LayerPhase::Raft)),
             };
             let (result, failures) = FailurePredictor::predict_layer(
-                li.index, area, prev_area, &overrides, resin, printer, recipe, supports, plate,
+                i as u32, area, prev_area, &overrides, resin, printer, recipe, supports, plate,
                 ambient_c,
             );
             sim.add_layer(result, failures);
@@ -136,23 +201,17 @@ impl SimulationRunner {
         Ok(sim)
     }
 
-    /// Run SuctionDetector heuristic pre-pass and build a layer→force map.
-    fn build_suction_map(areas: &[CrossSectionArea]) -> HashMap<u32, f32> {
-        let risks = SuctionDetector::detect_from_areas(areas, None);
-        risks
+    /// Run SuctionDetector mask-based pre-pass and build a layer→force map.
+    ///
+    /// Propagates `CavityError` as a human-readable string — callers of the
+    /// public `run_*` entry points already return `Result<_, String>`.
+    fn build_suction_map(masks: &[LayerMask]) -> Result<HashMap<u32, f32>, String> {
+        let risks = SuctionDetector::detect_from_masks(masks)
+            .map_err(|e| format!("suction detection: {e}"))?;
+        Ok(risks
             .into_iter()
             .map(|r| (r.layer, r.suction_force_n))
-            .collect()
-    }
-
-    /// Detect raft layers: initial layers with large constant area followed
-    /// by a >50% area drop. Everything before the drop is raft.
-    /// Returns the index of the first non-raft layer (0 if no raft detected).
-    ///
-    /// Thin delegate to `LayerPhase::detect_raft_end` (domain layer). Removed
-    /// in Phase B Step 7 in favour of `LayerPhase::classify_sequence` output.
-    fn detect_raft_end(areas: &[CrossSectionArea]) -> u32 {
-        crate::values::LayerPhase::detect_raft_end(areas)
+            .collect())
     }
 
     /// Auto-detect format from file extension and run simulation.
@@ -287,34 +346,92 @@ mod tests {
         );
     }
 
-    /// Simulate a hollow cup: solid base transitions to thin ring walls.
-    /// SuctionDetector should flag the transition layer.
-    fn hollow_cup_areas(
-        n_layers: usize,
+    /// Construct a closed-cup LayerInput stack with a bespoke LayerMask:
+    /// `base_layers` solid layers (build-plate floor) → `wall_layers` ring-wall
+    /// layers (trapped void interior) → `cap_layers` solid layers (FEP-side
+    /// closure). Uses 7×7 voxel grid at 1mm voxel → 5×5 interior = 25 mm²
+    /// sealed area (above the 1 N downstream threshold).
+    ///
+    /// Rewritten in Phase B Step 7 (suction-detector-raft-false-positive):
+    /// previously this test used area-only sequences, which no longer exercise
+    /// cavity detection under the mask-based path.
+    fn closed_cup_layer_inputs(
         base_layers: usize,
-        base_area: f64,
-        wall_area: f64,
-    ) -> Vec<CrossSectionArea> {
-        (0..n_layers)
-            .map(|i| {
-                if i < base_layers {
-                    CrossSectionArea::new(base_area).expect("test area is non-negative")
-                } else {
-                    CrossSectionArea::new(wall_area).expect("test area is non-negative")
+        wall_layers: usize,
+        cap_layers: usize,
+        exposure_sec: f32,
+        layer_height_um: f32,
+        lift_speed_mm_min: f32,
+    ) -> Vec<LayerInput> {
+        let w = 7u32;
+        let h = 7u32;
+        let voxel = 1.0_f32;
+
+        let solid_mask = LayerMask::new_all_solid(w, h, voxel)
+            .expect("7×7 @ 1mm mask constructs");
+        let ring_mask = {
+            let mut m = LayerMask::new_all_solid(w, h, voxel)
+                .expect("7×7 @ 1mm mask constructs");
+            for x in 1..w - 1 {
+                for y in 1..h - 1 {
+                    m.clear(x, y).expect("interior cell in bounds");
                 }
-            })
-            .collect()
+            }
+            m
+        };
+
+        let solid_area = (w as f64) * (h as f64) * (voxel as f64).powi(2); // 49 mm²
+        let ring_area = solid_area - 25.0; // 24 mm² (wall ring)
+
+        let mut layers = Vec::new();
+        let mut idx: u32 = 0;
+        let mut z_mm = 0.0_f32;
+        let layer_height_mm = layer_height_um / 1000.0;
+        for _ in 0..base_layers {
+            layers.push(
+                LayerInput::new(idx, solid_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
+                    .expect("valid LayerInput")
+                    .with_mask(solid_mask.clone()),
+            );
+            idx += 1;
+            z_mm += layer_height_mm;
+        }
+        for _ in 0..wall_layers {
+            layers.push(
+                LayerInput::new(idx, ring_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
+                    .expect("valid LayerInput")
+                    .with_mask(ring_mask.clone()),
+            );
+            idx += 1;
+            z_mm += layer_height_mm;
+        }
+        for _ in 0..cap_layers {
+            layers.push(
+                LayerInput::new(idx, solid_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
+                    .expect("valid LayerInput")
+                    .with_mask(solid_mask.clone()),
+            );
+            idx += 1;
+            z_mm += layer_height_mm;
+        }
+        layers
     }
 
     #[test]
-    fn hollow_cup_triggers_suction_warning() {
-        // Solid base (314 mm²) transitions to thin ring (60 mm²) → 80% area drop
-        // SuctionDetector heuristic flags this as suction risk
-        let areas = hollow_cup_areas(20, 5, 314.0, 60.0);
-        let sim = SimulationRunner::run_from_areas(
-            &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 }, &default_plate(), 22.0,
-        ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
+    fn closed_cup_triggers_suction_warning() {
+        // 5 solid base + 10 ring walls + 1 cap (layer 15 is the closure).
+        // Interior = 5×5 = 25 mm² at 1mm voxel. Force = 50 kPa × 25 × 1e-3 = 1.25 N
+        // — above FailurePredictor's 1 N emission gate.
+        let layers = closed_cup_layer_inputs(5, 10, 1, 2.5, 50.0, 60.0);
+        let sim = SimulationRunner::run_from_layer_inputs(
+            &layers,
+            &ResinProfile::generic_standard(),
+            &PrinterProfile::generic_msla_4k(),
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 },
+            &default_plate(),
+            22.0,
+        )
+        .expect("test fixture: validated profiles satisfy run_from_layer_inputs preconditions");
         let suction_events: Vec<_> = sim
             .failures()
             .iter()
@@ -322,11 +439,11 @@ mod tests {
             .collect();
         assert!(
             !suction_events.is_empty(),
-            "hollow cup should trigger suction warning, got: {:?}",
+            "closed cup should trigger suction warning, got: {:?}",
             sim.failures()
         );
-        // Suction should be at transition layer (5)
-        assert_eq!(suction_events[0].layer, 5);
+        // Event at the closure layer (15 = 5 base + 10 walls).
+        assert_eq!(suction_events[0].layer, 15);
     }
 
     #[test]
@@ -346,23 +463,26 @@ mod tests {
 
     #[test]
     fn suction_adds_to_total_force() {
-        // Check that layers with suction have higher total force
-        let areas = hollow_cup_areas(20, 5, 314.0, 60.0);
-        let sim = SimulationRunner::run_from_areas(
-            &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 }, &default_plate(), 22.0,
-        ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
-        let layers = sim.layers();
-        // Layer 5 has suction, layer 6 has same wall area but no new suction trigger
-        // Both have same peel from adhesion, but layer 5 should have suction force added
-        let layer_5 = &layers[5];
+        // Same fixture as closed_cup_triggers_suction_warning; check that the
+        // closure layer's total_force exceeds its peel_force.
+        let layers = closed_cup_layer_inputs(5, 10, 1, 2.5, 50.0, 60.0);
+        let sim = SimulationRunner::run_from_layer_inputs(
+            &layers,
+            &ResinProfile::generic_standard(),
+            &PrinterProfile::generic_msla_4k(),
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 },
+            &default_plate(),
+            22.0,
+        )
+        .expect("test fixture: validated profiles satisfy run_from_layer_inputs preconditions");
+        let closure_layer = &sim.layers()[15];
         assert!(
-            layer_5.suction_force_n > 0.0,
-            "layer 5 should have suction force, got {}",
-            layer_5.suction_force_n
+            closure_layer.suction_force_n > 0.0,
+            "closure layer should have suction force, got {}",
+            closure_layer.suction_force_n
         );
         assert!(
-            layer_5.total_force_n > layer_5.peel_force_n,
+            closure_layer.total_force_n > closure_layer.peel_force_n,
             "total should exceed peel when suction present"
         );
     }
