@@ -6,6 +6,28 @@ fn default_voxel_size_mm() -> f32 {
     DEFAULT_VOXEL_SIZE_MM
 }
 
+/// How the printer separates a cured layer from the FEP film (ADR-0007).
+///
+/// Distinct mechanical paradigms produce distinct per-layer time profiles, so
+/// `LayerTimingCalculator` branches on this value. Two variants today; more
+/// may be added (e.g. Anycubic peel-lift hybrids).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReleaseMechanism {
+    /// Build plate (arm) lifts straight up, vat stationary. Athena II, Mars 4,
+    /// classic MSLA. Recipe's `lift_distance_mm` + `lift_speed_mm_min` represent
+    /// actual plate travel distance and speed.
+    #[default]
+    Linear,
+    /// Vat hinges to peel layer off, plate stationary. Mars 5 Ultra, Saturn 4
+    /// variants. Recipe's `lift_distance_mm` + `lift_speed_mm_min` are CTB-file
+    /// METADATA ONLY for Tilt printers — `LayerTimingCalculator` does NOT use
+    /// them; it uses `Recipe::lift_cycle_sec` as the canonical lumped release
+    /// duration. Tilt-angular geometry refinement
+    /// (`tilt_angle_deg` × `tilt_rate_deg_s`) is a follow-on issue.
+    Tilt,
+}
+
 /// Hardware envelope of a printer (ADR-0005, Axis 1).
 /// Identity: `name`. Loaded from TOML profiles in `data/printers/`.
 ///
@@ -72,6 +94,13 @@ pub struct PrinterProfile {
     /// without this field deserialise with the default via `#[serde(default)]`.
     #[serde(default = "default_voxel_size_mm")]
     pub(crate) voxel_size_mm: f32,
+
+    /// How the printer separates cured layers from the FEP film. Selects the
+    /// time-per-layer branch in `LayerTimingCalculator`. Legacy TOML profiles
+    /// without this field deserialise as `Linear` via `#[serde(default)]`
+    /// (matches classic MSLA arm-lift behaviour).
+    #[serde(default)]
+    pub(crate) release_mechanism: ReleaseMechanism,
 }
 
 impl PrinterProfile {
@@ -114,6 +143,9 @@ impl PrinterProfile {
     }
     pub fn voxel_size_mm(&self) -> f32 {
         self.voxel_size_mm
+    }
+    pub fn release_mechanism(&self) -> ReleaseMechanism {
+        self.release_mechanism
     }
 
     /// Validate physical invariants. Must be called after deserialization from
@@ -194,6 +226,7 @@ impl PrinterProfile {
             thermal_tau_sec: 1200.0,
             lcd_uniformity_variation: 0.12, // ParaLED, better than Saturn-class
             voxel_size_mm: DEFAULT_VOXEL_SIZE_MM,
+            release_mechanism: ReleaseMechanism::Tilt, // ADR-0007: Mars 5 Ultra uses tilting vat release
         }
     }
 
@@ -215,6 +248,7 @@ impl PrinterProfile {
             thermal_tau_sec: 1200.0,        // KB-183: estimate
             lcd_uniformity_variation: 0.22, // KB-120: Saturn 2 class
             voxel_size_mm: DEFAULT_VOXEL_SIZE_MM,
+            release_mechanism: ReleaseMechanism::Linear, // classic MSLA arm-lift
         }
     }
 }
@@ -328,6 +362,56 @@ lcd_uniformity_variation = 0.22
         assert!(
             err.contains("layer_height_range_um"),
             "error names the range: {err}"
+        );
+    }
+
+    // --- ReleaseMechanism (ADR-0007) tests ---
+
+    #[test]
+    fn mars5_ultra_factory_is_tilt() {
+        assert_eq!(
+            PrinterProfile::elegoo_mars5_ultra().release_mechanism(),
+            ReleaseMechanism::Tilt,
+        );
+    }
+
+    #[test]
+    fn generic_msla_4k_factory_is_linear() {
+        assert_eq!(
+            PrinterProfile::generic_msla_4k().release_mechanism(),
+            ReleaseMechanism::Linear,
+        );
+    }
+
+    #[test]
+    fn legacy_toml_without_release_mechanism_defaults_to_linear() {
+        // Legacy TOML profiles (athena_ii, generic_msla_4k written before ADR-0007)
+        // must deserialise with release_mechanism = Linear via #[serde(default)].
+        let p: PrinterProfile = toml::from_str(&valid_printer_toml())
+            .expect("valid printer TOML without release_mechanism must parse");
+        assert_eq!(p.release_mechanism(), ReleaseMechanism::Linear);
+    }
+
+    #[test]
+    fn toml_with_explicit_tilt_deserialises() {
+        let toml_str = valid_printer_toml() + "release_mechanism = \"tilt\"\n";
+        let p: PrinterProfile = toml::from_str(&toml_str).expect("explicit tilt must parse");
+        assert_eq!(p.release_mechanism(), ReleaseMechanism::Tilt);
+    }
+
+    #[test]
+    fn toml_with_explicit_linear_deserialises() {
+        let toml_str = valid_printer_toml() + "release_mechanism = \"linear\"\n";
+        let p: PrinterProfile = toml::from_str(&toml_str).expect("explicit linear must parse");
+        assert_eq!(p.release_mechanism(), ReleaseMechanism::Linear);
+    }
+
+    #[test]
+    fn toml_with_unknown_release_mechanism_rejected_at_parse() {
+        let toml_str = valid_printer_toml() + "release_mechanism = \"bogus\"\n";
+        assert!(
+            toml::from_str::<PrinterProfile>(&toml_str).is_err(),
+            "unknown enum variant must fail parse (not validate)"
         );
     }
 

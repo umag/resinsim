@@ -6,6 +6,6 @@ pub mod resin_profile;
 
 pub use failure_event::{FailureEvent, FailureType, Severity};
 pub use layer_result::LayerResult;
-pub use printer_profile::PrinterProfile;
+pub use printer_profile::{PrinterProfile, ReleaseMechanism};
 pub use recipe::Recipe;
 pub use resin_profile::ResinProfile;
