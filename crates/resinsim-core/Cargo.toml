@@ -17,6 +17,12 @@ bitvec = "1.0"
 [dev-dependencies]
 proptest = "1.9.0"
 approx = "0.5"
+cucumber = "0.22.1"
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[[test]]
+name = "uat_gherkin"
+harness = false
 
 [lints]
 workspace = true

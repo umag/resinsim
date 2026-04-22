@@ -1,0 +1,11 @@
+# Nextest configuration for the resinsim workspace.
+#
+# The `uat_gherkin` test target uses cucumber-rs with `harness = false`.
+# Cucumber-rs binaries don't speak libtest's terse listing protocol that
+# nextest uses to enumerate tests, so nextest aborts the entire suite if it
+# tries to probe this binary. We exclude it from the default profile here;
+# run cucumber UAT scenarios with `cargo test --test uat_gherkin -p resinsim-core`
+# instead. See resinsim/docs/adr/0008-bdd-uat-spike-notes.md for context.
+
+[profile.default]
+default-filter = "not binary(uat_gherkin)"
