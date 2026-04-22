@@ -61,6 +61,12 @@ enum ReportType {
         /// Ambient temperature in °C
         #[arg(long, default_value_t = 22.0)]
         ambient: f32,
+        /// Initial LED case temperature in °C at print start (ADR-0007 / KB-152).
+        /// When omitted, falls back to --ambient — the legacy single-stage
+        /// behaviour. Supply the idle-standby reading from the printer (e.g.
+        /// Mars 5 Ultra ≈ 27 °C) to exercise the two-stage LED → vat model.
+        #[arg(long)]
+        initial_led_temp: Option<f32>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -163,6 +169,11 @@ enum InspectDomain {
         /// Ambient temperature in °C (not profile-sourced — user input only).
         #[arg(long, default_value_t = 22.0)]
         ambient: f32,
+        /// Initial LED case temperature in °C at print start. Two-stage model
+        /// (ADR-0007 / KB-152) only — requires --printer to source LED thermal
+        /// coefficients. When omitted, falls back to --ambient (legacy path).
+        #[arg(long)]
+        initial_led_temp: Option<f32>,
         /// Steady-state temperature rise in °C. Profile source: printer
         /// delta_t_steady_c. Default: 10.0.
         #[arg(long)]
@@ -307,6 +318,7 @@ fn main() {
                 exposure,
                 lift_cycle,
                 ambient,
+                initial_led_temp,
                 delta_t,
                 tau,
                 viscosity,
@@ -320,6 +332,7 @@ fn main() {
                 exposure,
                 lift_cycle,
                 ambient,
+                initial_led_temp,
                 delta_t,
                 tau,
                 viscosity,
@@ -370,6 +383,7 @@ fn main() {
                 tip_radius,
                 n_supports,
                 ambient,
+                initial_led_temp,
                 json,
             } => cmd_report_health(
                 stl.as_deref(),
@@ -380,6 +394,7 @@ fn main() {
                 tip_radius,
                 n_supports,
                 ambient,
+                initial_led_temp,
                 json,
             ),
         },
@@ -606,6 +621,7 @@ fn cmd_thermal(
     exposure: Option<f32>,
     lift_cycle: Option<f32>,
     ambient: f32,
+    initial_led_temp: Option<f32>,
     delta_t: Option<f32>,
     tau: Option<f32>,
     viscosity: Option<f32>,
@@ -615,9 +631,9 @@ fn cmd_thermal(
     data_dir: Option<&std::path::Path>,
     json: bool,
 ) {
-    use resinsim_core::entities::ResinProfile;
-    use resinsim_core::services::ThermalCalculator;
-    use resinsim_core::values::ThermalTimeConstant;
+    use resinsim_core::entities::{DEFAULT_CURE_KINETICS_EA_KJ_MOL, ResinProfile};
+    use resinsim_core::services::{CureCalculator, LayerTimingCalculator, ThermalCalculator};
+    use resinsim_core::values::{Energy, PenetrationDepth, ThermalTimeConstant};
 
     // ADR-0004 precedence. Resolution triggered only when --printer or --resin is set.
     let data_dir_resolved = if printer_name.is_some() || resin_name.is_some() {
@@ -684,7 +700,7 @@ fn cmd_thermal(
         }
     };
     // Degradation warnings use the explicit resin if given; otherwise generic-standard.
-    let resin_defaults = resin.unwrap_or_else(ResinProfile::generic_standard);
+    let resin_defaults = resin.clone().unwrap_or_else(ResinProfile::generic_standard);
     let duty = ThermalCalculator::duty_cycle(exposure, lift_cycle);
 
     // Sample at key layers
@@ -700,6 +716,154 @@ fn cmd_thermal(
         s
     };
 
+    // Two-stage path (ADR-0007 / KB-152) when a --printer profile is loaded.
+    // Emits LED temp + vat temp + viscosity + Ec(T) per sample layer. Falls
+    // back to the legacy single-stage output when no profile is supplied.
+    if let (Some(printer), Some(resin_prof)) = (printer.as_ref(), resin.as_ref()) {
+        let cumulative = LayerTimingCalculator::cumulative_times_sec(
+            resin_prof.recipe(),
+            printer,
+            layers.max(1),
+        );
+        let ea_cure = resin_prof.effective_cure_kinetics_ea_kj_mol();
+        let ea_cure_is_default = resin_prof.cure_kinetics_ea_kj_mol().is_none();
+        if ea_cure_is_default && !json {
+            eprintln!(
+                "WARNING: cure-kinetics Ea = {DEFAULT_CURE_KINETICS_EA_KJ_MOL} kJ/mol (literature midpoint estimate) \
+                 — replace with a measured value in the resin's TOML profile before \
+                 trusting cure-depth drift (KB-153)"
+            );
+        }
+
+        let dp = PenetrationDepth::new(resin_prof.penetration_depth_um())
+            .expect("validated ResinProfile has positive penetration_depth_um");
+        let ec_ref = Energy::new(resin_prof.critical_energy_mj_cm2())
+            .expect("validated ResinProfile has positive critical_energy_mj_cm2");
+        let ref_temp_c = resin_prof.reference_temp_c();
+
+        let sample_vat_temps: Vec<(u32, f32, resinsim_core::values::VatTemperature, f32, f32, f32)> =
+            sample_layers
+                .iter()
+                .map(|&l| {
+                    let vat = ThermalCalculator::vat_temperature_at_layer_v2(
+                        resin_prof.recipe(),
+                        printer,
+                        ambient,
+                        initial_led_temp,
+                        l,
+                    );
+                    // Stage-A LED temp: same formula as v2 but skip stage B.
+                    let initial_led_c = initial_led_temp.unwrap_or(ambient);
+                    let time_sec = if l == 0 {
+                        0.0
+                    } else {
+                        cumulative
+                            .get((l - 1) as usize)
+                            .copied()
+                            .unwrap_or_else(|| *cumulative.last().unwrap_or(&0.0))
+                    };
+                    let led_tau_const = ThermalTimeConstant::new(printer.led_tau_sec())
+                        .expect("validated PrinterProfile has positive led_tau_sec");
+                    let led = ThermalCalculator::led_temperature_at_time(
+                        initial_led_c,
+                        printer.led_delta_t_steady_c(),
+                        led_tau_const,
+                        time_sec,
+                    );
+                    let mu = ThermalCalculator::viscosity_at_temperature(
+                        viscosity,
+                        ref_temp_c,
+                        vat.value(),
+                        ea,
+                    );
+                    // Reconstruct Ec(T) for the sample — cure_depth_at_temp uses it internally.
+                    let r_gas: f32 = 8.314;
+                    let t_ref_k = ref_temp_c + 273.15;
+                    let t_vat_k = vat.value() + 273.15;
+                    let ec_t = resin_prof.critical_energy_mj_cm2()
+                        * ((ea_cure * 1000.0 / r_gas) * (1.0 / t_vat_k - 1.0 / t_ref_k)).exp();
+                    (l, time_sec, vat, led.value(), mu, ec_t)
+                })
+                .collect();
+
+        // Cure depth at printer.led_power × recipe.normal_exposure_sec, so the
+        // row reads as a single-energy test exposure; callers needing per-layer
+        // energy from sliced files should use the Report subcommand.
+        let _ = (dp, ec_ref, CureCalculator::cure_depth); // keep import reachable
+
+        if json {
+            let points: Vec<serde_json::Value> = sample_vat_temps
+                .iter()
+                .map(|(l, time_sec, vat, led, mu, ec_t)| {
+                    let mu_ratio = ThermalCalculator::viscosity_ratio(ambient, vat.value(), ea);
+                    serde_json::json!({
+                        "layer": l,
+                        "time_sec": time_sec,
+                        "led_temperature_c": led,
+                        "vat_temperature_c": vat.value(),
+                        "viscosity_mpa_s": mu,
+                        "viscosity_ratio": mu_ratio,
+                        "effective_ec_mj_cm2": ec_t,
+                        "degradation_risk": resin_defaults.is_degradation_risk(*vat),
+                    })
+                })
+                .collect();
+            let result = serde_json::json!({
+                "ambient_c": ambient,
+                "initial_led_c": initial_led_temp.unwrap_or(ambient),
+                "led_delta_t_steady_c": printer.led_delta_t_steady_c(),
+                "led_tau_sec": printer.led_tau_sec(),
+                "led_to_vat_coupling": printer.led_to_vat_coupling(),
+                "cure_kinetics_ea_kj_mol": ea_cure,
+                "cure_kinetics_ea_is_default": ea_cure_is_default,
+                "ea_kj_mol": ea,
+                "points": points,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&result)
+                    .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")
+            );
+        } else {
+            println!("Vat thermal profile ({layers} layers) — two-stage LED → vat (ADR-0007)");
+            println!(
+                "  Ambient: {ambient}°C  Initial LED: {:.1}°C  Coupling: {:.2}  LED τ: {}s",
+                initial_led_temp.unwrap_or(ambient),
+                printer.led_to_vat_coupling(),
+                printer.led_tau_sec(),
+            );
+            println!();
+            println!(
+                "{:>6}  {:>8}  {:>7}  {:>7}  {:>10}  {:>8}",
+                "Layer", "Time", "LED", "Vat", "Viscosity", "Ec(T)"
+            );
+            println!(
+                "{:>6}  {:>8}  {:>7}  {:>7}  {:>10}  {:>8}",
+                "", "(min)", "(°C)", "(°C)", "(mPa·s)", "(mJ/cm²)"
+            );
+            println!("{}", "-".repeat(60));
+            for (l, time_sec, vat, led, mu, ec_t) in &sample_vat_temps {
+                let warn = if resin_defaults.is_degradation_risk(*vat) {
+                    " ⚠"
+                } else {
+                    ""
+                };
+                println!(
+                    "{:>6}  {:>7.1}  {:>6.1}  {:>6.1}  {:>9.1}  {:>7.3}{}",
+                    l,
+                    time_sec / 60.0,
+                    led,
+                    vat.value(),
+                    mu,
+                    ec_t,
+                    warn
+                );
+            }
+        }
+        return;
+    }
+
+    // Legacy single-stage output when no --printer profile is supplied.
     if json {
         let points: Vec<serde_json::Value> = sample_layers
             .iter()
@@ -926,6 +1090,7 @@ fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
 // CLI handler — 9 args after --data-dir (ADR-0004). Profile resolution is
 // unconditional here because both --printer and --resin have clap defaults.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn cmd_report_health(
     path: Option<&str>,
     file_path: Option<&str>,
@@ -935,10 +1100,11 @@ fn cmd_report_health(
     tip_radius: f32,
     n_supports: u32,
     ambient: f32,
+    initial_led_temp: Option<f32>,
     json: bool,
 ) {
     use resinsim_core::app::SimulationRunner;
-    use resinsim_core::entities::Severity;
+    use resinsim_core::entities::{DEFAULT_CURE_KINETICS_EA_KJ_MOL, Severity};
     use resinsim_core::services::build_plate::PlateAdhesionProfile;
     use resinsim_core::services::failure_predictor::SupportConfig;
     use std::path::Path;
@@ -975,6 +1141,16 @@ fn cmd_report_health(
         std::process::exit(1);
     });
 
+    // Loud warning when the resin TOML relies on the KB-153 literature-midpoint
+    // default for cure-kinetics Ea (Ec(T) Arrhenius correction).
+    if resin.cure_kinetics_ea_kj_mol().is_none() && !json {
+        eprintln!(
+            "WARNING: cure-kinetics Ea = {DEFAULT_CURE_KINETICS_EA_KJ_MOL} kJ/mol (literature midpoint estimate) \
+             — replace with a measured value in the resin's TOML profile before \
+             trusting cure-depth drift (KB-153)"
+        );
+    }
+
     let sim = match SimulationRunner::run_auto(
         Path::new(path),
         &resin,
@@ -982,7 +1158,7 @@ fn cmd_report_health(
         &supports,
         &plate,
         ambient,
-        None, // Step 9 wires --initial-led-temp into this callsite
+        initial_led_temp,
     ) {
         Ok(s) => s,
         Err(e) => {
