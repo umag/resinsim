@@ -28,3 +28,9 @@ lcd_uniformity_variation = 0.12
 # Release mechanism (ADR-0007) — Mars 5 Ultra uses tilting vat release, not
 # straight-up build-plate lift. See docs/adr/0007-led-and-vat-as-separate-temperatures.md.
 release_mechanism = "tilt"
+
+# LED thermal calibration (KB-152) — fitted from data/elegoo/ overnight session.
+# DELTA semantics (rise above initial_led_c), parallels delta_t_steady_c.
+led_delta_t_steady_c = 13.5   # plateau ~40.5 °C − idle ~27 °C
+led_tau_sec = 4000.0          # 3–4 h to 95 % of plateau (3τ ≈ 3–4 h)
+led_to_vat_coupling = 0.71    # user estimate (no vat sensor); recalibrate when added

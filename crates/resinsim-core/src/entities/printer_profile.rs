@@ -6,6 +6,24 @@ fn default_voxel_size_mm() -> f32 {
     DEFAULT_VOXEL_SIZE_MM
 }
 
+/// Conservative legacy-matching default for LED steady-state rise. Parallels
+/// existing `delta_t_steady_c` legacy default. Unit: °C.
+fn default_led_delta_t_steady_c() -> f32 {
+    10.0
+}
+
+/// Conservative legacy-matching default for LED thermal time constant. Unit: seconds.
+fn default_led_tau_sec() -> f32 {
+    1200.0
+}
+
+/// Conservative midpoint default for LED → vat coupling factor. Dimensionless.
+/// A legacy profile without measurements gets 0.5 (halfway between no coupling
+/// and full coupling). Known-calibrated profiles override (Mars 5 Ultra = 0.71).
+fn default_led_to_vat_coupling() -> f32 {
+    0.5
+}
+
 /// How the printer separates a cured layer from the FEP film (ADR-0007).
 ///
 /// Distinct mechanical paradigms produce distinct per-layer time profiles, so
@@ -101,6 +119,31 @@ pub struct PrinterProfile {
     /// (matches classic MSLA arm-lift behaviour).
     #[serde(default)]
     pub(crate) release_mechanism: ReleaseMechanism,
+
+    // --- LED thermal calibration (ADR-0007, KB-152) ---
+    //
+    // DELTA semantics — parallels existing `delta_t_steady_c` (the vat-level rise).
+    // NOT an absolute temperature. `ThermalCalculator` stage A computes:
+    //   led_temp(t) = initial_led_c + led_delta_t_steady_c × (1 - exp(-t/tau))
+    //
+    /// Steady-state LED-case temperature rise above `initial_led_c`. Unit: °C.
+    /// For Mars 5 Ultra: 13.5 °C (plateau ~40.5 °C − idle ~27 °C from
+    /// `data/elegoo/roden_uv_led_temp_dec_jan_hourly.csv`).
+    #[serde(default = "default_led_delta_t_steady_c")]
+    pub(crate) led_delta_t_steady_c: f32,
+
+    /// Time constant of the LED heat-up curve. Unit: seconds. For Mars 5
+    /// Ultra: 4000 s (3–4 h to 95 % of plateau ⇒ 3τ ≈ 3–4 h).
+    #[serde(default = "default_led_tau_sec")]
+    pub(crate) led_tau_sec: f32,
+
+    /// LED → vat coupling factor. Dimensionless, [0, 1]. `ThermalCalculator`
+    /// stage B computes: `vat_temp = ambient_c + coupling × (led_temp - ambient_c)`.
+    /// For Mars 5 Ultra: 0.71 (user estimate — LED 40, vat ~35, ambient 23 ⇒
+    /// ΔT_led = 17, ΔT_vat = 12, 12/17 ≈ 0.71). ESTIMATE only; the user has no
+    /// vat sensor. Re-calibrate when one is added.
+    #[serde(default = "default_led_to_vat_coupling")]
+    pub(crate) led_to_vat_coupling: f32,
 }
 
 impl PrinterProfile {
@@ -146,6 +189,15 @@ impl PrinterProfile {
     }
     pub fn release_mechanism(&self) -> ReleaseMechanism {
         self.release_mechanism
+    }
+    pub fn led_delta_t_steady_c(&self) -> f32 {
+        self.led_delta_t_steady_c
+    }
+    pub fn led_tau_sec(&self) -> f32 {
+        self.led_tau_sec
+    }
+    pub fn led_to_vat_coupling(&self) -> f32 {
+        self.led_to_vat_coupling
     }
 
     /// Validate physical invariants. Must be called after deserialization from
@@ -202,6 +254,26 @@ impl PrinterProfile {
                 self.voxel_size_mm
             ));
         }
+        if !self.led_delta_t_steady_c.is_finite() {
+            return Err(format!(
+                "led_delta_t_steady_c must be finite (got {})",
+                self.led_delta_t_steady_c
+            ));
+        }
+        if !self.led_tau_sec.is_finite() || self.led_tau_sec <= 0.0 {
+            return Err(format!(
+                "led_tau_sec must be finite and > 0 (got {})",
+                self.led_tau_sec
+            ));
+        }
+        if !self.led_to_vat_coupling.is_finite()
+            || !(0.0..=1.0).contains(&self.led_to_vat_coupling)
+        {
+            return Err(format!(
+                "led_to_vat_coupling must be in [0.0, 1.0] (got {})",
+                self.led_to_vat_coupling
+            ));
+        }
         Ok(())
     }
 
@@ -227,6 +299,10 @@ impl PrinterProfile {
             lcd_uniformity_variation: 0.12, // ParaLED, better than Saturn-class
             voxel_size_mm: DEFAULT_VOXEL_SIZE_MM,
             release_mechanism: ReleaseMechanism::Tilt, // ADR-0007: Mars 5 Ultra uses tilting vat release
+            // LED thermal (KB-152) — fitted from data/elegoo/ overnight session.
+            led_delta_t_steady_c: 13.5, // plateau 40.5 − idle 27
+            led_tau_sec: 4000.0,        // 3–4 h to 95 % of plateau (3τ ≈ 3–4 h)
+            led_to_vat_coupling: 0.71,  // user estimate — no vat sensor; recalibrate when added
         }
     }
 
@@ -249,6 +325,10 @@ impl PrinterProfile {
             lcd_uniformity_variation: 0.22, // KB-120: Saturn 2 class
             voxel_size_mm: DEFAULT_VOXEL_SIZE_MM,
             release_mechanism: ReleaseMechanism::Linear, // classic MSLA arm-lift
+            // LED thermal — conservative defaults until per-printer calibration exists.
+            led_delta_t_steady_c: 10.0,
+            led_tau_sec: 1200.0,
+            led_to_vat_coupling: 0.5,
         }
     }
 }
@@ -404,6 +484,86 @@ lcd_uniformity_variation = 0.22
         let toml_str = valid_printer_toml() + "release_mechanism = \"linear\"\n";
         let p: PrinterProfile = toml::from_str(&toml_str).expect("explicit linear must parse");
         assert_eq!(p.release_mechanism(), ReleaseMechanism::Linear);
+    }
+
+    // --- LED thermal fields (KB-152) tests ---
+
+    #[test]
+    fn mars5_ultra_led_thermal_fitted_values() {
+        let p = PrinterProfile::elegoo_mars5_ultra();
+        assert!((p.led_delta_t_steady_c() - 13.5).abs() < 1e-4);
+        assert!((p.led_tau_sec() - 4000.0).abs() < 1e-4);
+        assert!((p.led_to_vat_coupling() - 0.71).abs() < 1e-4);
+    }
+
+    #[test]
+    fn legacy_toml_gets_conservative_led_defaults() {
+        // Valid TOML without led_* fields → serde defaults kick in (10.0, 1200, 0.5).
+        let p: PrinterProfile = toml::from_str(&valid_printer_toml())
+            .expect("legacy printer TOML without led_* fields must parse");
+        assert_eq!(p.led_delta_t_steady_c(), 10.0);
+        assert_eq!(p.led_tau_sec(), 1200.0);
+        assert_eq!(p.led_to_vat_coupling(), 0.5);
+        p.validate().expect("legacy defaults must satisfy validate()");
+    }
+
+    #[test]
+    fn led_tau_rejects_zero() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.led_tau_sec = 0.0;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn led_tau_rejects_negative() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.led_tau_sec = -1.0;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn led_tau_rejects_nan() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.led_tau_sec = f32::NAN;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn led_coupling_rejects_above_one() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.led_to_vat_coupling = 1.5;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn led_coupling_rejects_negative() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.led_to_vat_coupling = -0.1;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn led_coupling_boundary_zero_and_one_accepted() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.led_to_vat_coupling = 0.0;
+        assert!(p.validate().is_ok());
+        p.led_to_vat_coupling = 1.0;
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn led_delta_t_rejects_nan() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.led_delta_t_steady_c = f32::NAN;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn led_delta_t_accepts_zero() {
+        // Zero rise is physically valid (perfectly dissipating printer).
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.led_delta_t_steady_c = 0.0;
+        assert!(p.validate().is_ok());
     }
 
     #[test]
