@@ -106,4 +106,97 @@ proptest! {
             prop_assert!(i1 >= i2 - 1e-6, "deeper should be dimmer: z1={z1} i1={i1}, z2={z2} i2={i2}");
         }
     }
+
+    // --- KB-153: Arrhenius-corrected Ec(T) properties ----------------------
+
+    /// Ec(T = T_ref) = Ec_ref ⇒ cure_depth_at_temp delegates to cure_depth.
+    /// Ranges cover useful operating envelope without overflow corners.
+    #[test]
+    fn ec_at_ref_temp_equals_ec_ref(
+        dp in 40.0f32..600.0,
+        ec_ref in 1.0f32..50.0,
+        e_ratio in 1.01f32..20.0,
+        ref_temp in 15.0f32..35.0,
+        ea in 5.0f32..100.0,
+    ) {
+        let energy = Energy::new(ec_ref * e_ratio)
+            .expect("proptest: ec_ref × positive ratio produces valid Energy");
+        let baseline = CureCalculator::cure_depth(
+            PenetrationDepth::new(dp).expect("proptest 40..600 µm"),
+            energy,
+            Energy::new(ec_ref).expect("proptest 1..50 mJ/cm²"),
+        );
+        let at_ref = CureCalculator::cure_depth_at_temp(
+            PenetrationDepth::new(dp).expect("proptest 40..600 µm"),
+            energy,
+            Energy::new(ec_ref).expect("proptest 1..50 mJ/cm²"),
+            ref_temp,
+            ref_temp,
+            ea,
+        );
+        let rel_err = (at_ref.value() - baseline.value()).abs()
+            / baseline.value().abs().max(1e-4);
+        prop_assert!(rel_err < 1e-4,
+            "T = T_ref should give Cd = Cd_baseline: {} vs {} (rel {})",
+            at_ref.value(), baseline.value(), rel_err);
+    }
+
+    /// Monotonic: T2 > T1 ⇒ Cd(T2) > Cd(T1). At fixed exposure, warmer ⇒
+    /// lower Ec ⇒ deeper cure.
+    #[test]
+    fn ec_decreases_with_temperature(
+        dp in 40.0f32..600.0,
+        ec_ref in 1.0f32..50.0,
+        e_ratio in 1.1f32..20.0,
+        ref_temp in 15.0f32..35.0,
+        t1 in 10.0f32..40.0,
+        delta in 1.0f32..35.0,
+        ea in 5.0f32..100.0,
+    ) {
+        let t2 = t1 + delta;
+        // Bound t2 to the property's useful range; proptest strategies can overshoot.
+        prop_assume!(t2 <= 80.0);
+        let energy = Energy::new(ec_ref * e_ratio)
+            .expect("proptest: ec_ref × positive ratio produces valid Energy");
+        let dp_v = PenetrationDepth::new(dp).expect("proptest 40..600 µm");
+        let ec_v = Energy::new(ec_ref).expect("proptest 1..50 mJ/cm²");
+        let cd1 = CureCalculator::cure_depth_at_temp(dp_v, energy, ec_v, ref_temp, t1, ea);
+        let cd2 = CureCalculator::cure_depth_at_temp(dp_v, energy, ec_v, ref_temp, t2, ea);
+        prop_assert!(cd2.value() >= cd1.value() - 1e-4,
+            "warmer vat should give deeper (or equal) cure: T1={t1} Cd1={}, T2={t2} Cd2={}",
+            cd1.value(), cd2.value());
+    }
+
+    /// Arrhenius is linear in 1/T, so symmetry holds in 1/T-space:
+    /// given T1, derive T2 from 1/T2 = 2/T_ref - 1/T1. Then
+    /// Ec(T1) × Ec(T2) = Ec_ref², equivalently
+    /// (Ec_ref - Cd1 factor) × (Ec_ref - Cd2 factor) = Ec_ref².
+    /// Direct test: Ec(T1) × Ec(T2) / Ec_ref² ≈ 1.
+    #[test]
+    fn ec_arrhenius_symmetric_in_inverse_temp(
+        ec_ref in 1.0f32..50.0,
+        ref_temp_c in 15.0f32..35.0,
+        t1_c in 10.0f32..60.0,
+        ea in 5.0f32..100.0,
+    ) {
+        const R: f32 = 8.314;
+        let t_ref_k = ref_temp_c + 273.15;
+        let t1_k = t1_c + 273.15;
+        // Arrhenius symmetry: 1/T2 = 2/T_ref - 1/T1.
+        let t2_k_inv = 2.0 / t_ref_k - 1.0 / t1_k;
+        prop_assume!(t2_k_inv > 0.0);
+        let t2_k = 1.0 / t2_k_inv;
+        prop_assume!(t2_k > 273.15 - 20.0 && t2_k < 273.15 + 100.0);
+        // Compute Ec(T1), Ec(T2) directly via the Arrhenius formula to isolate
+        // the math from Beer-Lambert arithmetic.
+        let ea_j = ea * 1000.0;
+        let ec_t1 = ec_ref * ((ea_j / R) * (1.0 / t1_k - 1.0 / t_ref_k)).exp();
+        let ec_t2 = ec_ref * ((ea_j / R) * (1.0 / t2_k - 1.0 / t_ref_k)).exp();
+        let product = ec_t1 * ec_t2;
+        let ref_sq = ec_ref * ec_ref;
+        let rel_err = (product - ref_sq).abs() / ref_sq;
+        prop_assert!(rel_err < 1e-3,
+            "Arrhenius 1/T-space symmetry: Ec(T1) × Ec(T2) = Ec_ref² failed: \
+             T1_K={t1_k} T2_K={t2_k} product={product} ref²={ref_sq} rel={rel_err}");
+    }
 }
