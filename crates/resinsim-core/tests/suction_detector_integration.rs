@@ -9,7 +9,11 @@ use resinsim_core::entities::{FailureType, PrinterProfile, ResinProfile};
 use resinsim_core::io::sliced::LayerInput;
 use resinsim_core::services::build_plate::PlateAdhesionProfile;
 use resinsim_core::services::failure_predictor::SupportConfig;
-use resinsim_core::values::LayerMask;
+use resinsim_core::values::{AmbientTemperature, LayerMask};
+
+fn test_ambient() -> AmbientTemperature {
+    AmbientTemperature::new(22.0).expect("22.0 °C is in AmbientTemperature domain")
+}
 
 fn solid_mask(w: u32, h: u32, voxel: f32) -> LayerMask {
     LayerMask::new_all_solid(w, h, voxel).expect("valid all-solid mask")
@@ -95,7 +99,7 @@ fn raft_plus_fluid_permeable_supports_emits_no_suction_critical() {
             n_supports: 0,
         },
         &PlateAdhesionProfile::default_textured(),
-        22.0,
+        test_ambient(),
         None,
     )
     .expect("validated profiles satisfy run_from_layer_inputs preconditions");
@@ -141,7 +145,7 @@ fn external_ctb_emits_no_suction_critical() {
             n_supports: 0,
         },
         &PlateAdhesionProfile::default_textured(),
-        22.0,
+        test_ambient(),
         None,
     )
     .expect("fixture + profiles run successfully");

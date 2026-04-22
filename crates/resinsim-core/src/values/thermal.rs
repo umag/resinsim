@@ -20,6 +20,17 @@ pub struct VatTemperature(f32);
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct InitialLedTemperature(f32);
 
+/// Ambient (room) temperature. Unit: °C.
+/// User-supplied print-environment constant — drives the stage-B coupling
+/// formula `vat = ambient + coupling × (led − ambient)` (ADR-0007 / KB-152).
+///
+/// Enforces the same physical bounds as `VatTemperature` and
+/// `InitialLedTemperature` (finite, above absolute zero). CLI and
+/// SimulationRunner convert from raw `f32` at the trust boundary so unphysical
+/// values fail with a readable error rather than panicking mid-simulation.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct AmbientTemperature(f32);
+
 /// Heat flux from LCD/LED screen into resin. Unit: Watts.
 /// Q = P_led × duty_cycle × A_exposed. KB-151.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -69,6 +80,28 @@ impl InitialLedTemperature {
         if celsius <= Self::ABSOLUTE_ZERO_C {
             return Err(format!(
                 "initial LED temperature must be above absolute zero ({:.2} °C), got {celsius}",
+                Self::ABSOLUTE_ZERO_C
+            ));
+        }
+        Ok(Self(celsius))
+    }
+
+    pub fn value(&self) -> f32 {
+        self.0
+    }
+}
+
+impl AmbientTemperature {
+    /// Absolute zero. Temperatures below this are unphysical.
+    const ABSOLUTE_ZERO_C: f32 = -273.15;
+
+    pub fn new(celsius: f32) -> Result<Self, String> {
+        if !celsius.is_finite() {
+            return Err(format!("ambient temperature must be finite, got {celsius}"));
+        }
+        if celsius <= Self::ABSOLUTE_ZERO_C {
+            return Err(format!(
+                "ambient temperature must be above absolute zero ({:.2} °C), got {celsius}",
                 Self::ABSOLUTE_ZERO_C
             ));
         }
@@ -195,6 +228,35 @@ mod tests {
                 .expect("test fixture: 27.0 °C is in InitialLedTemperature domain")
                 .value(),
             27.0
+        );
+    }
+
+    // --- AmbientTemperature ---
+
+    #[test]
+    fn ambient_temperature_new_rejects_nan() {
+        assert!(AmbientTemperature::new(f32::NAN).is_err());
+    }
+
+    #[test]
+    fn ambient_temperature_new_rejects_below_absolute_zero() {
+        assert!(AmbientTemperature::new(-273.15).is_err());
+        assert!(AmbientTemperature::new(-300.0).is_err());
+    }
+
+    #[test]
+    fn ambient_temperature_new_rejects_infinity() {
+        assert!(AmbientTemperature::new(f32::INFINITY).is_err());
+        assert!(AmbientTemperature::new(f32::NEG_INFINITY).is_err());
+    }
+
+    #[test]
+    fn ambient_temperature_new_accepts_normal() {
+        assert_eq!(
+            AmbientTemperature::new(22.0)
+                .expect("test fixture: 22.0 °C is in AmbientTemperature domain")
+                .value(),
+            22.0
         );
     }
 

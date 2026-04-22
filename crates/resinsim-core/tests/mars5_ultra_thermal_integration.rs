@@ -12,7 +12,7 @@ use resinsim_core::entities::{PrinterProfile, ResinProfile};
 use resinsim_core::services::build_plate::PlateAdhesionProfile;
 use resinsim_core::services::failure_predictor::SupportConfig;
 use resinsim_core::services::LayerTimingCalculator;
-use resinsim_core::values::{CrossSectionArea, InitialLedTemperature};
+use resinsim_core::values::{AmbientTemperature, CrossSectionArea, InitialLedTemperature};
 
 fn cube_areas(n_layers: usize, area_mm2: f64) -> Vec<CrossSectionArea> {
     vec![
@@ -60,7 +60,7 @@ fn mars5_ultra_2000_layer_thermal_plateau() {
             n_supports: 20,
         },
         &PlateAdhesionProfile::default_textured(),
-        23.0,        // ambient °C
+        AmbientTemperature::new(23.0).expect("23.0 °C is a valid AmbientTemperature"),
         Some(InitialLedTemperature::new(27.0).expect("27.0 °C is a valid InitialLedTemperature")),
     )
     .expect("validated Mars 5 Ultra profile satisfies run_from_areas preconditions");

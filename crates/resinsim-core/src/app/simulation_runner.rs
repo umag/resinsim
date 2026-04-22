@@ -9,7 +9,9 @@ use crate::services::failure_predictor::{
 use crate::services::pairing_validator;
 use crate::services::suction_detector::SuctionDetector;
 use crate::simulation::PrintSimulation;
-use crate::values::{CrossSectionArea, InitialLedTemperature, LayerMask, LayerPhase};
+use crate::values::{
+    AmbientTemperature, CrossSectionArea, InitialLedTemperature, LayerMask, LayerPhase,
+};
 
 /// Application service: orchestrates a full simulation run.
 /// Loads geometry, slices it, runs FailurePredictor per layer,
@@ -33,7 +35,7 @@ impl SimulationRunner {
         printer: &PrinterProfile,
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
-        ambient_c: f32,
+        ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
@@ -60,7 +62,7 @@ impl SimulationRunner {
             printer,
             supports,
             plate,
-            ambient_c,
+            ambient,
             initial_led_temp,
         )
     }
@@ -82,7 +84,7 @@ impl SimulationRunner {
         printer: &PrinterProfile,
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
-        ambient_c: f32,
+        ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
@@ -104,7 +106,7 @@ impl SimulationRunner {
             printer,
             supports,
             plate,
-            ambient_c,
+            ambient,
             initial_led_temp,
         )
     }
@@ -123,7 +125,7 @@ impl SimulationRunner {
         printer: &PrinterProfile,
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
-        ambient_c: f32,
+        ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
@@ -174,7 +176,7 @@ impl SimulationRunner {
             printer,
             supports,
             plate,
-            ambient_c,
+            ambient,
             initial_led_temp,
         )
     }
@@ -190,7 +192,7 @@ impl SimulationRunner {
         printer: &PrinterProfile,
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
-        ambient_c: f32,
+        ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
     ) -> Result<PrintSimulation, String> {
         let recipe = resin.recipe();
@@ -201,7 +203,7 @@ impl SimulationRunner {
         // to every predict_layer call. ADR-0007 follow-on (step-10 review-code
         // LOW).
         let thermal = ThermalContext {
-            ambient_c,
+            ambient,
             initial_led_temp,
         };
 
@@ -251,7 +253,7 @@ impl SimulationRunner {
         printer: &PrinterProfile,
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
-        ambient_c: f32,
+        ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
     ) -> Result<PrintSimulation, String> {
         let format = crate::io::sliced::detect_format(path)
@@ -264,7 +266,7 @@ impl SimulationRunner {
                 printer,
                 supports,
                 plate,
-                ambient_c,
+                ambient,
                 initial_led_temp,
             ),
             "CTB" => {
@@ -275,7 +277,7 @@ impl SimulationRunner {
                     printer,
                     supports,
                     plate,
-                    ambient_c,
+                    ambient,
                     initial_led_temp,
                 )
             }
@@ -290,6 +292,11 @@ mod tests {
 
     fn default_plate() -> PlateAdhesionProfile {
         PlateAdhesionProfile::default_textured()
+    }
+
+    fn test_ambient() -> AmbientTemperature {
+        AmbientTemperature::new(22.0)
+            .expect("test fixture: 22.0 °C is in AmbientTemperature domain")
     }
 
     fn cube_areas(n_layers: usize, area: f64) -> Vec<CrossSectionArea> {
@@ -313,7 +320,7 @@ mod tests {
         let areas = cube_areas(100, 100.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0, None,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), test_ambient(), None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let layers = sim.layers();
         let first_force = layers[10].total_force_n;
@@ -329,7 +336,7 @@ mod tests {
         let areas = sphere_areas(200, 10.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 30 }, &default_plate(), 22.0, None,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 30 }, &default_plate(), test_ambient(), None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let summary = sim.summary();
         assert!(
@@ -344,7 +351,7 @@ mod tests {
         let areas = cube_areas(100, 100.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0, None,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), test_ambient(), None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         assert_eq!(
             sim.summary().critical_failures,
@@ -361,7 +368,7 @@ mod tests {
         let areas = cube_areas(50, 5000.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 5 }, &default_plate(), 22.0, None,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 5 }, &default_plate(), test_ambient(), None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let overload_count = sim
             .failures()
@@ -385,7 +392,7 @@ mod tests {
         };
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.0, n_supports: 0 }, &no_plate, 22.0, None,
+            &SupportConfig { tip_radius_mm: 0.0, n_supports: 0 }, &no_plate, test_ambient(), None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         assert!(
             sim.summary().critical_failures > 0,
@@ -476,7 +483,7 @@ mod tests {
             &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 },
             &default_plate(),
-            22.0,
+            test_ambient(),
             None,
         )
         .expect("test fixture: validated profiles satisfy run_from_layer_inputs preconditions");
@@ -499,7 +506,7 @@ mod tests {
         let areas = cube_areas(100, 100.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0, None,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), test_ambient(), None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let suction_count = sim
             .failures()
@@ -520,7 +527,7 @@ mod tests {
             &PrinterProfile::generic_msla_4k(),
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 },
             &default_plate(),
-            22.0,
+            test_ambient(),
             None,
         )
         .expect("test fixture: validated profiles satisfy run_from_layer_inputs preconditions");
@@ -541,7 +548,7 @@ mod tests {
         let areas = cube_areas(500, 100.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0, None,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), test_ambient(), None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let layers = sim.layers();
         assert!(layers[490].vat_temperature_c > layers[10].vat_temperature_c + 3.0);
@@ -578,7 +585,7 @@ mod tests {
                 n_supports: 10,
             },
             &default_plate(),
-            22.0,
+            test_ambient(),
             None,
         );
         assert!(
@@ -608,7 +615,7 @@ mod tests {
                 n_supports: 10,
             },
             &default_plate(),
-            22.0,
+            test_ambient(),
             None,
         )
         .expect_err("pairing violation must fail simulation entry");
@@ -639,7 +646,7 @@ mod tests {
                 n_supports: 10,
             },
             &default_plate(),
-            22.0,
+            test_ambient(),
             None,
         )
         .expect_err("multiple pairing violations must fail");

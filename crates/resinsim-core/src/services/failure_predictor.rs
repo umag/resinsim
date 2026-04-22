@@ -8,7 +8,8 @@ use crate::services::{
     ZAxisCompensator,
 };
 use crate::values::{
-    CrossSectionArea, Energy, InitialLedTemperature, PeelForce, PenetrationDepth, SafetyFactor,
+    AmbientTemperature, CrossSectionArea, Energy, InitialLedTemperature, PeelForce,
+    PenetrationDepth, SafetyFactor,
 };
 
 /// Domain service: orchestrates all physics checks for a single layer.
@@ -36,10 +37,12 @@ pub struct SupportConfig {
 /// them out of `LayerOverrides` clarifies intent.
 #[derive(Debug, Clone, Copy)]
 pub struct ThermalContext {
-    /// Room ambient temperature in °C. User-supplied, not profile-sourced.
-    pub ambient_c: f32,
+    /// Room ambient temperature. User-supplied, not profile-sourced. Typed
+    /// via `AmbientTemperature` (finite, above absolute zero) so unphysical
+    /// values fail at construction in the caller.
+    pub ambient: AmbientTemperature,
     /// Initial LED case temperature at print start (ADR-0007 / KB-152).
-    /// When `None`, falls back to `ambient_c` — legacy single-stage behaviour
+    /// When `None`, falls back to `ambient` — legacy single-stage behaviour
     /// where the LED is assumed to start at ambient. Typed via
     /// `InitialLedTemperature` so unphysical values fail at construction in
     /// the caller, not as a panic mid-simulation.
@@ -86,7 +89,7 @@ impl FailurePredictor {
         let vat_temp = ThermalCalculator::vat_temperature_at_layer_v2(
             recipe,
             printer,
-            thermal.ambient_c,
+            thermal.ambient.value(),
             thermal.initial_led_temp.map(|t| t.value()),
             layer,
         );
@@ -343,7 +346,8 @@ mod tests {
 
     fn test_thermal() -> ThermalContext {
         ThermalContext {
-            ambient_c: 22.0,
+            ambient: AmbientTemperature::new(22.0)
+                .expect("test fixture: 22.0 °C is in AmbientTemperature domain"),
             initial_led_temp: None,
         }
     }

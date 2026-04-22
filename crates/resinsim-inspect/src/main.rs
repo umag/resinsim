@@ -633,7 +633,9 @@ fn cmd_thermal(
 ) {
     use resinsim_core::entities::{DEFAULT_CURE_KINETICS_EA_KJ_MOL, ResinProfile};
     use resinsim_core::services::{CureCalculator, LayerTimingCalculator, ThermalCalculator};
-    use resinsim_core::values::{Energy, InitialLedTemperature, ThermalTimeConstant};
+    use resinsim_core::values::{
+        AmbientTemperature, Energy, InitialLedTemperature, ThermalTimeConstant,
+    };
 
     // ADR-0004 precedence. Resolution triggered only when --printer or --resin is set.
     let data_dir_resolved = if printer_name.is_some() || resin_name.is_some() {
@@ -709,6 +711,13 @@ fn cmd_thermal(
             std::process::exit(2);
         }
     };
+    // Parse-time validation of --ambient via AmbientTemperature::new. Rejects
+    // NaN / below absolute zero / infinite before computing any Arrhenius math
+    // that would otherwise fall over downstream.
+    if let Err(e) = AmbientTemperature::new(ambient) {
+        eprintln!("invalid --ambient: {e}");
+        std::process::exit(2);
+    }
     // Degradation warnings use the explicit resin if given; otherwise generic-standard.
     let resin_defaults = resin
         .as_ref()
@@ -1130,7 +1139,7 @@ fn cmd_report_health(
     use resinsim_core::entities::{DEFAULT_CURE_KINETICS_EA_KJ_MOL, Severity};
     use resinsim_core::services::build_plate::PlateAdhesionProfile;
     use resinsim_core::services::failure_predictor::SupportConfig;
-    use resinsim_core::values::InitialLedTemperature;
+    use resinsim_core::values::{AmbientTemperature, InitialLedTemperature};
     use std::path::Path;
 
     // Parse-time validation of --initial-led-temp via the typed constructor —
@@ -1139,6 +1148,15 @@ fn cmd_report_health(
         Ok(v) => v,
         Err(e) => {
             eprintln!("invalid --initial-led-temp: {e}");
+            std::process::exit(2);
+        }
+    };
+
+    // Parse-time validation of --ambient via AmbientTemperature::new.
+    let ambient_typed = match AmbientTemperature::new(ambient) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("invalid --ambient: {e}");
             std::process::exit(2);
         }
     };
@@ -1191,7 +1209,7 @@ fn cmd_report_health(
         &printer,
         &supports,
         &plate,
-        ambient,
+        ambient_typed,
         initial_led_temp_typed,
     ) {
         Ok(s) => s,
