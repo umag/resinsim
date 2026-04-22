@@ -34,13 +34,25 @@ pub struct Recipe {
     pub(crate) lift_speed_mm_min: f32,
     pub(crate) lift_cycle_sec: f32,
     pub(crate) lift_distance_mm: f32,
+
+    /// Retract speed (plate or vat return motion). Linear-mechanism printers
+    /// commonly have retract speed 2–3× faster than lift speed; `LayerTimingCalculator`
+    /// uses both to compute per-layer time. For Tilt-mechanism printers this is
+    /// CTB metadata only (the calculator ignores it; see ADR-0007).
+    ///
+    /// Serde default `None` ⇒ fall back to `lift_speed_mm_min`. Legacy TOMLs
+    /// written before this field existed behave as if lift and retract speeds
+    /// are equal.
+    #[serde(default)]
+    pub(crate) retract_speed_mm_min: Option<f32>,
 }
 
 impl Recipe {
     /// In-crate constructor. All floating-point fields must be finite and positive.
-    /// Wait times must be finite and >= 0 (zero wait is legitimate).
+    /// Wait times must be finite and >= 0 (zero wait is legitimate). `retract_speed_mm_min`
+    /// is `Option<f32>`; `None` falls back to `lift_speed_mm_min` at read time.
     ///
-    /// 11 arguments matches the 11 Recipe fields — a builder would hide the
+    /// 12 arguments matches the 12 Recipe fields — a builder would hide the
     /// validated-construction contract that funnels through this single entry point.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -55,6 +67,7 @@ impl Recipe {
         lift_speed_mm_min: f32,
         lift_cycle_sec: f32,
         lift_distance_mm: f32,
+        retract_speed_mm_min: Option<f32>,
     ) -> Result<Self, String> {
         let r = Self {
             layer_height_um,
@@ -68,6 +81,7 @@ impl Recipe {
             lift_speed_mm_min,
             lift_cycle_sec,
             lift_distance_mm,
+            retract_speed_mm_min,
         };
         r.validate()?;
         Ok(r)
@@ -95,6 +109,15 @@ impl Recipe {
         for (val, field) in non_negative_checks {
             if !val.is_finite() || *val < 0.0 {
                 return Err(format!("{field} must be finite and >= 0 (got {val})"));
+            }
+        }
+        // retract_speed_mm_min: when present, must be finite and > 0. None is legal
+        // (falls back to lift_speed_mm_min at read time).
+        if let Some(v) = self.retract_speed_mm_min {
+            if !v.is_finite() || v <= 0.0 {
+                return Err(format!(
+                    "retract_speed_mm_min must be finite and > 0 when set (got {v})"
+                ));
             }
         }
         Ok(())
@@ -136,6 +159,19 @@ impl Recipe {
         self.lift_distance_mm
     }
 
+    /// Retract speed with fallback. Returns the explicit retract_speed_mm_min if
+    /// present, otherwise `lift_speed_mm_min`. Legacy recipes without the field
+    /// behave as if retract_speed equals lift_speed.
+    pub fn retract_speed_mm_min(&self) -> f32 {
+        self.retract_speed_mm_min.unwrap_or(self.lift_speed_mm_min)
+    }
+
+    /// Whether `retract_speed_mm_min` was set explicitly (vs falling back to
+    /// `lift_speed_mm_min`). Useful for `LayerTimingCalculator` diagnostics.
+    pub fn has_explicit_retract_speed(&self) -> bool {
+        self.retract_speed_mm_min.is_some()
+    }
+
     /// Baseline recipe for a generic standard resin. Values match the recipe previously
     /// baked into `PrinterProfile::generic_msla_4k` (KB-171 RERF exposure finder + typical
     /// MSLA 4K defaults). Migration rationale: same resin as before, same recipe — just
@@ -153,6 +189,7 @@ impl Recipe {
             60.0, // lift_speed_mm_min
             7.5,  // lift_cycle_sec
             5.0,  // lift_distance_mm
+            None, // retract_speed_mm_min — falls back to lift_speed_mm_min
         )
         .expect(
             "Recipe::generic_standard factory constants must satisfy Recipe::validate() \
@@ -177,6 +214,7 @@ impl Recipe {
             50.0, // lift_speed_mm_min — slower for viscous resin
             8.5,  // lift_cycle_sec
             5.0,  // lift_distance_mm
+            None, // retract_speed_mm_min — falls back to lift_speed_mm_min
         )
         .expect(
             "Recipe::elegoo_ceramic_grey factory constants must satisfy Recipe::validate() \
@@ -231,39 +269,76 @@ mod tests {
 
     #[test]
     fn new_rejects_nan_layer_height() {
-        let r = Recipe::new(f32::NAN, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0);
+        let r = Recipe::new(f32::NAN, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, None);
         assert!(r.is_err());
     }
 
     #[test]
     fn new_rejects_zero_exposure() {
-        let r = Recipe::new(50.0, 6, 3, 0.0, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0);
+        let r = Recipe::new(50.0, 6, 3, 0.0, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, None);
         assert!(r.is_err());
     }
 
     #[test]
     fn new_rejects_negative_lift_speed() {
-        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, -1.0, 7.5, 5.0);
+        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, -1.0, 7.5, 5.0, None);
         assert!(r.is_err());
     }
 
     #[test]
     fn new_rejects_nan_wait_before_cure() {
-        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, f32::NAN, 1.0, 0.0, 60.0, 7.5, 5.0);
+        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, f32::NAN, 1.0, 0.0, 60.0, 7.5, 5.0, None);
         assert!(r.is_err());
     }
 
     #[test]
     fn new_accepts_zero_wait_times() {
         // All three wait fields are legitimate at 0 (no settle).
-        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.0, 0.0, 0.0, 60.0, 7.5, 5.0)
+        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.0, 0.0, 0.0, 60.0, 7.5, 5.0, None)
             .expect("zero wait times are legitimate");
         assert_eq!(r.wait_before_cure_sec(), 0.0);
     }
 
     #[test]
     fn new_rejects_negative_wait_before_release() {
-        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, -0.1, 0.0, 60.0, 7.5, 5.0);
+        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, -0.1, 0.0, 60.0, 7.5, 5.0, None);
+        assert!(r.is_err());
+    }
+
+    // --- retract_speed_mm_min tests (ADR-0007 / step 3) ---
+
+    #[test]
+    fn retract_speed_defaults_to_lift_speed_when_none() {
+        // Factory uses None → accessor should return lift_speed_mm_min (60.0 for generic_standard).
+        let r = Recipe::generic_standard();
+        assert_eq!(r.retract_speed_mm_min(), r.lift_speed_mm_min());
+        assert!(!r.has_explicit_retract_speed());
+    }
+
+    #[test]
+    fn retract_speed_explicit_overrides_lift_speed() {
+        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, Some(150.0))
+            .expect("explicit retract_speed 150 mm/min is valid");
+        assert_eq!(r.retract_speed_mm_min(), 150.0);
+        assert_eq!(r.lift_speed_mm_min(), 60.0);
+        assert!(r.has_explicit_retract_speed());
+    }
+
+    #[test]
+    fn new_rejects_zero_retract_speed() {
+        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, Some(0.0));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn new_rejects_negative_retract_speed() {
+        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, Some(-5.0));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn new_rejects_nan_retract_speed() {
+        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, Some(f32::NAN));
         assert!(r.is_err());
     }
 
@@ -318,6 +393,33 @@ lift_distance_mm = 5.0
     fn parse_toml_then_validate_rejects_negative_lift_distance() {
         let toml_str =
             valid_recipe_toml().replace("lift_distance_mm = 5.0", "lift_distance_mm = -1.0");
+        let r: Recipe =
+            toml::from_str(&toml_str).expect("TOML parse succeeds; validate() is the gate");
+        assert!(r.validate().is_err());
+    }
+
+    #[test]
+    fn parse_legacy_toml_without_retract_speed_falls_back_to_lift_speed() {
+        // valid_recipe_toml() has no retract_speed_mm_min — legacy-format TOML.
+        let r: Recipe = toml::from_str(&valid_recipe_toml())
+            .expect("legacy Recipe TOML must parse via #[serde(default)]");
+        r.validate().expect("legacy Recipe must validate");
+        assert_eq!(r.retract_speed_mm_min(), r.lift_speed_mm_min());
+        assert!(!r.has_explicit_retract_speed());
+    }
+
+    #[test]
+    fn parse_toml_with_explicit_retract_speed() {
+        let toml_str = valid_recipe_toml() + "retract_speed_mm_min = 180.0\n";
+        let r: Recipe = toml::from_str(&toml_str).expect("explicit retract_speed must parse");
+        r.validate().expect("explicit valid retract_speed must validate");
+        assert_eq!(r.retract_speed_mm_min(), 180.0);
+        assert!(r.has_explicit_retract_speed());
+    }
+
+    #[test]
+    fn parse_toml_with_negative_retract_speed_rejected_at_validate() {
+        let toml_str = valid_recipe_toml() + "retract_speed_mm_min = -1.0\n";
         let r: Recipe =
             toml::from_str(&toml_str).expect("TOML parse succeeds; validate() is the gate");
         assert!(r.validate().is_err());

@@ -32,8 +32,9 @@ fn ctb_recipe(
         1.0, // wait_before_release_sec — CTB does not carry
         0.0, // wait_after_release_sec — CTB does not carry
         lift_speed_mm_min,
-        7.5, // lift_cycle_sec — CTB does not carry
-        5.0, // lift_distance_mm — CTB does not carry
+        7.5,  // lift_cycle_sec — CTB does not carry
+        5.0,  // lift_distance_mm — CTB does not carry
+        None, // retract_speed_mm_min — CTB does not carry; falls back to lift_speed
     )
 }
 
