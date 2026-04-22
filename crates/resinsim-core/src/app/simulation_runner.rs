@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use crate::entities::{PrinterProfile, ResinProfile};
 use crate::io::{geometry, sliced::LayerInput, stl};
 use crate::services::build_plate::PlateAdhesionProfile;
-use crate::services::failure_predictor::{FailurePredictor, LayerOverrides, SupportConfig};
+use crate::services::failure_predictor::{
+    FailurePredictor, LayerOverrides, SupportConfig, ThermalContext,
+};
 use crate::services::pairing_validator;
 use crate::services::suction_detector::SuctionDetector;
 use crate::simulation::PrintSimulation;
@@ -195,6 +197,14 @@ impl SimulationRunner {
         let suction_map = Self::build_suction_map(masks)?;
         let phases = LayerPhase::classify_sequence(areas, recipe);
 
+        // Print-wide thermal context — constructed once, passed by reference
+        // to every predict_layer call. ADR-0007 follow-on (step-10 review-code
+        // LOW).
+        let thermal = ThermalContext {
+            ambient_c,
+            initial_led_temp,
+        };
+
         let mut sim = PrintSimulation::new();
         let mut prev_area = CrossSectionArea::new(0.0).expect("zero is valid");
 
@@ -208,11 +218,10 @@ impl SimulationRunner {
                 lift_speed_mm_min: lift_speed_override,
                 suction_force_n: suction_map.get(&(i as u32)).copied(),
                 is_raft: matches!(phases.get(i), Some(LayerPhase::Raft)),
-                initial_led_temp,
             };
             let (result, failures) = FailurePredictor::predict_layer(
                 i as u32, area, prev_area, &overrides, resin, printer, recipe, supports, plate,
-                ambient_c,
+                &thermal,
             );
             sim.add_layer(result, failures);
             prev_area = area;

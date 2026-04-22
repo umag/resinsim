@@ -26,6 +26,26 @@ pub struct SupportConfig {
     pub n_supports: u32,
 }
 
+/// Print-wide thermal context — constants that apply to every layer of a run.
+///
+/// Constructed once at the SimulationRunner entry point and threaded by
+/// reference through `predict_layer` (sibling aggregate to `SupportConfig` +
+/// `PlateAdhesionProfile`). Addresses the step-10 code-review LOW: these
+/// values are load-bearing for every layer's thermal calculation but are NOT
+/// per-layer overrides from sliced-file data or pre-pass analysis — keeping
+/// them out of `LayerOverrides` clarifies intent.
+#[derive(Debug, Clone, Copy)]
+pub struct ThermalContext {
+    /// Room ambient temperature in °C. User-supplied, not profile-sourced.
+    pub ambient_c: f32,
+    /// Initial LED case temperature at print start (ADR-0007 / KB-152).
+    /// When `None`, falls back to `ambient_c` — legacy single-stage behaviour
+    /// where the LED is assumed to start at ambient. Typed via
+    /// `InitialLedTemperature` so unphysical values fail at construction in
+    /// the caller, not as a panic mid-simulation.
+    pub initial_led_temp: Option<InitialLedTemperature>,
+}
+
 /// Threshold for rapid area increase warning.
 const AREA_DELTA_WARN_MM2: f64 = 100.0;
 
@@ -40,14 +60,6 @@ pub struct LayerOverrides {
     /// Whether this layer is part of the raft/support base.
     /// Z deflection on raft layers is downgraded to Info (not Critical).
     pub is_raft: bool,
-    /// Initial LED case temperature at print start. When `None`, falls back
-    /// to `ambient_c` — legacy single-stage behaviour where the LED is assumed
-    /// to start at ambient. See ADR-0007 / KB-152.
-    ///
-    /// Typed via `InitialLedTemperature` so unphysical values (NaN, below
-    /// absolute zero, non-finite) fail at construction in the caller, not
-    /// as a panic mid-simulation.
-    pub initial_led_temp: Option<InitialLedTemperature>,
 }
 
 impl FailurePredictor {
@@ -66,7 +78,7 @@ impl FailurePredictor {
         recipe: &Recipe,
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
-        ambient_c: f32,
+        thermal: &ThermalContext,
     ) -> (LayerResult, Vec<FailureEvent>) {
         let mut failures = Vec::new();
 
@@ -74,8 +86,8 @@ impl FailurePredictor {
         let vat_temp = ThermalCalculator::vat_temperature_at_layer_v2(
             recipe,
             printer,
-            ambient_c,
-            overrides.initial_led_temp.map(|t| t.value()),
+            thermal.ambient_c,
+            thermal.initial_led_temp.map(|t| t.value()),
             layer,
         );
         let viscosity = ThermalCalculator::viscosity_at_temperature(
@@ -329,6 +341,13 @@ mod tests {
         PlateAdhesionProfile::default_textured()
     }
 
+    fn test_thermal() -> ThermalContext {
+        ThermalContext {
+            ambient_c: 22.0,
+            initial_led_temp: None,
+        }
+    }
+
     fn area(mm2: f64) -> CrossSectionArea {
         CrossSectionArea::new(mm2)
             .expect("test fixture: non-negative finite mm² is in CrossSectionArea domain")
@@ -346,7 +365,7 @@ mod tests {
             &test_recipe(),
             &test_supports(),
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         assert!(
             failures.is_empty(),
@@ -377,7 +396,7 @@ mod tests {
             &test_recipe(),
             &test_supports(),
             &no_plate,
-            22.0,
+            &test_thermal(),
         );
         assert!(
             failures
@@ -399,7 +418,7 @@ mod tests {
             &test_recipe(),
             &test_supports(),
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         assert!(
             failures
@@ -421,7 +440,7 @@ mod tests {
             &test_recipe(),
             &test_supports(),
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         let (normal_result, _) = FailurePredictor::predict_layer(
             50,
@@ -433,7 +452,7 @@ mod tests {
             &test_recipe(),
             &test_supports(),
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         assert!(result.cure_depth_um > normal_result.cure_depth_um * 4.0);
     }
@@ -450,7 +469,7 @@ mod tests {
             &test_recipe(),
             &test_supports(),
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         let (late, _) = FailurePredictor::predict_layer(
             500,
@@ -462,7 +481,7 @@ mod tests {
             &test_recipe(),
             &test_supports(),
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         assert!(late.vat_temperature_c > early.vat_temperature_c);
         assert!(late.viscosity_mpa_s < early.viscosity_mpa_s);
@@ -482,7 +501,7 @@ mod tests {
             &test_recipe(),
             &test_supports(),
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         assert!(
             failures
@@ -512,7 +531,7 @@ mod tests {
             &test_recipe(),
             &no_supports,
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         let overloads: Vec<_> = failures
             .iter()
@@ -541,7 +560,7 @@ mod tests {
             &test_recipe(),
             &no_supports,
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         let overloads: Vec<_> = failures
             .iter()
@@ -567,7 +586,7 @@ mod tests {
             &test_recipe(),
             &test_supports(),
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         assert!(
             result.worst_cure_depth_um < result.cure_depth_um,
@@ -591,7 +610,7 @@ mod tests {
             &test_recipe(),
             &test_supports(),
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         assert!(
             (result.worst_cure_depth_um - result.cure_depth_um).abs() < 0.01,
@@ -624,7 +643,7 @@ mod tests {
             &test_recipe(),
             &test_supports(),
             &test_plate(),
-            22.0,
+            &test_thermal(),
         );
         assert!(
             result.cure_depth_um > 50.0,
