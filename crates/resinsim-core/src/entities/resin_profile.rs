@@ -15,6 +15,14 @@ fn default_min_safe_temp_c() -> f32 {
     15.0
 }
 
+/// KB-153 literature-midpoint estimate for cure-kinetics Ea. Applied when a
+/// ResinProfile has `cure_kinetics_ea_kj_mol = None`; the CLI / reports must
+/// emit a LOUD warning in that case so users know the cure-drift physics is
+/// running on an ESTIMATE, not a measured value. Per-resin calibration data
+/// should update the TOML's `cure_kinetics_ea_kj_mol` field as measurements
+/// arrive.
+pub const DEFAULT_CURE_KINETICS_EA_KJ_MOL: f32 = 30.0;
+
 /// Physical properties of a resin formulation (chemistry) + its recipe (ADR-0005, Axis 2).
 /// Identity: `name`. Loaded from TOML profiles in `data/resins/`.
 ///
@@ -85,6 +93,16 @@ pub struct ResinProfile {
     #[serde(default = "default_min_safe_temp_c")]
     pub(crate) min_safe_temp_c: f32,
 
+    /// Cure-kinetics Arrhenius activation energy. Unit: kJ/mol. KB-153.
+    /// **Optional** — when `None`, the Ec(T) correction uses
+    /// [`DEFAULT_CURE_KINETICS_EA_KJ_MOL`] (30 kJ/mol, literature midpoint for
+    /// radical photopolymerization) and callers (CLI, reports) SHOULD emit a
+    /// loud warning that the cure-drift physics is running on an ESTIMATE, not
+    /// a measured value. Per-resin calibration data should replace the default
+    /// as measurements become available.
+    #[serde(default)]
+    pub(crate) cure_kinetics_ea_kj_mol: Option<f32>,
+
     /// Concrete operating point for this resin (ADR-0005 Axis 2b).
     /// **Required** — no serde default. A legacy resin TOML missing `[recipe]` fails
     /// to deserialise, surfacing the migration loudly per ADR-0005 Consequences.
@@ -134,6 +152,19 @@ impl ResinProfile {
     }
     pub fn min_safe_temp_c(&self) -> f32 {
         self.min_safe_temp_c
+    }
+    /// Cure-kinetics Ea, if the TOML carries a measured value. See
+    /// [`DEFAULT_CURE_KINETICS_EA_KJ_MOL`] for the fallback.
+    pub fn cure_kinetics_ea_kj_mol(&self) -> Option<f32> {
+        self.cure_kinetics_ea_kj_mol
+    }
+    /// Effective Ea: the TOML value if present, otherwise the KB-153 default
+    /// (30 kJ/mol). Callers that render user output SHOULD check
+    /// [`cure_kinetics_ea_kj_mol`](Self::cure_kinetics_ea_kj_mol) and warn
+    /// when it is None.
+    pub fn effective_cure_kinetics_ea_kj_mol(&self) -> f32 {
+        self.cure_kinetics_ea_kj_mol
+            .unwrap_or(DEFAULT_CURE_KINETICS_EA_KJ_MOL)
     }
     /// The concrete operating point (Recipe VO) for this resin.
     pub fn recipe(&self) -> &Recipe {
@@ -190,6 +221,14 @@ impl ResinProfile {
                 self.min_safe_temp_c
             ));
         }
+        if let Some(ea) = self.cure_kinetics_ea_kj_mol {
+            if !ea.is_finite() || ea <= 0.0 || ea > 200.0 {
+                return Err(format!(
+                    "cure_kinetics_ea_kj_mol, when present, must be finite and in \
+                     (0.0, 200.0] kJ/mol (got {ea})"
+                ));
+            }
+        }
         // Both fields are validated finite above, so `>=` is safe on f32.
         if self.min_safe_temp_c >= self.degradation_temp_c {
             return Err(format!(
@@ -230,6 +269,7 @@ impl ResinProfile {
             density_g_cm3: 1.25, // ceramic filler increases density
             degradation_temp_c: default_degradation_temp_c(),
             min_safe_temp_c: default_min_safe_temp_c(),
+            cure_kinetics_ea_kj_mol: None, // KB-153: no measured value — uses default 30 kJ/mol w/ loud warning
             recipe: Recipe::elegoo_ceramic_grey(),
         }
     }
@@ -250,6 +290,7 @@ impl ResinProfile {
             density_g_cm3: 1.1,
             degradation_temp_c: default_degradation_temp_c(),
             min_safe_temp_c: default_min_safe_temp_c(),
+            cure_kinetics_ea_kj_mol: None, // KB-153: no measured value — uses default 30 kJ/mol w/ loud warning
             recipe: Recipe::generic_standard(),
         }
     }
@@ -343,6 +384,74 @@ mod tests {
         let mut p = ResinProfile::generic_standard();
         p.ref_lift_speed_mm_min = 0.0;
         assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn cure_kinetics_ea_defaults_to_none_on_factories() {
+        assert!(ResinProfile::generic_standard().cure_kinetics_ea_kj_mol.is_none());
+        assert!(
+            ResinProfile::elegoo_ceramic_grey_v2()
+                .cure_kinetics_ea_kj_mol
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn effective_cure_kinetics_ea_uses_default_when_none() {
+        let p = ResinProfile::generic_standard();
+        assert_eq!(
+            p.effective_cure_kinetics_ea_kj_mol(),
+            DEFAULT_CURE_KINETICS_EA_KJ_MOL
+        );
+    }
+
+    #[test]
+    fn effective_cure_kinetics_ea_uses_measured_when_some() {
+        let mut p = ResinProfile::generic_standard();
+        p.cure_kinetics_ea_kj_mol = Some(42.0);
+        assert_eq!(p.effective_cure_kinetics_ea_kj_mol(), 42.0);
+    }
+
+    #[test]
+    fn cure_kinetics_ea_zero_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.cure_kinetics_ea_kj_mol = Some(0.0);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn cure_kinetics_ea_negative_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.cure_kinetics_ea_kj_mol = Some(-5.0);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn cure_kinetics_ea_above_bound_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.cure_kinetics_ea_kj_mol = Some(250.0);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn cure_kinetics_ea_nan_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.cure_kinetics_ea_kj_mol = Some(f32::NAN);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn cure_kinetics_ea_none_accepted() {
+        let mut p = ResinProfile::generic_standard();
+        p.cure_kinetics_ea_kj_mol = None;
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn cure_kinetics_ea_at_bound_accepted() {
+        let mut p = ResinProfile::generic_standard();
+        p.cure_kinetics_ea_kj_mol = Some(200.0);
+        assert!(p.validate().is_ok());
     }
 
     #[test]

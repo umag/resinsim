@@ -1,9 +1,17 @@
 use crate::values::{CureDepth, Energy, PenetrationDepth};
 
+/// Gas constant. Unit: J/(mol·K).
+const R: f32 = 8.314;
+
 /// Domain service: Beer-Lambert cure depth calculations.
 /// Stateless — all inputs via parameters.
 ///
 /// Core equation (KB-103): Cd = Dp × ln(E / Ec)
+///
+/// Temperature-dependent variant (KB-153): the critical energy Ec itself is
+/// temperature-dependent via Arrhenius kinetics — higher vat temperature
+/// lowers Ec (faster radical polymerization ⇒ less energy needed to cross the
+/// gel threshold). See [`CureCalculator::cure_depth_at_temp`].
 pub struct CureCalculator;
 
 impl CureCalculator {
@@ -29,6 +37,48 @@ impl CureCalculator {
         CureDepth::new(dp.value() * (energy.value() / critical_energy.value()).ln()).expect(
             "Beer-Lambert with validated dp, energy, critical_energy always yields finite result",
         )
+    }
+
+    /// Compute cure depth with Arrhenius temperature correction on Ec.
+    ///
+    /// # Formula (KB-153)
+    ///
+    /// ```text
+    /// Ec(T_K) = Ec_ref × exp((Ea_cure_J / R) × (1/T_K - 1/T_ref_K))
+    /// Cd      = Dp × ln(E / Ec(T_K))
+    /// ```
+    ///
+    /// where `Ea_cure_J = ea_cure_kj_mol × 1000.0`. Because `T_K > T_ref_K`
+    /// implies `(1/T_K - 1/T_ref_K) < 0`, the exponent is negative and
+    /// `Ec(T_K) < Ec_ref` — higher vat temperature lowers Ec, yielding a
+    /// deeper cure. This matches radical-polymerization Arrhenius rate
+    /// physics.
+    ///
+    /// # Uncertainty
+    ///
+    /// The `ea_cure_kj_mol` input is typically
+    /// [`DEFAULT_CURE_KINETICS_EA_KJ_MOL`](crate::entities::DEFAULT_CURE_KINETICS_EA_KJ_MOL)
+    /// (30 kJ/mol, KB-153 literature midpoint) unless the resin profile
+    /// carries a measured value. Downstream cure-drift predictions using the
+    /// default may be wrong by ±50%. Callers rendering user output SHOULD
+    /// warn when the default is used.
+    pub fn cure_depth_at_temp(
+        dp: PenetrationDepth,
+        energy: Energy,
+        ec_ref: Energy,
+        ref_temp_c: f32,
+        vat_temp_c: f32,
+        ea_cure_kj_mol: f32,
+    ) -> CureDepth {
+        let t_ref_k = ref_temp_c + 273.15;
+        let t_k = vat_temp_c + 273.15;
+        let ea_j = ea_cure_kj_mol * 1000.0;
+        let exponent = (ea_j / R) * (1.0 / t_k - 1.0 / t_ref_k);
+        let ec_adjusted = ec_ref.value() * exponent.exp();
+        let ec = Energy::new(ec_adjusted).expect(
+            "Ec(T) = Ec_ref × exp(bounded Arrhenius exponent) is positive and finite for validated inputs",
+        );
+        Self::cure_depth(dp, energy, ec)
     }
 
     /// Compute UV intensity at depth z into the resin.
@@ -167,6 +217,91 @@ mod tests {
             energy(5.0),
             50.0,
         ));
+    }
+
+    // --- KB-153: temperature-dependent cure depth ---
+
+    #[test]
+    fn cure_depth_at_ref_temp_equals_cure_depth() {
+        // When vat_temp_c = ref_temp_c, exponent = 0, exp(0) = 1 → Ec_adjusted = Ec_ref.
+        // cure_depth_at_temp must equal cure_depth.
+        let baseline = CureCalculator::cure_depth(dp(170.0), energy(10.0), energy(5.0));
+        let at_ref = CureCalculator::cure_depth_at_temp(
+            dp(170.0),
+            energy(10.0),
+            energy(5.0),
+            25.0,
+            25.0,
+            30.0,
+        );
+        assert!((at_ref.value() - baseline.value()).abs() < 1e-4);
+    }
+
+    #[test]
+    fn cure_depth_at_temp_decreases_ec_when_warmer() {
+        // T > T_ref ⇒ Ec(T) < Ec_ref ⇒ deeper cure.
+        let cold = CureCalculator::cure_depth_at_temp(
+            dp(170.0),
+            energy(10.0),
+            energy(5.0),
+            25.0,
+            25.0,
+            30.0,
+        );
+        let warm = CureCalculator::cure_depth_at_temp(
+            dp(170.0),
+            energy(10.0),
+            energy(5.0),
+            25.0,
+            40.0,
+            30.0,
+        );
+        assert!(warm.value() > cold.value());
+    }
+
+    #[test]
+    fn cure_depth_at_temp_increases_ec_when_colder() {
+        // T < T_ref ⇒ Ec(T) > Ec_ref ⇒ shallower cure.
+        let at_ref = CureCalculator::cure_depth_at_temp(
+            dp(170.0),
+            energy(10.0),
+            energy(5.0),
+            25.0,
+            25.0,
+            30.0,
+        );
+        let chilly = CureCalculator::cure_depth_at_temp(
+            dp(170.0),
+            energy(10.0),
+            energy(5.0),
+            25.0,
+            15.0,
+            30.0,
+        );
+        assert!(chilly.value() < at_ref.value());
+    }
+
+    #[test]
+    fn cure_depth_at_temp_stronger_effect_with_higher_ea() {
+        // Larger Ea magnifies Arrhenius sensitivity — Cd at fixed (T, E) should
+        // move further from the ambient-temp baseline as Ea grows.
+        let at_ref = CureCalculator::cure_depth_at_temp(
+            dp(170.0),
+            energy(10.0),
+            energy(5.0),
+            25.0,
+            40.0,
+            30.0,
+        );
+        let big_ea = CureCalculator::cure_depth_at_temp(
+            dp(170.0),
+            energy(10.0),
+            energy(5.0),
+            25.0,
+            40.0,
+            60.0,
+        );
+        assert!(big_ea.value() > at_ref.value());
     }
 
     #[test]

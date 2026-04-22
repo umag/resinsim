@@ -96,6 +96,7 @@ fn raft_plus_fluid_permeable_supports_emits_no_suction_critical() {
         },
         &PlateAdhesionProfile::default_textured(),
         22.0,
+        None,
     )
     .expect("validated profiles satisfy run_from_layer_inputs preconditions");
 
@@ -141,6 +142,7 @@ fn external_ctb_emits_no_suction_critical() {
         },
         &PlateAdhesionProfile::default_textured(),
         22.0,
+        None,
     )
     .expect("fixture + profiles run successfully");
 

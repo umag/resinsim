@@ -7,9 +7,7 @@ use crate::services::{
     BuildPlate, CureCalculator, PeelForceCalculator, ThermalCalculator, UniformityCalculator,
     ZAxisCompensator,
 };
-use crate::values::{
-    CrossSectionArea, Energy, PeelForce, PenetrationDepth, SafetyFactor, ThermalTimeConstant,
-};
+use crate::values::{CrossSectionArea, Energy, PeelForce, PenetrationDepth, SafetyFactor};
 
 /// Domain service: orchestrates all physics checks for a single layer.
 /// Produces a LayerResult and any FailureEvents.
@@ -40,6 +38,10 @@ pub struct LayerOverrides {
     /// Whether this layer is part of the raft/support base.
     /// Z deflection on raft layers is downgraded to Info (not Critical).
     pub is_raft: bool,
+    /// Initial LED case temperature at print start (°C). When `None`, falls
+    /// back to `ambient_c` — legacy single-stage behaviour where the LED is
+    /// assumed to start at ambient. See ADR-0007 / KB-152.
+    pub initial_led_temp_c: Option<f32>,
 }
 
 impl FailurePredictor {
@@ -62,16 +64,13 @@ impl FailurePredictor {
     ) -> (LayerResult, Vec<FailureEvent>) {
         let mut failures = Vec::new();
 
-        // --- Thermal ---
-        let tau = ThermalTimeConstant::new(printer.thermal_tau_sec)
-            .expect("PrinterProfile::validate() guarantees thermal_tau_sec > 0");
-        let vat_temp = ThermalCalculator::vat_temperature_at_layer(
+        // --- Thermal (ADR-0007 two-stage: LED → vat via coupling) ---
+        let vat_temp = ThermalCalculator::vat_temperature_at_layer_v2(
+            recipe,
+            printer,
             ambient_c,
-            printer.delta_t_steady_c,
-            tau,
+            overrides.initial_led_temp_c,
             layer,
-            recipe.normal_exposure_sec(),
-            recipe.lift_cycle_sec(),
         );
         let viscosity = ThermalCalculator::viscosity_at_temperature(
             resin.viscosity_mpa_s,
@@ -106,9 +105,20 @@ impl FailurePredictor {
             .expect("PrinterProfile::validate() guarantees led_power_mw_cm2 > 0; exposure_sec from recipe or override is positive");
         let dp = PenetrationDepth::new(resin.penetration_depth_um)
             .expect("ResinProfile::validate() guarantees penetration_depth_um > 0");
-        let ec = Energy::new(resin.critical_energy_mj_cm2)
+        let ec_ref = Energy::new(resin.critical_energy_mj_cm2)
             .expect("ResinProfile::validate() guarantees critical_energy_mj_cm2 > 0");
-        let cure_depth = CureCalculator::cure_depth(dp, energy, ec);
+        // KB-153: Ec(T) Arrhenius correction on Ec_ref at the current vat temperature.
+        // Default Ea_cure = 30 kJ/mol (literature midpoint estimate) when the resin
+        // TOML omits `cure_kinetics_ea_kj_mol`; callers rendering user output warn.
+        let ea_cure_kj_mol = resin.effective_cure_kinetics_ea_kj_mol();
+        let cure_depth = CureCalculator::cure_depth_at_temp(
+            dp,
+            energy,
+            ec_ref,
+            resin.reference_temp_c(),
+            vat_temp.value(),
+            ea_cure_kj_mol,
+        );
 
         if !cure_depth.is_sufficient(recipe.layer_height_um()) {
             failures.push(FailureEvent {
@@ -128,7 +138,14 @@ impl FailurePredictor {
             // Worst case = corner of build plate: factor = 1 - variation/2
             let corner_factor = 1.0 - printer.lcd_uniformity_variation / 2.0;
             let corner_energy = energy.scale(corner_factor);
-            let cd = CureCalculator::cure_depth(dp, corner_energy, ec);
+            let cd = CureCalculator::cure_depth_at_temp(
+                dp,
+                corner_energy,
+                ec_ref,
+                resin.reference_temp_c(),
+                vat_temp.value(),
+                ea_cure_kj_mol,
+            );
             // Warn if center is sufficient but corner is not
             if cure_depth.is_sufficient(recipe.layer_height_um())
                 && !cd.is_sufficient(recipe.layer_height_um())

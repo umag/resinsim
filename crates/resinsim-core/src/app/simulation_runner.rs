@@ -24,6 +24,7 @@ impl SimulationRunner {
     ///   3. `slice_layers(..., recipe.layer_height_um, printer.voxel_size_mm)` — uses
     ///      the recipe + printer's configured voxel resolution.
     ///   4. Run FailurePredictor with mask-based SuctionDetector pre-pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_stl(
         stl_path: &std::path::Path,
         resin: &ResinProfile,
@@ -31,6 +32,7 @@ impl SimulationRunner {
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
+        initial_led_temp_c: Option<f32>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
         printer.validate().map_err(|e| format!("printer: {e}"))?;
@@ -57,6 +59,7 @@ impl SimulationRunner {
             supports,
             plate,
             ambient_c,
+            initial_led_temp_c,
         )
     }
 
@@ -70,6 +73,7 @@ impl SimulationRunner {
     /// detection use [`run_from_layer_inputs`] with a bespoke LayerMask stack.
     ///
     /// Revalidation here is defence-in-depth per ADR-0005 §5.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_from_areas(
         areas: &[CrossSectionArea],
         resin: &ResinProfile,
@@ -77,6 +81,7 @@ impl SimulationRunner {
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
+        initial_led_temp_c: Option<f32>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
         printer.validate().map_err(|e| format!("printer: {e}"))?;
@@ -89,7 +94,17 @@ impl SimulationRunner {
                     .expect("1×1 all-solid mask at validated positive voxel_size_mm constructs")
             })
             .collect();
-        Self::run_inner(areas, &masks, None, resin, printer, supports, plate, ambient_c)
+        Self::run_inner(
+            areas,
+            &masks,
+            None,
+            resin,
+            printer,
+            supports,
+            plate,
+            ambient_c,
+            initial_led_temp_c,
+        )
     }
 
     /// Run simulation from parsed LayerInputs (from CTB or other sliced files).
@@ -99,6 +114,7 @@ impl SimulationRunner {
     /// `resin.recipe()`. Each `LayerInput` should carry a populated `mask` for
     /// cavity detection; inputs without a mask get a synthesised fully-solid 1×1
     /// mask at `printer.voxel_size_mm()` (no cavity events emitted for those layers).
+    #[allow(clippy::too_many_arguments)]
     pub fn run_from_layer_inputs(
         layers: &[LayerInput],
         resin: &ResinProfile,
@@ -106,6 +122,7 @@ impl SimulationRunner {
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
+        initial_led_temp_c: Option<f32>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
         printer.validate().map_err(|e| format!("printer: {e}"))?;
@@ -156,6 +173,7 @@ impl SimulationRunner {
             supports,
             plate,
             ambient_c,
+            initial_led_temp_c,
         )
     }
 
@@ -171,6 +189,7 @@ impl SimulationRunner {
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
+        initial_led_temp_c: Option<f32>,
     ) -> Result<PrintSimulation, String> {
         let recipe = resin.recipe();
         let suction_map = Self::build_suction_map(masks)?;
@@ -189,6 +208,7 @@ impl SimulationRunner {
                 lift_speed_mm_min: lift_speed_override,
                 suction_force_n: suction_map.get(&(i as u32)).copied(),
                 is_raft: matches!(phases.get(i), Some(LayerPhase::Raft)),
+                initial_led_temp_c,
             };
             let (result, failures) = FailurePredictor::predict_layer(
                 i as u32, area, prev_area, &overrides, resin, printer, recipe, supports, plate,
@@ -215,6 +235,7 @@ impl SimulationRunner {
     }
 
     /// Auto-detect format from file extension and run simulation.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_auto(
         path: &std::path::Path,
         resin: &ResinProfile,
@@ -222,15 +243,32 @@ impl SimulationRunner {
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
+        initial_led_temp_c: Option<f32>,
     ) -> Result<PrintSimulation, String> {
         let format = crate::io::sliced::detect_format(path)
             .ok_or_else(|| format!("unknown file format: {}", path.display()))?;
 
         match format {
-            "STL" => Self::run_stl(path, resin, printer, supports, plate, ambient_c),
+            "STL" => Self::run_stl(
+                path,
+                resin,
+                printer,
+                supports,
+                plate,
+                ambient_c,
+                initial_led_temp_c,
+            ),
             "CTB" => {
                 let (_info, layers) = crate::io::ctb::parse_ctb(path)?;
-                Self::run_from_layer_inputs(&layers, resin, printer, supports, plate, ambient_c)
+                Self::run_from_layer_inputs(
+                    &layers,
+                    resin,
+                    printer,
+                    supports,
+                    plate,
+                    ambient_c,
+                    initial_led_temp_c,
+                )
             }
             other => Err(format!("format {other} not yet supported for simulation")),
         }
@@ -266,7 +304,7 @@ mod tests {
         let areas = cube_areas(100, 100.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0, None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let layers = sim.layers();
         let first_force = layers[10].total_force_n;
@@ -282,7 +320,7 @@ mod tests {
         let areas = sphere_areas(200, 10.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 30 }, &default_plate(), 22.0,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 30 }, &default_plate(), 22.0, None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let summary = sim.summary();
         assert!(
@@ -297,7 +335,7 @@ mod tests {
         let areas = cube_areas(100, 100.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0, None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         assert_eq!(
             sim.summary().critical_failures,
@@ -314,7 +352,7 @@ mod tests {
         let areas = cube_areas(50, 5000.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 5 }, &default_plate(), 22.0,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 5 }, &default_plate(), 22.0, None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let overload_count = sim
             .failures()
@@ -338,7 +376,7 @@ mod tests {
         };
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.0, n_supports: 0 }, &no_plate, 22.0,
+            &SupportConfig { tip_radius_mm: 0.0, n_supports: 0 }, &no_plate, 22.0, None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         assert!(
             sim.summary().critical_failures > 0,
@@ -430,6 +468,7 @@ mod tests {
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 },
             &default_plate(),
             22.0,
+            None,
         )
         .expect("test fixture: validated profiles satisfy run_from_layer_inputs preconditions");
         let suction_events: Vec<_> = sim
@@ -451,7 +490,7 @@ mod tests {
         let areas = cube_areas(100, 100.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0, None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let suction_count = sim
             .failures()
@@ -473,6 +512,7 @@ mod tests {
             &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 },
             &default_plate(),
             22.0,
+            None,
         )
         .expect("test fixture: validated profiles satisfy run_from_layer_inputs preconditions");
         let closure_layer = &sim.layers()[15];
@@ -492,7 +532,7 @@ mod tests {
         let areas = cube_areas(500, 100.0);
         let sim = SimulationRunner::run_from_areas(
             &areas, &ResinProfile::generic_standard(), &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0,
+            &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 }, &default_plate(), 22.0, None,
         ).expect("test fixture: validated factory profiles satisfy SimulationRunner::run_from_areas preconditions");
         let layers = sim.layers();
         assert!(layers[490].vat_temperature_c > layers[10].vat_temperature_c + 3.0);
@@ -530,6 +570,7 @@ mod tests {
             },
             &default_plate(),
             22.0,
+            None,
         );
         assert!(
             result.is_err(),
@@ -559,6 +600,7 @@ mod tests {
             },
             &default_plate(),
             22.0,
+            None,
         )
         .expect_err("pairing violation must fail simulation entry");
         assert!(
@@ -589,6 +631,7 @@ mod tests {
             },
             &default_plate(),
             22.0,
+            None,
         )
         .expect_err("multiple pairing violations must fail");
         // Both layer_height AND exposure violate; violations are joined with "; ".

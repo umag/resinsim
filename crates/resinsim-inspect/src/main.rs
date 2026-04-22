@@ -982,6 +982,7 @@ fn cmd_report_health(
         &supports,
         &plate,
         ambient,
+        None, // Step 9 wires --initial-led-temp into this callsite
     ) {
         Ok(s) => s,
         Err(e) => {
