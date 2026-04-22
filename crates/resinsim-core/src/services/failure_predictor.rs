@@ -7,7 +7,9 @@ use crate::services::{
     BuildPlate, CureCalculator, PeelForceCalculator, ThermalCalculator, UniformityCalculator,
     ZAxisCompensator,
 };
-use crate::values::{CrossSectionArea, Energy, PeelForce, PenetrationDepth, SafetyFactor};
+use crate::values::{
+    CrossSectionArea, Energy, InitialLedTemperature, PeelForce, PenetrationDepth, SafetyFactor,
+};
 
 /// Domain service: orchestrates all physics checks for a single layer.
 /// Produces a LayerResult and any FailureEvents.
@@ -38,10 +40,14 @@ pub struct LayerOverrides {
     /// Whether this layer is part of the raft/support base.
     /// Z deflection on raft layers is downgraded to Info (not Critical).
     pub is_raft: bool,
-    /// Initial LED case temperature at print start (°C). When `None`, falls
-    /// back to `ambient_c` — legacy single-stage behaviour where the LED is
-    /// assumed to start at ambient. See ADR-0007 / KB-152.
-    pub initial_led_temp_c: Option<f32>,
+    /// Initial LED case temperature at print start. When `None`, falls back
+    /// to `ambient_c` — legacy single-stage behaviour where the LED is assumed
+    /// to start at ambient. See ADR-0007 / KB-152.
+    ///
+    /// Typed via `InitialLedTemperature` so unphysical values (NaN, below
+    /// absolute zero, non-finite) fail at construction in the caller, not
+    /// as a panic mid-simulation.
+    pub initial_led_temp: Option<InitialLedTemperature>,
 }
 
 impl FailurePredictor {
@@ -69,7 +75,7 @@ impl FailurePredictor {
             recipe,
             printer,
             ambient_c,
-            overrides.initial_led_temp_c,
+            overrides.initial_led_temp.map(|t| t.value()),
             layer,
         );
         let viscosity = ThermalCalculator::viscosity_at_temperature(
@@ -116,7 +122,7 @@ impl FailurePredictor {
             energy,
             ec_ref,
             resin.reference_temp_c(),
-            vat_temp.value(),
+            vat_temp,
             ea_cure_kj_mol,
         );
 
@@ -143,7 +149,7 @@ impl FailurePredictor {
                 corner_energy,
                 ec_ref,
                 resin.reference_temp_c(),
-                vat_temp.value(),
+                vat_temp,
                 ea_cure_kj_mol,
             );
             // Warn if center is sufficient but corner is not

@@ -7,7 +7,7 @@ use crate::services::failure_predictor::{FailurePredictor, LayerOverrides, Suppo
 use crate::services::pairing_validator;
 use crate::services::suction_detector::SuctionDetector;
 use crate::simulation::PrintSimulation;
-use crate::values::{CrossSectionArea, LayerMask, LayerPhase};
+use crate::values::{CrossSectionArea, InitialLedTemperature, LayerMask, LayerPhase};
 
 /// Application service: orchestrates a full simulation run.
 /// Loads geometry, slices it, runs FailurePredictor per layer,
@@ -32,7 +32,7 @@ impl SimulationRunner {
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
-        initial_led_temp_c: Option<f32>,
+        initial_led_temp: Option<InitialLedTemperature>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
         printer.validate().map_err(|e| format!("printer: {e}"))?;
@@ -59,7 +59,7 @@ impl SimulationRunner {
             supports,
             plate,
             ambient_c,
-            initial_led_temp_c,
+            initial_led_temp,
         )
     }
 
@@ -81,7 +81,7 @@ impl SimulationRunner {
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
-        initial_led_temp_c: Option<f32>,
+        initial_led_temp: Option<InitialLedTemperature>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
         printer.validate().map_err(|e| format!("printer: {e}"))?;
@@ -103,7 +103,7 @@ impl SimulationRunner {
             supports,
             plate,
             ambient_c,
-            initial_led_temp_c,
+            initial_led_temp,
         )
     }
 
@@ -122,7 +122,7 @@ impl SimulationRunner {
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
-        initial_led_temp_c: Option<f32>,
+        initial_led_temp: Option<InitialLedTemperature>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
         printer.validate().map_err(|e| format!("printer: {e}"))?;
@@ -173,7 +173,7 @@ impl SimulationRunner {
             supports,
             plate,
             ambient_c,
-            initial_led_temp_c,
+            initial_led_temp,
         )
     }
 
@@ -189,7 +189,7 @@ impl SimulationRunner {
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
-        initial_led_temp_c: Option<f32>,
+        initial_led_temp: Option<InitialLedTemperature>,
     ) -> Result<PrintSimulation, String> {
         let recipe = resin.recipe();
         let suction_map = Self::build_suction_map(masks)?;
@@ -208,7 +208,7 @@ impl SimulationRunner {
                 lift_speed_mm_min: lift_speed_override,
                 suction_force_n: suction_map.get(&(i as u32)).copied(),
                 is_raft: matches!(phases.get(i), Some(LayerPhase::Raft)),
-                initial_led_temp_c,
+                initial_led_temp,
             };
             let (result, failures) = FailurePredictor::predict_layer(
                 i as u32, area, prev_area, &overrides, resin, printer, recipe, supports, plate,
@@ -243,7 +243,7 @@ impl SimulationRunner {
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         ambient_c: f32,
-        initial_led_temp_c: Option<f32>,
+        initial_led_temp: Option<InitialLedTemperature>,
     ) -> Result<PrintSimulation, String> {
         let format = crate::io::sliced::detect_format(path)
             .ok_or_else(|| format!("unknown file format: {}", path.display()))?;
@@ -256,7 +256,7 @@ impl SimulationRunner {
                 supports,
                 plate,
                 ambient_c,
-                initial_led_temp_c,
+                initial_led_temp,
             ),
             "CTB" => {
                 let (_info, layers) = crate::io::ctb::parse_ctb(path)?;
@@ -267,7 +267,7 @@ impl SimulationRunner {
                     supports,
                     plate,
                     ambient_c,
-                    initial_led_temp_c,
+                    initial_led_temp,
                 )
             }
             other => Err(format!("format {other} not yet supported for simulation")),

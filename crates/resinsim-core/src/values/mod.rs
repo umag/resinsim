@@ -14,4 +14,4 @@ pub use force::{PeelForce, SafetyFactor, SupportCapacity};
 pub use int_range::IntRange;
 pub use layer_mask::{DEFAULT_VOXEL_SIZE_MM, LayerGeometry, LayerMask, MaskError};
 pub use layer_phase::LayerPhase;
-pub use thermal::{ScreenHeatFlux, ThermalTimeConstant, VatTemperature};
+pub use thermal::{InitialLedTemperature, ScreenHeatFlux, ThermalTimeConstant, VatTemperature};

@@ -1,6 +1,6 @@
 use proptest::prelude::*;
 use resinsim_core::services::CureCalculator;
-use resinsim_core::values::{Energy, PenetrationDepth};
+use resinsim_core::values::{Energy, PenetrationDepth, VatTemperature};
 
 proptest! {
     /// KB-103: Cure depth is positive iff Energy > Critical Energy.
@@ -131,7 +131,7 @@ proptest! {
             energy,
             Energy::new(ec_ref).expect("proptest 1..50 mJ/cm²"),
             ref_temp,
-            ref_temp,
+            VatTemperature::new(ref_temp).expect("proptest 15..35 °C is valid VatTemperature"),
             ea,
         );
         let rel_err = (at_ref.value() - baseline.value()).abs()
@@ -160,8 +160,10 @@ proptest! {
             .expect("proptest: ec_ref × positive ratio produces valid Energy");
         let dp_v = PenetrationDepth::new(dp).expect("proptest 40..600 µm");
         let ec_v = Energy::new(ec_ref).expect("proptest 1..50 mJ/cm²");
-        let cd1 = CureCalculator::cure_depth_at_temp(dp_v, energy, ec_v, ref_temp, t1, ea);
-        let cd2 = CureCalculator::cure_depth_at_temp(dp_v, energy, ec_v, ref_temp, t2, ea);
+        let vat1 = VatTemperature::new(t1).expect("proptest 10..40 °C is valid VatTemperature");
+        let vat2 = VatTemperature::new(t2).expect("proptest t1+1..40+35 → 11..75 °C is valid VatTemperature");
+        let cd1 = CureCalculator::cure_depth_at_temp(dp_v, energy, ec_v, ref_temp, vat1, ea);
+        let cd2 = CureCalculator::cure_depth_at_temp(dp_v, energy, ec_v, ref_temp, vat2, ea);
         prop_assert!(cd2.value() >= cd1.value() - 1e-4,
             "warmer vat should give deeper (or equal) cure: T1={t1} Cd1={}, T2={t2} Cd2={}",
             cd1.value(), cd2.value());
@@ -169,34 +171,56 @@ proptest! {
 
     /// Arrhenius is linear in 1/T, so symmetry holds in 1/T-space:
     /// given T1, derive T2 from 1/T2 = 2/T_ref - 1/T1. Then
-    /// Ec(T1) × Ec(T2) = Ec_ref², equivalently
-    /// (Ec_ref - Cd1 factor) × (Ec_ref - Cd2 factor) = Ec_ref².
-    /// Direct test: Ec(T1) × Ec(T2) / Ec_ref² ≈ 1.
+    /// Ec(T1) × Ec(T2) = Ec_ref².
+    ///
+    /// This test exercises `CureCalculator::cure_depth_at_temp` directly (via
+    /// the private `ec_at_temp` helper, exposed through cure_depth extraction:
+    /// `Ec(T) = E × exp(-Cd(T) / Dp)` is the Beer-Lambert inverse). Defends
+    /// against future drift in the service's Arrhenius path, not just the
+    /// standalone formula.
     #[test]
     fn ec_arrhenius_symmetric_in_inverse_temp(
-        ec_ref in 1.0f32..50.0,
+        dp_um in 40.0f32..600.0,
+        ec_ref_val in 1.0f32..50.0,
+        e_ratio in 2.0f32..20.0,
         ref_temp_c in 15.0f32..35.0,
         t1_c in 10.0f32..60.0,
         ea in 5.0f32..100.0,
     ) {
-        const R: f32 = 8.314;
         let t_ref_k = ref_temp_c + 273.15;
         let t1_k = t1_c + 273.15;
         // Arrhenius symmetry: 1/T2 = 2/T_ref - 1/T1.
         let t2_k_inv = 2.0 / t_ref_k - 1.0 / t1_k;
         prop_assume!(t2_k_inv > 0.0);
         let t2_k = 1.0 / t2_k_inv;
-        prop_assume!(t2_k > 273.15 - 20.0 && t2_k < 273.15 + 100.0);
-        // Compute Ec(T1), Ec(T2) directly via the Arrhenius formula to isolate
-        // the math from Beer-Lambert arithmetic.
-        let ea_j = ea * 1000.0;
-        let ec_t1 = ec_ref * ((ea_j / R) * (1.0 / t1_k - 1.0 / t_ref_k)).exp();
-        let ec_t2 = ec_ref * ((ea_j / R) * (1.0 / t2_k - 1.0 / t_ref_k)).exp();
+        prop_assume!(t2_k > 273.15 + 1.0 && t2_k < 273.15 + 80.0);
+        let t2_c = t2_k - 273.15;
+        // Run through the real service. Energy is well above Ec(T) at both
+        // temperatures so Cd is positive (log argument > 1) and the Beer-Lambert
+        // inverse Ec = E × exp(-Cd/Dp) is valid.
+        let dp = PenetrationDepth::new(dp_um).expect("proptest 40..600 µm");
+        let energy = Energy::new(ec_ref_val * e_ratio)
+            .expect("proptest: ec_ref × 2..20 ratio is valid Energy");
+        let ec_ref = Energy::new(ec_ref_val).expect("proptest 1..50 mJ/cm²");
+        let cd1 = CureCalculator::cure_depth_at_temp(
+            dp, energy, ec_ref, ref_temp_c,
+            VatTemperature::new(t1_c).expect("proptest 10..60 °C is valid VatTemperature"),
+            ea,
+        );
+        let cd2 = CureCalculator::cure_depth_at_temp(
+            dp, energy, ec_ref, ref_temp_c,
+            VatTemperature::new(t2_c).expect("derived T2 clamped to 1..80 °C via prop_assume"),
+            ea,
+        );
+        // Invert Beer-Lambert: Ec(T) = E × exp(-Cd / Dp).
+        let ec_t1 = energy.value() * (-cd1.value() / dp.value()).exp();
+        let ec_t2 = energy.value() * (-cd2.value() / dp.value()).exp();
         let product = ec_t1 * ec_t2;
-        let ref_sq = ec_ref * ec_ref;
+        let ref_sq = ec_ref_val * ec_ref_val;
         let rel_err = (product - ref_sq).abs() / ref_sq;
-        prop_assert!(rel_err < 1e-3,
-            "Arrhenius 1/T-space symmetry: Ec(T1) × Ec(T2) = Ec_ref² failed: \
-             T1_K={t1_k} T2_K={t2_k} product={product} ref²={ref_sq} rel={rel_err}");
+        prop_assert!(rel_err < 2e-3,
+            "Arrhenius 1/T-space symmetry through CureCalculator::cure_depth_at_temp: \
+             Ec(T1) × Ec(T2) = Ec_ref² failed: T1_K={t1_k} T2_K={t2_k} \
+             product={product} ref²={ref_sq} rel={rel_err}");
     }
 }

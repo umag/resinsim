@@ -633,7 +633,7 @@ fn cmd_thermal(
 ) {
     use resinsim_core::entities::{DEFAULT_CURE_KINETICS_EA_KJ_MOL, ResinProfile};
     use resinsim_core::services::{CureCalculator, LayerTimingCalculator, ThermalCalculator};
-    use resinsim_core::values::{Energy, PenetrationDepth, ThermalTimeConstant};
+    use resinsim_core::values::{Energy, InitialLedTemperature, ThermalTimeConstant};
 
     // ADR-0004 precedence. Resolution triggered only when --printer or --resin is set.
     let data_dir_resolved = if printer_name.is_some() || resin_name.is_some() {
@@ -699,8 +699,21 @@ fn cmd_thermal(
             std::process::exit(2);
         }
     };
+    // Parse-time validation of --initial-led-temp via the InitialLedTemperature
+    // value constructor. Rejects NaN / below absolute zero / infinite before
+    // any simulation work begins (ADR-0007 follow-on).
+    let initial_led_temp_typed = match initial_led_temp.map(InitialLedTemperature::new).transpose() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("invalid --initial-led-temp: {e}");
+            std::process::exit(2);
+        }
+    };
     // Degradation warnings use the explicit resin if given; otherwise generic-standard.
-    let resin_defaults = resin.clone().unwrap_or_else(ResinProfile::generic_standard);
+    let resin_defaults = resin
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(ResinProfile::generic_standard);
     let duty = ThermalCalculator::duty_cycle(exposure, lift_cycle);
 
     // Sample at key layers
@@ -720,6 +733,18 @@ fn cmd_thermal(
     // Emits LED temp + vat temp + viscosity + Ec(T) per sample layer. Falls
     // back to the legacy single-stage output when no profile is supplied.
     if let (Some(printer), Some(resin_prof)) = (printer.as_ref(), resin.as_ref()) {
+        /// Named per-layer thermal sample row — replaces the six-tuple used
+        /// previously (step-10 review-code finding). Construction cost is
+        /// identical; readability at the consumer sites is higher.
+        struct ThermalSample {
+            layer: u32,
+            time_sec: f32,
+            vat: resinsim_core::values::VatTemperature,
+            led_c: f32,
+            viscosity_mpa_s: f32,
+            ec_t_mj_cm2: f32,
+        }
+
         let cumulative = LayerTimingCalculator::cumulative_times_sec(
             resin_prof.recipe(),
             printer,
@@ -735,82 +760,80 @@ fn cmd_thermal(
             );
         }
 
-        let dp = PenetrationDepth::new(resin_prof.penetration_depth_um())
-            .expect("validated ResinProfile has positive penetration_depth_um");
         let ec_ref = Energy::new(resin_prof.critical_energy_mj_cm2())
             .expect("validated ResinProfile has positive critical_energy_mj_cm2");
         let ref_temp_c = resin_prof.reference_temp_c();
+        let initial_led_c_for_display = initial_led_temp_typed
+            .map(|t| t.value())
+            .unwrap_or(ambient);
 
-        let sample_vat_temps: Vec<(u32, f32, resinsim_core::values::VatTemperature, f32, f32, f32)> =
-            sample_layers
-                .iter()
-                .map(|&l| {
-                    let vat = ThermalCalculator::vat_temperature_at_layer_v2(
-                        resin_prof.recipe(),
-                        printer,
-                        ambient,
-                        initial_led_temp,
-                        l,
-                    );
-                    // Stage-A LED temp: same formula as v2 but skip stage B.
-                    let initial_led_c = initial_led_temp.unwrap_or(ambient);
-                    let time_sec = if l == 0 {
-                        0.0
-                    } else {
-                        cumulative
-                            .get((l - 1) as usize)
-                            .copied()
-                            .unwrap_or_else(|| *cumulative.last().unwrap_or(&0.0))
-                    };
-                    let led_tau_const = ThermalTimeConstant::new(printer.led_tau_sec())
-                        .expect("validated PrinterProfile has positive led_tau_sec");
-                    let led = ThermalCalculator::led_temperature_at_time(
-                        initial_led_c,
-                        printer.led_delta_t_steady_c(),
-                        led_tau_const,
-                        time_sec,
-                    );
-                    let mu = ThermalCalculator::viscosity_at_temperature(
-                        viscosity,
-                        ref_temp_c,
-                        vat.value(),
-                        ea,
-                    );
-                    // Reconstruct Ec(T) for the sample — cure_depth_at_temp uses it internally.
-                    let r_gas: f32 = 8.314;
-                    let t_ref_k = ref_temp_c + 273.15;
-                    let t_vat_k = vat.value() + 273.15;
-                    let ec_t = resin_prof.critical_energy_mj_cm2()
-                        * ((ea_cure * 1000.0 / r_gas) * (1.0 / t_vat_k - 1.0 / t_ref_k)).exp();
-                    (l, time_sec, vat, led.value(), mu, ec_t)
-                })
-                .collect();
-
-        // Cure depth at printer.led_power × recipe.normal_exposure_sec, so the
-        // row reads as a single-energy test exposure; callers needing per-layer
-        // energy from sliced files should use the Report subcommand.
-        let _ = (dp, ec_ref, CureCalculator::cure_depth); // keep import reachable
+        let samples: Vec<ThermalSample> = sample_layers
+            .iter()
+            .map(|&l| {
+                let vat = ThermalCalculator::vat_temperature_at_layer_v2(
+                    resin_prof.recipe(),
+                    printer,
+                    ambient,
+                    initial_led_temp_typed.map(|t| t.value()),
+                    l,
+                );
+                let time_sec = if l == 0 {
+                    0.0
+                } else {
+                    cumulative
+                        .get((l - 1) as usize)
+                        .copied()
+                        .unwrap_or_else(|| *cumulative.last().unwrap_or(&0.0))
+                };
+                let led_tau_const = ThermalTimeConstant::new(printer.led_tau_sec())
+                    .expect("validated PrinterProfile has positive led_tau_sec");
+                let led = ThermalCalculator::led_temperature_at_time(
+                    initial_led_c_for_display,
+                    printer.led_delta_t_steady_c(),
+                    led_tau_const,
+                    time_sec,
+                );
+                let mu = ThermalCalculator::viscosity_at_temperature(
+                    viscosity,
+                    ref_temp_c,
+                    vat.value(),
+                    ea,
+                );
+                // Ec(T) via the single-source Arrhenius helper on CureCalculator
+                // (KB-153). Matches what FailurePredictor feeds into
+                // cure_depth_at_temp, so reported values track the simulator's.
+                let ec_t = CureCalculator::ec_at_temp(ec_ref, ref_temp_c, vat, ea_cure);
+                ThermalSample {
+                    layer: l,
+                    time_sec,
+                    vat,
+                    led_c: led.value(),
+                    viscosity_mpa_s: mu,
+                    ec_t_mj_cm2: ec_t.value(),
+                }
+            })
+            .collect();
 
         if json {
-            let points: Vec<serde_json::Value> = sample_vat_temps
+            let points: Vec<serde_json::Value> = samples
                 .iter()
-                .map(|(l, time_sec, vat, led, mu, ec_t)| {
-                    let mu_ratio = ThermalCalculator::viscosity_ratio(ambient, vat.value(), ea);
+                .map(|s| {
+                    let mu_ratio = ThermalCalculator::viscosity_ratio(ambient, s.vat.value(), ea);
                     serde_json::json!({
-                        "layer": l,
-                        "time_sec": time_sec,
-                        "led_temperature_c": led,
-                        "vat_temperature_c": vat.value(),
-                        "viscosity_mpa_s": mu,
+                        "layer": s.layer,
+                        "time_sec": s.time_sec,
+                        "led_temperature_c": s.led_c,
+                        "vat_temperature_c": s.vat.value(),
+                        "viscosity_mpa_s": s.viscosity_mpa_s,
                         "viscosity_ratio": mu_ratio,
-                        "effective_ec_mj_cm2": ec_t,
-                        "degradation_risk": resin_defaults.is_degradation_risk(*vat),
+                        "effective_ec_mj_cm2": s.ec_t_mj_cm2,
+                        "degradation_risk": resin_defaults.is_degradation_risk(s.vat),
                     })
                 })
                 .collect();
             let result = serde_json::json!({
                 "ambient_c": ambient,
-                "initial_led_c": initial_led_temp.unwrap_or(ambient),
+                "initial_led_c": initial_led_c_for_display,
                 "led_delta_t_steady_c": printer.led_delta_t_steady_c(),
                 "led_tau_sec": printer.led_tau_sec(),
                 "led_to_vat_coupling": printer.led_to_vat_coupling(),
@@ -828,7 +851,7 @@ fn cmd_thermal(
             println!("Vat thermal profile ({layers} layers) — two-stage LED → vat (ADR-0007)");
             println!(
                 "  Ambient: {ambient}°C  Initial LED: {:.1}°C  Coupling: {:.2}  LED τ: {}s",
-                initial_led_temp.unwrap_or(ambient),
+                initial_led_c_for_display,
                 printer.led_to_vat_coupling(),
                 printer.led_tau_sec(),
             );
@@ -842,20 +865,20 @@ fn cmd_thermal(
                 "", "(min)", "(°C)", "(°C)", "(mPa·s)", "(mJ/cm²)"
             );
             println!("{}", "-".repeat(60));
-            for (l, time_sec, vat, led, mu, ec_t) in &sample_vat_temps {
-                let warn = if resin_defaults.is_degradation_risk(*vat) {
+            for s in &samples {
+                let warn = if resin_defaults.is_degradation_risk(s.vat) {
                     " ⚠"
                 } else {
                     ""
                 };
                 println!(
                     "{:>6}  {:>7.1}  {:>6.1}  {:>6.1}  {:>9.1}  {:>7.3}{}",
-                    l,
-                    time_sec / 60.0,
-                    led,
-                    vat.value(),
-                    mu,
-                    ec_t,
+                    s.layer,
+                    s.time_sec / 60.0,
+                    s.led_c,
+                    s.vat.value(),
+                    s.viscosity_mpa_s,
+                    s.ec_t_mj_cm2,
                     warn
                 );
             }
@@ -1107,7 +1130,18 @@ fn cmd_report_health(
     use resinsim_core::entities::{DEFAULT_CURE_KINETICS_EA_KJ_MOL, Severity};
     use resinsim_core::services::build_plate::PlateAdhesionProfile;
     use resinsim_core::services::failure_predictor::SupportConfig;
+    use resinsim_core::values::InitialLedTemperature;
     use std::path::Path;
+
+    // Parse-time validation of --initial-led-temp via the typed constructor —
+    // rejects NaN / below absolute zero / infinite before any simulation work.
+    let initial_led_temp_typed = match initial_led_temp.map(InitialLedTemperature::new).transpose() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("invalid --initial-led-temp: {e}");
+            std::process::exit(2);
+        }
+    };
 
     let data_dir = match profile_loader::resolve_data_dir(data_dir) {
         Ok(d) => d,
@@ -1158,7 +1192,7 @@ fn cmd_report_health(
         &supports,
         &plate,
         ambient,
-        initial_led_temp,
+        initial_led_temp_typed,
     ) {
         Ok(s) => s,
         Err(e) => {

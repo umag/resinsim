@@ -1,4 +1,4 @@
-use crate::values::{CureDepth, Energy, PenetrationDepth};
+use crate::values::{CureDepth, Energy, PenetrationDepth, VatTemperature};
 
 /// Gas constant. Unit: J/(mol·K).
 const R: f32 = 8.314;
@@ -39,13 +39,12 @@ impl CureCalculator {
         )
     }
 
-    /// Compute cure depth with Arrhenius temperature correction on Ec.
+    /// Arrhenius-corrected critical energy at a given vat temperature.
     ///
     /// # Formula (KB-153)
     ///
     /// ```text
     /// Ec(T_K) = Ec_ref × exp((Ea_cure_J / R) × (1/T_K - 1/T_ref_K))
-    /// Cd      = Dp × ln(E / Ec(T_K))
     /// ```
     ///
     /// where `Ea_cure_J = ea_cure_kj_mol × 1000.0`. Because `T_K > T_ref_K`
@@ -53,6 +52,39 @@ impl CureCalculator {
     /// `Ec(T_K) < Ec_ref` — higher vat temperature lowers Ec, yielding a
     /// deeper cure. This matches radical-polymerization Arrhenius rate
     /// physics.
+    ///
+    /// Single source of truth for the Ec(T) formula — consumed by both
+    /// [`cure_depth_at_temp`](Self::cure_depth_at_temp) and CLI renderers
+    /// (resinsim-inspect) so a future formula correction lands in one place.
+    ///
+    /// # Inputs
+    ///
+    /// `vat_temp: VatTemperature` is typed (finite, above absolute zero) by
+    /// construction. `ref_temp_c: f32` is raw — callers who load it from a
+    /// ResinProfile get the lower-bound check via `ResinProfile::validate()`
+    /// (KB-153 uncertainty note: `reference_temp_c > -273.15`). `ea_cure_kj_mol`
+    /// is raw — callers get the `(0.0, 200.0]` bound via
+    /// `ResinProfile::validate()` when sourced from a profile.
+    pub fn ec_at_temp(
+        ec_ref: Energy,
+        ref_temp_c: f32,
+        vat_temp: VatTemperature,
+        ea_cure_kj_mol: f32,
+    ) -> Energy {
+        let t_ref_k = ref_temp_c + 273.15;
+        let t_k = vat_temp.to_kelvin();
+        let ea_j = ea_cure_kj_mol * 1000.0;
+        let exponent = (ea_j / R) * (1.0 / t_k - 1.0 / t_ref_k);
+        let ec_adjusted = ec_ref.value() * exponent.exp();
+        Energy::new(ec_adjusted).expect(
+            "Ec(T) = Ec_ref × exp(bounded Arrhenius exponent) is positive and finite for validated inputs",
+        )
+    }
+
+    /// Compute cure depth with Arrhenius temperature correction on Ec.
+    ///
+    /// Delegates the Ec(T) calculation to [`ec_at_temp`](Self::ec_at_temp);
+    /// then applies Beer-Lambert via [`cure_depth`](Self::cure_depth).
     ///
     /// # Uncertainty
     ///
@@ -67,17 +99,10 @@ impl CureCalculator {
         energy: Energy,
         ec_ref: Energy,
         ref_temp_c: f32,
-        vat_temp_c: f32,
+        vat_temp: VatTemperature,
         ea_cure_kj_mol: f32,
     ) -> CureDepth {
-        let t_ref_k = ref_temp_c + 273.15;
-        let t_k = vat_temp_c + 273.15;
-        let ea_j = ea_cure_kj_mol * 1000.0;
-        let exponent = (ea_j / R) * (1.0 / t_k - 1.0 / t_ref_k);
-        let ec_adjusted = ec_ref.value() * exponent.exp();
-        let ec = Energy::new(ec_adjusted).expect(
-            "Ec(T) = Ec_ref × exp(bounded Arrhenius exponent) is positive and finite for validated inputs",
-        );
+        let ec = Self::ec_at_temp(ec_ref, ref_temp_c, vat_temp, ea_cure_kj_mol);
         Self::cure_depth(dp, energy, ec)
     }
 
@@ -109,6 +134,10 @@ mod tests {
 
     fn energy(mj_cm2: f32) -> Energy {
         Energy::new(mj_cm2).expect("test fixture: positive finite mJ/cm² is in Energy domain")
+    }
+
+    fn vat(c: f32) -> VatTemperature {
+        VatTemperature::new(c).expect("test fixture: finite °C above absolute zero is a valid VatTemperature")
     }
 
     // --- KB-103 test vectors ---
@@ -231,7 +260,7 @@ mod tests {
             energy(10.0),
             energy(5.0),
             25.0,
-            25.0,
+            vat(25.0),
             30.0,
         );
         assert!((at_ref.value() - baseline.value()).abs() < 1e-4);
@@ -245,7 +274,7 @@ mod tests {
             energy(10.0),
             energy(5.0),
             25.0,
-            25.0,
+            vat(25.0),
             30.0,
         );
         let warm = CureCalculator::cure_depth_at_temp(
@@ -253,7 +282,7 @@ mod tests {
             energy(10.0),
             energy(5.0),
             25.0,
-            40.0,
+            vat(40.0),
             30.0,
         );
         assert!(warm.value() > cold.value());
@@ -267,7 +296,7 @@ mod tests {
             energy(10.0),
             energy(5.0),
             25.0,
-            25.0,
+            vat(25.0),
             30.0,
         );
         let chilly = CureCalculator::cure_depth_at_temp(
@@ -275,7 +304,7 @@ mod tests {
             energy(10.0),
             energy(5.0),
             25.0,
-            15.0,
+            vat(15.0),
             30.0,
         );
         assert!(chilly.value() < at_ref.value());
@@ -290,7 +319,7 @@ mod tests {
             energy(10.0),
             energy(5.0),
             25.0,
-            40.0,
+            vat(40.0),
             30.0,
         );
         let big_ea = CureCalculator::cure_depth_at_temp(
@@ -298,7 +327,7 @@ mod tests {
             energy(10.0),
             energy(5.0),
             25.0,
-            40.0,
+            vat(40.0),
             60.0,
         );
         assert!(big_ea.value() > at_ref.value());

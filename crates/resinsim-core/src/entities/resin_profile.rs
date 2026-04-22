@@ -209,6 +209,16 @@ impl ResinProfile {
                 self.reference_temp_c
             ));
         }
+        // Reference temperature feeds the Ec(T) Arrhenius formula (KB-153) as
+        // 1/T_ref_K; a value at or below absolute zero produces non-physical
+        // kinetics and was the HIGH-severity crash vector flagged in the
+        // step-10 adversarial review.
+        if self.reference_temp_c <= -273.15 {
+            return Err(format!(
+                "reference_temp_c must be above absolute zero (-273.15 °C), got {}",
+                self.reference_temp_c
+            ));
+        }
         if !self.degradation_temp_c.is_finite() {
             return Err(format!(
                 "degradation_temp_c must be finite (got {})",
@@ -369,6 +379,26 @@ mod tests {
         let mut p = ResinProfile::generic_standard();
         p.min_safe_temp_c = 50.0;
         p.degradation_temp_c = 50.0;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn reference_temp_c_below_absolute_zero_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.reference_temp_c = -400.0;
+        let err = p
+            .validate()
+            .expect_err("reference_temp_c below absolute zero must fail validate()");
+        assert!(
+            err.contains("absolute zero"),
+            "error must cite absolute zero: {err}"
+        );
+    }
+
+    #[test]
+    fn reference_temp_c_at_absolute_zero_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.reference_temp_c = -273.15;
         assert!(p.validate().is_err());
     }
 

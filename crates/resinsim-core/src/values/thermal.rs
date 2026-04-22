@@ -7,6 +7,19 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct VatTemperature(f32);
 
+/// Initial LED case temperature at print start. Unit: °C.
+/// Idle-standby baseline BEFORE the UV LEDs ramp up (ADR-0007 / KB-152);
+/// typically a few °C above ambient due to controller-electronics dissipation.
+/// Feeds `ThermalCalculator::led_temperature_at_time` as the stage-A starting
+/// point.
+///
+/// Enforces the same physical bounds as `VatTemperature` (finite, above
+/// absolute zero). Callers that accept a raw `f32` from user input (CLI,
+/// TOML) construct via `new` at the trust boundary so unphysical values fail
+/// with a readable error rather than panicking mid-simulation.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct InitialLedTemperature(f32);
+
 /// Heat flux from LCD/LED screen into resin. Unit: Watts.
 /// Q = P_led × duty_cycle × A_exposed. KB-151.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -36,6 +49,30 @@ impl VatTemperature {
 
     pub fn to_kelvin(&self) -> f32 {
         self.0 + 273.15
+    }
+
+    pub fn value(&self) -> f32 {
+        self.0
+    }
+}
+
+impl InitialLedTemperature {
+    /// Absolute zero. Temperatures below this are unphysical.
+    const ABSOLUTE_ZERO_C: f32 = -273.15;
+
+    pub fn new(celsius: f32) -> Result<Self, String> {
+        if !celsius.is_finite() {
+            return Err(format!(
+                "initial LED temperature must be finite, got {celsius}"
+            ));
+        }
+        if celsius <= Self::ABSOLUTE_ZERO_C {
+            return Err(format!(
+                "initial LED temperature must be above absolute zero ({:.2} °C), got {celsius}",
+                Self::ABSOLUTE_ZERO_C
+            ));
+        }
+        Ok(Self(celsius))
     }
 
     pub fn value(&self) -> f32 {
@@ -130,6 +167,35 @@ mod tests {
     #[test]
     fn vat_temperature_new_rejects_infinity() {
         assert!(VatTemperature::new(f32::INFINITY).is_err());
+    }
+
+    // --- InitialLedTemperature ---
+
+    #[test]
+    fn initial_led_temperature_new_rejects_nan() {
+        assert!(InitialLedTemperature::new(f32::NAN).is_err());
+    }
+
+    #[test]
+    fn initial_led_temperature_new_rejects_below_absolute_zero() {
+        assert!(InitialLedTemperature::new(-273.15).is_err());
+        assert!(InitialLedTemperature::new(-300.0).is_err());
+    }
+
+    #[test]
+    fn initial_led_temperature_new_rejects_infinity() {
+        assert!(InitialLedTemperature::new(f32::INFINITY).is_err());
+        assert!(InitialLedTemperature::new(f32::NEG_INFINITY).is_err());
+    }
+
+    #[test]
+    fn initial_led_temperature_new_accepts_normal() {
+        assert_eq!(
+            InitialLedTemperature::new(27.0)
+                .expect("test fixture: 27.0 °C is in InitialLedTemperature domain")
+                .value(),
+            27.0
+        );
     }
 
     #[test]
