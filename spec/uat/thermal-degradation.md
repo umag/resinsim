@@ -11,9 +11,10 @@ date: 2026-04-17
 call site to `ResinProfile::is_degradation_risk`. This scenario verifies the
 end-to-end path (failure_predictor → ResinProfile) remains intact.
 
-**Scenario:**
-
-Given a resin with a 50°C degradation threshold
-When a simulation runs with a vat temperature that rises above 50°C during printing
-Then the simulation output includes a thermal degradation warning event
-And the warning references the vat temperature that exceeded the threshold
+```gherkin
+Scenario: UAT-1 thermal degradation detection survives DDD refactor
+  Given a resin with a 50°C degradation threshold
+  When a simulation runs with a vat temperature that rises above 50°C during printing
+  Then the simulation output includes a thermal degradation warning event
+  And the warning references the vat temperature that exceeded the threshold
+```
