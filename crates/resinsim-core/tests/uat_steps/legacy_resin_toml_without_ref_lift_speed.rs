@@ -6,7 +6,6 @@
 //! (no serde default); adding the field yields a valid profile.
 
 use cucumber::{given, then, when};
-use resinsim_core::entities::ResinProfile;
 
 use super::world::UatWorld;
 

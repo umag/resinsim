@@ -35,7 +35,7 @@ to the vat and creates no vacuum during peel.
 
 ```gherkin
 Scenario: UAT-1 fluid-permeable supports produce no suction event
-  Given a LayerInput stack comprising:
+  Given a LayerInput stack with raft + fluid-permeable column supports:
     """
     solid raft (width × height fully-solid LayerMask) for the first ~23 layers
     discrete-column layer (multiple small solid footprints with inter-column gaps spanning the full bbox width/height) for ~8 layers
@@ -58,7 +58,7 @@ exactly one event at the layer that closes the cavity from the FEP side.
 
 ```gherkin
 Scenario: UAT-2 topologically-sealed cavity produces one event at closure
-  Given a LayerInput stack comprising:
+  Given a LayerInput stack with a closed cup (solid base + ring walls + solid cap):
     """
     solid base mask for layer 0
     ring-wall masks (outer frame solid, interior void) for layers 1..N-1

@@ -19,6 +19,8 @@ pub mod world;
 
 pub mod fixtures;
 
+pub mod cli_fixtures;
+
 // Per-UAT-file step definition modules. snake_case names mirror the
 // kebab-case spec/uat/*.md file names verbatim for grep traceability
 // (docs/patterns/extracting-gherkin-from-markdown.md).

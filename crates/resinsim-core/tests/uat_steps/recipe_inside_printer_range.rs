@@ -286,11 +286,21 @@ fn when_pairing_validated(world: &mut UatWorld) {
     regex = r#"^"R2" with recipe\.layer_height_um = 50\.1 returns Err naming the field$"#
 )]
 fn then_slightly_off_returns_err(world: &mut UatWorld) {
+    // Fold review finding #7: don't hardcode 50.1 — compute an out-of-
+    // range layer_height programmatically from the printer's pinned
+    // range. Any epsilon > 0 past max works; 0.1 is the plan-narrative
+    // delta but the scenario's contract is "strictly past the max"
+    // not "exactly +0.1". Keeps the scenario honest if validate()
+    // gains a precision gate later.
     let printer = world
         .printer
         .as_ref()
         .expect("scenario invariant: printer set");
-    let toml_str = r#"name = "SlightlyOff"
+    let max_layer = printer.layer_height_range_um().max();
+    // +0.1 matches scenario narrative but is derived, not hard-coded.
+    let out_of_range = max_layer + 0.1;
+    let toml_str = format!(
+        r#"name = "SlightlyOff"
 penetration_depth_um = 170.0
 critical_energy_mj_cm2 = 5.0
 tensile_strength_mpa = 35.0
@@ -303,7 +313,7 @@ activation_energy_kj_mol = 52.0
 density_g_cm3 = 1.1
 
 [recipe]
-layer_height_um = 50.1
+layer_height_um = {out_of_range}
 bottom_layer_count = 6
 transition_layers = 3
 normal_exposure_sec = 2.5
@@ -314,8 +324,9 @@ wait_after_release_sec = 0.0
 lift_speed_mm_min = 60.0
 lift_cycle_sec = 7.5
 lift_distance_mm = 5.0
-"#;
-    let r: ResinProfile = toml::from_str(toml_str).expect("slightly-off TOML parses");
+"#
+    );
+    let r: ResinProfile = toml::from_str(&toml_str).expect("slightly-off TOML parses");
     r.validate().expect("slightly-off resin is valid");
     let res = pairing_validator::validate_pairing(printer, r.recipe());
     let violations = res.err().expect("slightly-off pairing must return Err");

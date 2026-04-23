@@ -12,15 +12,24 @@ use resinsim_core::simulation::PrintSimulation;
 use resinsim_core::values::{PeelForce, SafetyFactor, SupportCapacity};
 
 #[derive(Debug, Default, World)]
-// Fields are read by subsets of step-def modules; `dead_code` would
-// otherwise fire in the uat_extractor binary that pulls the tree in only
-// for the extract + extract_tests siblings.
-#[allow(dead_code)]
 pub struct UatWorld {
     // ---- Safety-factor-zero-force scenarios ----
+    /// Unused by current step defs (step 9 moved to predict_layer
+    /// integration which populates `predict_layer_result`), retained
+    /// for future component-level scenarios.
+    #[expect(dead_code, reason = "pre-step-9 spike mirror; kept for future scenarios")]
     pub capacity: Option<SupportCapacity>,
+    #[expect(dead_code, reason = "pre-step-9 spike mirror; kept for future scenarios")]
     pub force: Option<PeelForce>,
+    #[expect(dead_code, reason = "pre-step-9 spike mirror; kept for future scenarios")]
     pub computed_safety: Option<Option<SafetyFactor>>,
+    /// Step-9 predict_layer output. Per-scenario (cucumber resets
+    /// World between scenarios) so the capture doesn't leak across
+    /// runs. Folds review finding #3 (OnceLock → World field).
+    pub predict_layer_result: Option<(
+        resinsim_core::entities::LayerResult,
+        Vec<resinsim_core::entities::FailureEvent>,
+    )>,
 
     // ---- Cure-depth-NaN-guard scenarios ----
     pub last_energy_err: Option<&'static str>,
@@ -47,6 +56,8 @@ pub struct UatWorld {
 
     // ---- Suction-detector scenarios ----
     pub cavity_events: Option<Vec<CavityEventSummary>>,
+    /// Not asserted directly — captured for post-hoc diagnostics only.
+    #[expect(dead_code, reason = "diagnostic capture; not yet asserted")]
     pub suction_failure_count: Option<usize>,
     pub suction_event_layer: Option<u32>,
     pub sealed_area_mm2: Option<f32>,
@@ -181,6 +192,15 @@ pub struct ResinBuilder {
     critical_energy_mj_cm2: f32,
     penetration_depth_um: f32,
     viscosity_mpa_s: f32,
+    tensile_strength_mpa: f32,
+    peel_adhesion_kpa: f32,
+    ref_lift_speed_mm_min: f32,
+    reference_temp_c: f32,
+    activation_energy_kj_mol: f32,
+    density_g_cm3: f32,
+    linear_shrinkage_pct: f32,
+    degradation_temp_c: Option<f32>,
+    min_safe_temp_c: Option<f32>,
     recipe: RecipeBuilder,
 }
 
@@ -191,13 +211,48 @@ impl ResinBuilder {
             name: "UatResin".into(),
             critical_energy_mj_cm2: 5.0, // KB-100 Premium Black
             penetration_depth_um: 170.0, // KB-100 Premium Black
-            viscosity_mpa_s: 200.0,
+            viscosity_mpa_s: 200.0,      // KB-141 typical
+            tensile_strength_mpa: 35.0,  // KB-140 conservative
+            peel_adhesion_kpa: 13.0,     // KB-110 standard FEP
+            ref_lift_speed_mm_min: 60.0,
+            reference_temp_c: 25.0,
+            activation_energy_kj_mol: 52.0, // KB-150
+            density_g_cm3: 1.1,
+            linear_shrinkage_pct: 1.5,
+            degradation_temp_c: None,
+            min_safe_temp_c: None,
             recipe: RecipeBuilder::new(),
         }
     }
 
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
     pub fn with_critical_energy(mut self, mj_cm2: f32) -> Self {
         self.critical_energy_mj_cm2 = mj_cm2;
+        self
+    }
+
+    pub fn with_penetration_depth(mut self, um: f32) -> Self {
+        self.penetration_depth_um = um;
+        self
+    }
+
+    pub fn with_viscosity(mut self, mpa_s: f32) -> Self {
+        self.viscosity_mpa_s = mpa_s;
+        self
+    }
+
+    pub fn with_peel_adhesion(mut self, kpa: f32) -> Self {
+        self.peel_adhesion_kpa = kpa;
+        self
+    }
+
+    pub fn with_thermal_thresholds(mut self, degradation_c: f32, min_safe_c: f32) -> Self {
+        self.degradation_temp_c = Some(degradation_c);
+        self.min_safe_temp_c = Some(min_safe_c);
         self
     }
 
@@ -207,25 +262,36 @@ impl ResinBuilder {
     }
 
     pub fn build(self) -> resinsim_core::entities::ResinProfile {
+        let thermal_lines = match (self.degradation_temp_c, self.min_safe_temp_c) {
+            (Some(d), Some(m)) => format!("degradation_temp_c = {d}\nmin_safe_temp_c = {m}\n"),
+            _ => String::new(),
+        };
         let toml_str = format!(
             r#"name = "{name}"
 penetration_depth_um = {dp}
 critical_energy_mj_cm2 = {ec}
-tensile_strength_mpa = 35.0
-peel_adhesion_kpa = 13.0
-ref_lift_speed_mm_min = 60.0
-linear_shrinkage_pct = 1.5
+tensile_strength_mpa = {ts}
+peel_adhesion_kpa = {pa}
+ref_lift_speed_mm_min = {rls}
+linear_shrinkage_pct = {lsp}
 viscosity_mpa_s = {visc}
-reference_temp_c = 25.0
-activation_energy_kj_mol = 52.0
-density_g_cm3 = 1.1
-
+reference_temp_c = {ref_t}
+activation_energy_kj_mol = {ea}
+density_g_cm3 = {dens}
+{thermal_lines}
 {recipe}
 "#,
             name = self.name,
             dp = self.penetration_depth_um,
             ec = self.critical_energy_mj_cm2,
+            ts = self.tensile_strength_mpa,
+            pa = self.peel_adhesion_kpa,
+            rls = self.ref_lift_speed_mm_min,
+            lsp = self.linear_shrinkage_pct,
             visc = self.viscosity_mpa_s,
+            ref_t = self.reference_temp_c,
+            ea = self.activation_energy_kj_mol,
+            dens = self.density_g_cm3,
             recipe = self.recipe.to_toml(),
         );
         let r: resinsim_core::entities::ResinProfile =

@@ -41,6 +41,11 @@ use uat_steps::{
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    // CLI UAT scenarios subprocess the `resinsim` binary from the
+    // sibling resinsim-inspect package. Build once before cucumber runs
+    // so step defs find the binary on disk.
+    uat_steps::cli_fixtures::ensure_resinsim_built();
+
     let spec_uat = resolve_spec_uat_dir();
 
     // Loud-fail when the resolved path is the wrong directory.

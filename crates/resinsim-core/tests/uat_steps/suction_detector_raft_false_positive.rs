@@ -13,6 +13,7 @@
 //! regex — including the narrative-heavy UAT-6 external fixture case
 //! which stays `#[ignore]`-style in the existing hand-written test.
 
+use cucumber::gherkin::Step;
 use cucumber::{given, then, when};
 use resinsim_core::services::cavity_detector::{CavityDetector, MIN_SEALED_AREA_MM2};
 use resinsim_core::values::LayerMask;
@@ -21,23 +22,27 @@ use super::world::{CavityEventSummary, UatWorld};
 
 // ---- UAT-1: fluid-permeable supports produce no suction event --------------
 
-#[given(regex = r"^a LayerInput stack comprising:$")]
-fn given_layer_stack(world: &mut UatWorld, step: &cucumber::gherkin::Step) {
-    // The DocString describes the topology qualitatively. The step def
-    // routes to one of the fixture builders below based on keyword
-    // matching in the docstring — sealed cup vs raft-plus-columns vs
-    // open hollow. Cucumber re-uses this Given across several scenarios;
-    // the docstring content disambiguates.
-    let doc = step.docstring.as_deref().unwrap_or_default();
-    let masks = if doc.contains("ring-wall") && doc.contains("cap") {
-        closed_cup_masks()
-    } else if doc.contains("discrete-column") {
-        raft_plus_columns_masks()
-    } else {
-        // Fallback: generic raft. Kept non-empty so the detector has
-        // something to walk.
-        raft_plus_columns_masks()
-    };
+#[given(
+    regex = r"^a LayerInput stack with raft \+ fluid-permeable column supports:$"
+)]
+fn given_raft_plus_columns(world: &mut UatWorld, step: &Step) {
+    // Fold review finding #5: scenario-specific Given — no docstring
+    // keyword routing. The DocString is preserved for spec readability
+    // (cucumber attaches it to `step.docstring`) but the step def
+    // builds its fixture unconditionally.
+    let _ = step.docstring.as_deref();
+    let masks = raft_plus_columns_masks();
+    world.cavity_events = Some(collect_events(&masks));
+}
+
+// ---- UAT-2: topologically-sealed cavity produces one event at closure ------
+
+#[given(
+    regex = r"^a LayerInput stack with a closed cup \(solid base \+ ring walls \+ solid cap\):$"
+)]
+fn given_closed_cup(world: &mut UatWorld, step: &Step) {
+    let _ = step.docstring.as_deref();
+    let masks = closed_cup_masks();
     world.cavity_events = Some(collect_events(&masks));
 }
 

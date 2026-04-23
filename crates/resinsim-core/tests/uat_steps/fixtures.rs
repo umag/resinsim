@@ -5,8 +5,7 @@
 //! with explicit builders (`PrinterBuilder`, `ResinBuilder`, etc.) in
 //! `world.rs` — for now, inline closures + TOML round-trips suffice.
 
-use resinsim_core::app::simulation_runner::SimulationRunner;
-use resinsim_core::entities::{PrinterProfile, ResinProfile};
+use resinsim_core::entities::PrinterProfile;
 use resinsim_core::services::build_plate::PlateAdhesionProfile;
 use resinsim_core::services::failure_predictor::SupportConfig;
 use resinsim_core::values::{AmbientTemperature, CrossSectionArea};
@@ -62,22 +61,3 @@ lcd_uniformity_variation = 0.22
     p
 }
 
-/// Run `SimulationRunner::run_from_areas` with the shared test fixtures.
-/// Returns the simulation `Result` so step defs can assert on either Ok
-/// or Err paths.
-pub fn run_simulation_default(
-    printer: &PrinterProfile,
-    resin: &ResinProfile,
-    n_layers: usize,
-) -> Result<resinsim_core::simulation::PrintSimulation, String> {
-    let areas = cube_areas(n_layers, 100.0);
-    SimulationRunner::run_from_areas(
-        &areas,
-        resin,
-        printer,
-        &test_supports(),
-        &default_plate(),
-        test_ambient(),
-        None,
-    )
-}
