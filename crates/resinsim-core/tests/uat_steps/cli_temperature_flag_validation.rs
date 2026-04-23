@@ -268,12 +268,26 @@ fn given_measured_ea_cure(world: &mut UatWorld) {
         let e = entry.expect("entry");
         std::fs::copy(e.path(), printers.join(e.file_name())).expect("copy printer");
     }
-    // Patch generic_standard.toml with cure_kinetics_ea_kj_mol = 45.0.
+    // Folded LOW finding: parse-then-rewrite instead of string append.
+    // Robust to trailing-whitespace or line-ending edits in the source
+    // TOML, and the insertion lands as a top-level key (NOT inside the
+    // `[recipe]` table) regardless of source structure.
     let src_toml = std::fs::read_to_string(src_dir.join("resins/generic_standard.toml"))
         .expect("read generic_standard");
-    let patched = format!("{src_toml}\ncure_kinetics_ea_kj_mol = 45.0\n");
+    let mut parsed: toml::Table =
+        toml::from_str(&src_toml).expect("source generic_standard.toml must be valid TOML");
+    parsed.insert(
+        "cure_kinetics_ea_kj_mol".to_string(),
+        toml::Value::Float(45.0),
+    );
+    let patched =
+        toml::to_string(&parsed).expect("serialise patched generic_standard.toml back to TOML");
     std::fs::write(resins.join("generic_standard.toml"), &patched)
         .expect("write patched toml");
+    // Sanity: parse + validate the rewritten TOML so a re-serialize
+    // bug surfaces here rather than via a downstream CLI error.
+    let _: resinsim_core::entities::ResinProfile =
+        toml::from_str(&patched).expect("patched TOML must round-trip back to ResinProfile");
 
     world.cli_cmd = Some(vec![
         "inspect".into(),

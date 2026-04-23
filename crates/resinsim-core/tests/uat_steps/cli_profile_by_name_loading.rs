@@ -12,7 +12,7 @@
 
 use cucumber::{given, then, when};
 
-use super::cli_fixtures::{invoke_resinsim, workspace_data_dir};
+use super::cli_fixtures::{f32_from_stdout_json, invoke_resinsim, workspace_data_dir};
 use super::world::UatWorld;
 
 // ---- UAT-1 (printer): Athena II TOML loads by name ------------------------
@@ -308,13 +308,13 @@ fn when_inspect_zaxis_uat3(world: &mut UatWorld) {
 #[then(regex = r"^the output reports stiffness_n_per_mm = 200$")]
 fn then_stiffness_200(world: &mut UatWorld) {
     let stdout = world.cli_stdout.as_deref().unwrap_or_default();
+    let stiffness =
+        f32_from_stdout_json(stdout, &["stiffness_n_per_mm", "z_stiffness_n_per_mm"])
+            .unwrap_or_else(|| panic!("stiffness_n_per_mm not in output; got: {stdout}"));
     assert!(
-        stdout.contains("200"),
-        "explicit --stiffness 200 must appear in output; got: {stdout}",
+        (stiffness - 200.0).abs() < 1e-3,
+        "explicit --stiffness 200 must reach the output; got {stiffness} (athena profile's 1500 would have won here without the override)",
     );
-    // The athena profile's 1500 should NOT be the reported stiffness.
-    // Count occurrences to tolerate 1500 appearing in unrelated fields.
-    // The narrower contract: output does not claim stiffness of 1500.
 }
 
 #[then(
@@ -391,9 +391,12 @@ fn then_exits_successfully(world: &mut UatWorld) {
 #[then(regex = r"^the output uses the built-in default stiffness of 460\.0 N/mm$")]
 fn then_default_stiffness(world: &mut UatWorld) {
     let stdout = world.cli_stdout.as_deref().unwrap_or_default();
+    let stiffness =
+        f32_from_stdout_json(stdout, &["stiffness_n_per_mm", "z_stiffness_n_per_mm"])
+            .unwrap_or_else(|| panic!("stiffness_n_per_mm not in output; got: {stdout}"));
     assert!(
-        stdout.contains("460"),
-        "built-in default stiffness 460 N/mm must appear; got: {stdout}",
+        (stiffness - 460.0).abs() < 1e-3,
+        "built-in default stiffness must be 460.0 N/mm; got {stiffness}",
     );
 }
 
@@ -461,11 +464,12 @@ fn then_flag_wins(world: &mut UatWorld) {
         exit, 0,
         "flag-wins must succeed even with bogus env path; stderr={stderr}",
     );
-    // Athena stiffness 1500 must appear — if stage (b) env had won
-    // (pointing at bogus path), the load would have hard-errored.
+    let stiffness =
+        f32_from_stdout_json(stdout, &["stiffness_n_per_mm", "z_stiffness_n_per_mm"])
+            .unwrap_or_else(|| panic!("stiffness_n_per_mm not in output; got: {stdout}"));
     assert!(
-        stdout.contains("1500"),
-        "athena_ii loaded via flag must surface stiffness 1500; got: {stdout}",
+        (stiffness - 1500.0).abs() < 1e-3,
+        "athena_ii loaded via --data-dir flag must surface stiffness 1500; got {stiffness} (stage (b) bogus env would have hard-errored before this point)",
     );
 }
 

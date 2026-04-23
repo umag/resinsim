@@ -51,6 +51,15 @@ pub fn resinsim_bin_path() -> PathBuf {
 /// `tests/uat_gherkin.rs::main()` so CLI step defs find the binary
 /// when they invoke it. cargo's build cache makes the warm-path nearly
 /// instant; the first run bears the full compile cost.
+///
+/// Toolchain robustness (folded LOW finding): the workspace pins
+/// nightly via `rust-toolchain.toml` and passes `-Z threads=8` via its
+/// rustflags. If a user's ambient toolchain override resolves `cargo`
+/// to stable (e.g. `cargo +stable test --test uat_gherkin ...`), the
+/// `-Z` flag would be rejected. We set `RUSTC_BOOTSTRAP=1` on the
+/// spawned build so nightly-only flags are accepted by any rustc —
+/// bounded belt-and-braces for test infra, NOT a signal to start using
+/// unstable features in production code.
 pub fn ensure_resinsim_built() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
@@ -66,6 +75,7 @@ pub fn ensure_resinsim_built() {
                 "--manifest-path",
             ])
             .arg(&manifest)
+            .env("RUSTC_BOOTSTRAP", "1")
             .status()
             .unwrap_or_else(|e| {
                 panic!(
@@ -84,6 +94,31 @@ pub fn ensure_resinsim_built() {
             bin.display(),
         );
     });
+}
+
+/// Parse the first matching `"<key>": <number>` out of a JSON-ish
+/// string, tolerating common whitespace variants. Keys are tried in
+/// order so callers can list synonyms (e.g. `commanded_layer_height_um`
+/// then `layer_height_um`) and the first hit wins.
+///
+/// Folded LOW finding: replaces substring-only assertions (e.g.
+/// `stdout.contains("1500")`) with a keyed scan so unrelated fields
+/// that coincidentally carry the same number can't mask a regression.
+pub fn f32_from_stdout_json(stdout: &str, keys: &[&str]) -> Option<f32> {
+    for key in keys {
+        let quoted = format!("\"{key}\"");
+        if let Some(idx) = stdout.find(&quoted) {
+            let tail = &stdout[idx + quoted.len()..];
+            let tail = tail.trim_start_matches([':', ' ', '\t', '\n', '\r']);
+            let end = tail
+                .find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-' && c != 'e' && c != '+')
+                .unwrap_or(tail.len());
+            if let Ok(v) = tail[..end].parse::<f32>() {
+                return Some(v);
+            }
+        }
+    }
+    None
 }
 
 /// Result of a single CLI invocation.
