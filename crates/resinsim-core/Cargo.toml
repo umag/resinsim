@@ -19,6 +19,7 @@ proptest = "1.9.0"
 approx = "0.5"
 cucumber = "0.22.1"
 tokio = { version = "1", features = ["macros", "rt"] }
+pulldown-cmark = { version = "0.13.3", default-features = false }
 
 [[test]]
 name = "uat_gherkin"
