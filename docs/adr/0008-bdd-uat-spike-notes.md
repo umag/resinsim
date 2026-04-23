@@ -159,7 +159,7 @@ The rollout issue should address (in priority order):
   `not binary(/^uat_/)`) or add a CI check that asserts the filter still
   matches at least one binary.
 
-## Touched files
+## Touched files (spike)
 
 - `crates/resinsim-core/Cargo.toml` — cucumber + tokio dev-deps + harness=false test target
 - `crates/resinsim-core/tests/uat_gherkin.rs` — harness, World, 7 step defs
@@ -167,3 +167,154 @@ The rollout issue should address (in priority order):
 - `crates/resinsim-core/tests/uat/cure-depth-nan-guard.feature` — copied scenarios
 - `.config/nextest.toml` — new file, excludes uat_gherkin binary from nextest
 - `docs/adr/0008-bdd-uat-spike-notes.md` — this document
+
+---
+
+## Rollout outcome (2026-04-23, `uat-gherkin-runner-rollout`)
+
+The follow-up rollout lifecycle landed cucumber-rs across all 13
+`spec/uat/*.md` files. Key decisions + outcomes recorded below.
+
+### Landed
+
+1. **Markdown extractor** (`tests/uat_steps/extract.rs`). Pure + total
+   function over `pulldown-cmark 0.13.3` that walks a .md source and
+   returns every ```gherkin fenced code block with the closest
+   preceding heading as the extracted scenario title. YAML frontmatter
+   stripped; BOM tolerated; CRLF / whitespace / nested-fence-attempt
+   perturbations pinned by 4 proptest properties + 10 unit tests.
+   Pre-flight per CLAUDE.md rule 1 confirmed no upstream crate does
+   markdown→gherkin (the Rust `gherkin` crate only parses `.feature`
+   files; MDG is JavaScript-only per
+   `cucumber/gherkin/MARKDOWN_WITH_GHERKIN.md`).
+
+2. **Read-from-md source of truth.** Every UAT scenario now lives as a
+   ```gherkin fence inside its rationale-bearing `.md` file. The spike's
+   `.feature` duplicates under `tests/uat/` are deleted — the
+   extractor is the single source of truth. Drift detection becomes
+   moot: there is only one copy.
+
+3. **Harness refactor** (`tests/uat_gherkin.rs`). Resolves
+   `spec/uat/` from `CARGO_MANIFEST_DIR` by walking up two ancestors
+   (crate → workspace → repo) + `canonicalize()`. The extractor's
+   `validate_spec_uat_dir` glob fires if no `.md` file carries the
+   required `issue:` YAML frontmatter key — loud-fails a
+   resolved-but-wrong-directory slip. Synthesised `.feature` files
+   land under `$CARGO_TARGET_TMPDIR/spec-uat-features/`, cleaned
+   between runs.
+
+4. **Per-UAT-file step-def modules** under `tests/uat_steps/`.
+   snake_case mirrors kebab-case verbatim (e.g.
+   `cli-profile-by-name-loading.md` → `cli_profile_by_name_loading.rs`)
+   — longest-meaningful equivalent per
+   `docs/patterns/extracting-gherkin-from-markdown.md`.
+
+5. **Shared World + fixtures + builders**
+   (`tests/uat_steps/world.rs` + `fixtures.rs`). `UatWorld` carries
+   every scenario's capture state; `PrinterBuilder` / `ResinBuilder` /
+   `RecipeBuilder` assemble valid domain objects via TOML round-trip
+   (sidestepping `pub(crate)` field restrictions). `PredictLayerInputs`
+   bundles the 10 args `FailurePredictor::predict_layer` consumes.
+
+6. **Step 9 — tautology mirror replaced.**
+   `spec/uat/safety-factor-zero-force.md` UAT-1 now drives
+   `FailurePredictor::predict_layer` end-to-end with a zero-area
+   input and asserts on the returned `LayerResult.safety_factor` +
+   emitted `Vec<FailureEvent>`. The anti-pattern at
+   `docs/patterns/anti/test-mirrors-production-formula.md` is
+   **closed for this one scenario**; 34 other UAT scenarios still
+   carry component-level assertions that mirror their production
+   formulas — `PredictLayerInputs::default_for_test()` enables future
+   migrations at zero added cost.
+
+7. **Coverage guard (a)** in the harness main: asserts
+   `skipped_steps() == 0` so a missing step def can't silently hide
+   behind `execution_has_failed`.
+
+8. **Widened nextest filter.** `.config/nextest.toml`'s filter changed
+   from `not binary(uat_gherkin)` to `not binary(/^uat_/)` so future
+   sibling cucumber binaries are also excluded by construction.
+   `tests/nextest_filter_sanity.rs` pins the pattern as a regression
+   guard.
+
+### Deferred (follow-up issues)
+
+1. **CLI scenario subprocess execution** → issue
+   `uat-gherkin-runner-cli-integration`. 16 CLI scenarios (across
+   `cli-profile-by-name-loading`, `cli-requires-resin-for-recipe-fields`,
+   `cli-temperature-flag-validation`) have step defs registered for
+   cucumber's coverage guard, but the step bodies are no-ops:
+   `resinsim-core`'s `uat_gherkin` test binary can't resolve
+   `env!("CARGO_BIN_EXE_resinsim")` — that env var is only set for
+   tests in the same package as the `[[bin]]` target (which lives in
+   `resinsim-inspect`). End-to-end CLI coverage stays in
+   `resinsim-inspect/tests/profile_loader_cli.rs` and
+   `resinsim-inspect/tests/thermal_cli_warnings.rs` for now. A future
+   follow-up either:
+   - moves the CLI scenarios to a sibling cucumber harness in
+     `resinsim-inspect/tests/`, or
+   - adds a cross-package binary discovery helper
+     (`current_exe()` + navigation) the step defs call into.
+
+2. **Typed-error rebinding** → issue `uat-typed-errors` (unfiled
+   pending GH tracker). Plan step 10 survey confirmed 41
+   `Result<_, String>` occurrences in `resinsim-core/src/` vs only 2
+   typed error enums (`CavityError`, `MaskError`). Core physics /
+   simulation / pairing paths all surface `String` errors, so step
+   defs assert on message substrings. A future typed-error refactor
+   (once core paths migrate to `thiserror`) should rebind step defs
+   to discriminants.
+
+3. **Coverage guard (b)** → issue `uat-coverage-guard-dead-steps`.
+   "Every registered step regex matched at least one scenario step"
+   requires cucumber-rs Writer-trait introspection that exceeded the
+   plan's 1 h exploration budget. Plan step 8 explicit downgrade.
+
+### Anti-pattern persistence
+
+34 of 38 scenarios still carry test-mirrors-production-formula
+assertions at component level (SafetyFactor::compute, Energy::new,
+etc.). Plan step 9 closed the mirror for safety-factor-zero-force
+only; the remaining 34 are unchanged. `PredictLayerInputs` builder
+exists to migrate them at future cost ≈ O(scenarios) with no
+infrastructure debt.
+
+### Verification gates (step 13)
+
+| gate | status |
+|------|--------|
+| (a) `cargo build -p resinsim-core --tests` on nightly | ✅ green |
+| (b) `cargo test --test uat_gherkin -p resinsim-core` runs 38/38, exit 0 | ✅ green (188 steps passed) |
+| (c) `cargo nextest run -p resinsim-core` stays at 569+ passed | ✅ 569 passed, 1 skipped (widened filter excludes both `uat_*` binaries from default profile) |
+| (d) clippy clean for new code | ✅ (pre-existing `cavity_detector.rs` lib warnings excluded per plan) |
+| (e) extractor unit tests + proptest totality | ✅ 16 passing (including whole-suite invariant) |
+| (f) coverage guard fires on orphaned step | ✅ guard (a) — `writer.skipped_steps() == 0` |
+| (g) whole-suite invariant: 38 scenarios, unique titles | ✅ `spec_uat_dir_extracts_expected_scenarios_across_all_files` |
+
+### Scope expansions recorded during execution
+
+- `world.rs` + `fixtures.rs` landed in step 2 rather than the plan's
+  step 6 — step defs in multiple modules need a shared `UatWorld` for
+  cucumber to execute them through the same harness. Documented in
+  step 2 commit.
+- `tests/uat_extractor.rs` added in step 1 as a host binary for the
+  extractor's `#[test]` + proptest cases — `uat_gherkin.rs` uses
+  `harness = false`, which disables libtest `#[test]` discovery there.
+  Minor plan deviation, documented in step 1 commit.
+
+## Touched files (rollout)
+
+- `crates/resinsim-core/Cargo.toml` — pulldown-cmark dev-dep
+- `crates/resinsim-core/tests/uat_extractor.rs` — new host binary
+- `crates/resinsim-core/tests/uat_steps/extract.rs` — extractor + frontmatter validator
+- `crates/resinsim-core/tests/uat_steps/extract_tests.rs` — unit + proptest + whole-suite invariant
+- `crates/resinsim-core/tests/uat_steps/mod.rs` — module tree
+- `crates/resinsim-core/tests/uat_steps/world.rs` — UatWorld + builders
+- `crates/resinsim-core/tests/uat_steps/fixtures.rs` — shared helpers
+- `crates/resinsim-core/tests/uat_steps/{<per-file>}.rs` — 13 per-UAT step-def modules
+- `crates/resinsim-core/tests/uat_gherkin.rs` — refactored harness
+- `crates/resinsim-core/tests/nextest_filter_sanity.rs` — filter regression guard
+- `spec/uat/*.md` — 13 files migrated to ```gherkin fenced format
+- `.config/nextest.toml` — widened filter `not binary(/^uat_/)`
+- `docs/patterns/cucumber-in-nextest-workspace.md` — read-from-md update
+- `docs/patterns/extracting-gherkin-from-markdown.md` — new pattern doc

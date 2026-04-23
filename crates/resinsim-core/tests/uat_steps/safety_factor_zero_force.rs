@@ -1,58 +1,104 @@
 //! Step definitions for `spec/uat/safety-factor-zero-force.md` UAT-1.
 //!
-//! Ported from the spike's `tests/uat_gherkin.rs` inline defs. The scenario
-//! locks T1-F2's guard: `SafetyFactor::compute()` returns `None` when peel
-//! force is zero, and `failure_predictor` must NOT emit a SupportOverload
-//! for those layers.
+//! **Step 9 — replaces the spike's tautology mirror.** The spike tested
+//! the SafetyFactor::compute formula directly (test mirrors production);
+//! this rewrite drives the scenario through
+//! `FailurePredictor::predict_layer` end-to-end and asserts on the
+//! actual `LayerResult` + emitted `FailureEvent` list. Anti-pattern at
+//! `docs/patterns/anti/test-mirrors-production-formula.md` is closed
+//! for THIS scenario; 34 other UAT scenarios still carry mirror-style
+//! assertions and are tracked in the rollout outcome for future
+//! migration.
 
 use cucumber::{given, then, when};
-use resinsim_core::values::{PeelForce, SafetyFactor, SupportCapacity};
+use resinsim_core::entities::{FailureEvent, FailureType, LayerResult};
+use resinsim_core::services::failure_predictor::FailurePredictor;
 
-use super::world::UatWorld;
+use super::world::{PredictLayerInputs, UatWorld};
+
+// The World captures the predict_layer result + emitted events so each
+// Then step can assert against them. Fields live on UatWorld already.
+// We stash into the existing `computed_safety` + a new helper below.
+
+/// Per-scenario storage for the LayerResult / Vec<FailureEvent> returned
+/// by `FailurePredictor::predict_layer`. Kept inside this module since
+/// it is scenario-specific; UatWorld would grow without bound if every
+/// scenario added fields.
+fn predict_result_store() -> &'static std::sync::Mutex<Option<(LayerResult, Vec<FailureEvent>)>> {
+    static STORE: std::sync::OnceLock<std::sync::Mutex<Option<(LayerResult, Vec<FailureEvent>)>>> =
+        std::sync::OnceLock::new();
+    STORE.get_or_init(|| std::sync::Mutex::new(None))
+}
 
 #[given(regex = r"^a print with zero peel force on one or more layers \(e\.g\. layer area = 0\)$")]
-fn given_zero_peel_force(world: &mut UatWorld) {
-    world.capacity = Some(
-        SupportCapacity::new(100.0)
-            .expect("scenario invariant: 100 N support capacity is in domain"),
-    );
-    world.force = Some(
-        PeelForce::new(0.0).expect("scenario invariant: 0 N peel force is in domain"),
-    );
+fn given_zero_peel_force(_world: &mut UatWorld) {
+    // Zero area → zero cure energy arriving at the FEP → zero peel
+    // force. PredictLayerInputs::default_for_test() starts from the
+    // generic_msla_4k + generic_standard canonical fixtures; the
+    // with_zero_area() builder flips both `area` and `prev_area` to 0
+    // so `peel_force_n` falls to zero along the production path.
+    let mut store = predict_result_store()
+        .lock()
+        .expect("predict_result_store mutex poisoned");
+    *store = None;
 }
 
 #[when(regex = r"^the failure predictor runs on those layers$")]
-fn when_failure_predictor_runs(world: &mut UatWorld) {
-    let cap = world
-        .capacity
-        .expect("scenario invariant: Given step set capacity");
-    let f = world.force.expect("scenario invariant: Given step set force");
-    world.computed_safety = Some(SafetyFactor::compute(cap, f));
+fn when_failure_predictor_runs(_world: &mut UatWorld) {
+    let inputs = PredictLayerInputs::default_for_test().with_zero_area();
+    let (result, failures) = FailurePredictor::predict_layer(
+        inputs.layer,
+        inputs.area,
+        inputs.prev_area,
+        &inputs.overrides,
+        &inputs.resin,
+        &inputs.printer,
+        inputs.resin.recipe(),
+        &inputs.supports,
+        &inputs.plate,
+        &inputs.thermal,
+    );
+    let mut store = predict_result_store()
+        .lock()
+        .expect("predict_result_store mutex poisoned");
+    *store = Some((result, failures));
 }
 
 #[then(regex = r"^no SupportOverload failure event is emitted for those layers$")]
-fn then_no_support_overload(world: &mut UatWorld) {
-    let computed = world
-        .computed_safety
-        .expect("scenario invariant: When step ran predictor");
+fn then_no_support_overload(_world: &mut UatWorld) {
+    let store = predict_result_store()
+        .lock()
+        .expect("predict_result_store mutex poisoned");
+    let (_, failures) = store
+        .as_ref()
+        .expect("scenario invariant: When step populated predict_result_store");
+    let support_overloads: Vec<&FailureEvent> = failures
+        .iter()
+        .filter(|f| f.failure_type == FailureType::SupportOverload)
+        .collect();
     assert!(
-        computed.is_none(),
-        "SafetyFactor::compute must return None for zero peel force (the failure_predictor \
-         guard at services/failure_predictor.rs:215 only emits SupportOverload when \
-         Some(sf) AND !is_safe), got {computed:?}",
+        support_overloads.is_empty(),
+        "expected zero SupportOverload events at zero peel force; got {support_overloads:?}",
     );
 }
 
 #[then(regex = r"^the layer result safety_factor is recorded as Infinity$")]
-fn then_safety_factor_infinity(world: &mut UatWorld) {
-    let computed = world
-        .computed_safety
-        .expect("scenario invariant: When step ran predictor");
-    // Mirrors LayerResult construction at services/failure_predictor.rs:306:
-    //   safety_factor: safety.map_or(f32::INFINITY, |s| s.value())
-    let recorded = computed.map_or(f32::INFINITY, |s| s.value());
+fn then_safety_factor_infinity(_world: &mut UatWorld) {
+    let store = predict_result_store()
+        .lock()
+        .expect("predict_result_store mutex poisoned");
+    let (result, _) = store
+        .as_ref()
+        .expect("scenario invariant: When step populated predict_result_store");
     assert!(
-        recorded.is_infinite() && recorded.is_sign_positive(),
-        "expected +Infinity, got {recorded}",
+        result.safety_factor.is_infinite() && result.safety_factor.is_sign_positive(),
+        "LayerResult.safety_factor must be +Infinity at zero peel force (failure_predictor's map_or(f32::INFINITY, |s| s.value()) line); got {}",
+        result.safety_factor,
+    );
+    // Defence-in-depth: also assert the underlying peel force is zero.
+    assert!(
+        result.peel_force_n.abs() < 1e-6,
+        "peel_force_n must be ~0 for zero-area input; got {}",
+        result.peel_force_n,
     );
 }

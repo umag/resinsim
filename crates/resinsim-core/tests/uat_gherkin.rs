@@ -82,6 +82,27 @@ async fn main() {
         features_dir.display(),
     );
 
+    // Step 8 coverage guard (a): every extracted scenario has matched
+    // step bodies — no scenario step remains undefined. Cucumber-rs
+    // reports undefined steps as "skipped" (not "failed"), and silent-
+    // green would otherwise let a missing step def slip through the
+    // execution_has_failed guard below.
+    //
+    // Guard (b) — "every registered step regex matched at least one
+    // scenario step" — is DOWNGRADED per the plan's decision rule:
+    // cucumber-rs's public Writer trait surfaces per-step stats but
+    // not the map from registered regex → matched-step count, and the
+    // low-level API exploration exceeded the plan's 1 h budget. Dead
+    // step regexes are tracked in follow-up issue
+    // `uat-coverage-guard-dead-steps`; this harness locks (a) only.
+    assert_eq!(
+        writer.skipped_steps(),
+        0,
+        "coverage guard (a) failed: {} scenarios have skipped (undefined) steps — run the harness and inspect the synthesised tree at {}",
+        writer.skipped_steps(),
+        features_dir.display(),
+    );
+
     if writer.execution_has_failed() {
         std::process::exit(1);
     }

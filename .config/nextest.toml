@@ -1,11 +1,24 @@
 # Nextest configuration for the resinsim workspace.
 #
-# The `uat_gherkin` test target uses cucumber-rs with `harness = false`.
-# Cucumber-rs binaries don't speak libtest's terse listing protocol that
-# nextest uses to enumerate tests, so nextest aborts the entire suite if it
-# tries to probe this binary. We exclude it from the default profile here;
-# run cucumber UAT scenarios with `cargo test --test uat_gherkin -p resinsim-core`
-# instead. See resinsim/docs/adr/0008-bdd-uat-spike-notes.md for context.
+# Cucumber-rs test binaries (any test target named `uat_*` with
+# `harness = false`) don't speak libtest's terse listing protocol that
+# nextest uses to enumerate tests. Nextest aborts the entire suite if it
+# tries to probe such a binary. We exclude every `uat_*` binary from the
+# default profile so adding a sibling cucumber binary (or renaming the
+# existing one) can't silently re-break the suite.
+#
+# Run cucumber UAT scenarios with:
+#   cargo test --test uat_gherkin -p resinsim-core
+#
+# The `uat_*` prefix excludes the `uat_extractor` test target too — that
+# binary uses the default libtest harness (so nextest COULD run it), but
+# it's still pulled in transitively via `cargo nextest run -p resinsim-core`
+# through the glob. Explicit exclusion here documents intent; extractor
+# tests are exercised via `cargo nextest run -p resinsim-core --test uat_extractor`
+# when focused coverage is wanted.
+#
+# See resinsim/docs/adr/0008-bdd-uat-spike-notes.md + the rollout
+# outcome section for context.
 
 [profile.default]
-default-filter = "not binary(uat_gherkin)"
+default-filter = "not binary(/^uat_/)"

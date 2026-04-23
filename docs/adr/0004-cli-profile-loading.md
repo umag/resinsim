@@ -135,3 +135,15 @@ subcommands as an explicit-wins convenience layer.
   chatter. The precedence is documented in this ADR and in `--help` text;
   users who want to inspect which values came from where can diff two
   invocations or read the resolved config back from the JSON output.
+
+## Executable UAT anchor (2026-04-23)
+
+The contract-bearing scenarios for this ADR now live as Gherkin in
+`spec/uat/cli-profile-by-name-loading.md` (7 scenarios across 5
+UAT-Ns) and are extracted + run by the cucumber harness at
+`crates/resinsim-core/tests/uat_gherkin.rs`. Step defs at
+`crates/resinsim-core/tests/uat_steps/cli_profile_by_name_loading.rs`
+lock the narrative; end-to-end subprocess coverage lives at
+`crates/resinsim-inspect/tests/profile_loader_cli.rs`. See
+`docs/adr/0008-bdd-uat-spike-notes.md` rollout-outcome section for the
+two-track CLI test strategy.

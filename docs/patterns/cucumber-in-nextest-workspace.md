@@ -52,11 +52,21 @@ async fn main() {
 
 ### 2. Workspace-level nextest exemption
 
+Widen the filter to a name pattern — exact-name match regresses
+silently when the binary is renamed, or when a sibling cucumber binary
+is added:
+
 ```toml
 # .config/nextest.toml
 [profile.default]
-default-filter = "not binary(<bdd_target>)"
+default-filter = "not binary(/^uat_/)"
 ```
+
+Pin the pattern with a regression-guard test that reads the config
+file (NOT a `cargo nextest list` subprocess — recursion / lock
+contention). See
+`resinsim-core/tests/nextest_filter_sanity.rs` for the implementation
+pattern.
 
 ### 3. Documented runner command
 
@@ -79,17 +89,38 @@ worth the BDD ergonomics.
 - If the project doesn't use nextest, the exemption is irrelevant and a
   plain `[[test]] harness = false` + cucumber works directly.
 
+## Read-from-md extension (rollout outcome)
+
+The rollout replaced the per-spike `.feature` file duplicates under
+`tests/uat/` with runtime extraction from `spec/uat/*.md`. The harness:
+
+1. Resolves `spec/uat/` from `CARGO_MANIFEST_DIR` via `ancestors()` +
+   `canonicalize()`.
+2. Validates the directory carries `issue:` YAML frontmatter across at
+   least one `.md` file — the "right path, wrong directory" slip loud-
+   fails here rather than silently producing zero scenarios.
+3. Extracts ```gherkin fenced code blocks from each file.
+4. Synthesises a `Feature:` block per file under
+   `$CARGO_TARGET_TMPDIR/spec-uat-features/`.
+5. Runs cucumber once against that synthesised tree.
+
+See `docs/patterns/extracting-gherkin-from-markdown.md` for the
+extractor's `.md` fence conventions (kebab-case file name → snake_case
+step-def module; H2 `## UAT-N:` sub-heading per scenario; DataTable +
+DocString compound inputs).
+
 ## Trade-offs
 
 - Loses uniform `cargo nextest run` invocation for the cucumber tests.
-- Filter is exact-name match (`binary(<name>)`) — renaming the cucumber
-  test target silently breaks the filter. Either widen to a name pattern
-  (`/^uat_/` etc.) or add a CI sanity check that asserts the filter still
-  matches at least one binary.
+- Widened filter (`/^uat_/`) catches any future `uat_*` test binary in
+  the workspace — deliberately broad. `tests/nextest_filter_sanity.rs`
+  locks the pattern against accidental narrowing.
 
 ## Related
 
 - `silent-green-guard-for-custom-test-harness.md` — the assert pattern
   used in the harness entry point.
-- `docs/adr/0008-bdd-uat-spike-notes.md` — the spike that established
-  this pattern.
+- `extracting-gherkin-from-markdown.md` — the `.md` fence convention
+  the harness reads from.
+- `docs/adr/0008-bdd-uat-spike-notes.md` — the spike + rollout that
+  established this pattern.

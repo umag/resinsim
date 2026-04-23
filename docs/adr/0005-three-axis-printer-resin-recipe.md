@@ -200,6 +200,28 @@ That is the mental model the refactor aligns to.
   fields. For most off-the-shelf resin datasheets 60 mm/min is a safe default
   (industry-standard reference for peel measurements). Migration guidance also
   referenced from `spec/uat/legacy-resin-toml-without-recipe.md`.
+
+## Executable UAT anchor (2026-04-23)
+
+Every ADR-0005 scenario is now executable Gherkin under the cucumber
+harness (`crates/resinsim-core/tests/uat_gherkin.rs`). Coverage:
+- `spec/uat/recipe-outside-printer-range.md` (2 scenarios) — pairing
+  fails before slicing + ALL violations reported.
+- `spec/uat/recipe-inside-printer-range.md` (2) — happy path + boundary.
+- `spec/uat/resin-switch-changes-simulation.md` (2) — same printer +
+  different resin → different cure depth (the refactor's motivating
+  observable); determinism sanity.
+- `spec/uat/legacy-resin-toml-without-recipe.md` (2) — missing
+  `[recipe]` rejected at deserialize; NaN recipe field rejected at
+  validate().
+- `spec/uat/legacy-resin-toml-without-ref-lift-speed.md` (2) — missing
+  `ref_lift_speed_mm_min` rejected at parse; migration patch yields
+  valid profile.
+
+Step defs live under `crates/resinsim-core/tests/uat_steps/*.rs`
+(snake_case mirrors each `.md` file name). See
+`docs/adr/0008-bdd-uat-spike-notes.md` rollout-outcome section for the
+extractor + harness infrastructure.
 - `SimulationRunner::run_stl` / `run_from_areas` ordering becomes:
   `resin.validate()` → `printer.validate()` → `validate_pairing(printer, recipe)`
   → `slice_areas(..., recipe.layer_height_um)` → per-layer prediction.
