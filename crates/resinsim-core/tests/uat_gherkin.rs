@@ -1,26 +1,33 @@
-// Spike: cucumber-rs feasibility harness.
-// See docs/adr/0008-bdd-uat-spike-notes.md for spike context, drift caveats,
-// and rollout-time concerns (per-scenario nextest attribution etc.).
+// Cucumber-rs harness driving the UAT suite. Spike-era step defs for the
+// safety-factor-zero-force and cure-depth-nan-guard scenarios stay inline
+// below; they move into per-file modules in rollout step 6.
+//
+// Step 2 extends the harness to run a SECOND cucumber pass against the
+// freshly migrated `spec/uat/recipe-outside-printer-range.md` after
+// extracting its `\`\`\`gherkin fenced code blocks into a synthetic
+// `.feature` file under `$CARGO_TARGET_TMPDIR`. Step 4 replaces this
+// tempdir shuffle with a custom cucumber `Parser` that reads spec/uat/
+// directly.
+//
+// Harness contract (preserved from spike):
+// - `harness = false` in Cargo.toml — libtest discovery is off, so
+//   `#[test]` attributes inside this binary do nothing. Extractor unit
+//   tests live in the `uat_extractor` binary instead.
+// - Silent-green guard: if neither cucumber run reports any executed
+//   steps, the harness panics.
+// - Any cucumber failure surfaces via exit code 1.
 
 use cucumber::{StatsWriter as _, World, given, then, when};
 use resinsim_core::values::{Energy, PeelForce, SafetyFactor, SupportCapacity};
 
-#[derive(Debug, Default, World)]
-struct SpikeWorld {
-    // Safety factor scenario state.
-    capacity: Option<SupportCapacity>,
-    force: Option<PeelForce>,
-    computed_safety: Option<Option<SafetyFactor>>,
+mod uat_steps;
 
-    // Cure depth scenarios state.
-    last_energy_err: Option<&'static str>,
-    last_panic_msg: Option<String>,
-}
+use uat_steps::world::UatWorld;
 
 // ---- Safety factor zero-force scenario ----------------------------------
 
 #[given(regex = r"^a print with zero peel force on one or more layers \(e\.g\. layer area = 0\)$")]
-fn given_zero_peel_force(world: &mut SpikeWorld) {
+fn given_zero_peel_force(world: &mut UatWorld) {
     world.capacity = Some(
         SupportCapacity::new(100.0)
             .expect("scenario invariant: 100 N support capacity is in domain"),
@@ -31,7 +38,7 @@ fn given_zero_peel_force(world: &mut SpikeWorld) {
 }
 
 #[when(regex = r"^the failure predictor runs on those layers$")]
-fn when_failure_predictor_runs(world: &mut SpikeWorld) {
+fn when_failure_predictor_runs(world: &mut UatWorld) {
     let cap = world
         .capacity
         .expect("scenario invariant: Given step set capacity");
@@ -40,7 +47,7 @@ fn when_failure_predictor_runs(world: &mut SpikeWorld) {
 }
 
 #[then(regex = r"^no SupportOverload failure event is emitted for those layers$")]
-fn then_no_support_overload(world: &mut SpikeWorld) {
+fn then_no_support_overload(world: &mut UatWorld) {
     let computed = world
         .computed_safety
         .expect("scenario invariant: When step ran predictor");
@@ -53,7 +60,7 @@ fn then_no_support_overload(world: &mut SpikeWorld) {
 }
 
 #[then(regex = r"^the layer result safety_factor is recorded as Infinity$")]
-fn then_safety_factor_infinity(world: &mut SpikeWorld) {
+fn then_safety_factor_infinity(world: &mut UatWorld) {
     let computed = world
         .computed_safety
         .expect("scenario invariant: When step ran predictor");
@@ -69,13 +76,13 @@ fn then_safety_factor_infinity(world: &mut SpikeWorld) {
 // ---- Cure depth NaN guard scenario 1: invalid Ec rejected at Energy::new ----
 
 #[given(regex = r"^a resin profile with a critical energy Ec that is zero or non-finite$")]
-fn given_invalid_critical_energy(_world: &mut SpikeWorld) {
-    // SpikeWorld::default() already initialises last_energy_err to None
+fn given_invalid_critical_energy(_world: &mut UatWorld) {
+    // UatWorld::default() already initialises last_energy_err to None
     // and cucumber constructs a fresh World per scenario.
 }
 
 #[when(regex = r"^the Beer-Lambert cure depth calculator runs for a layer$")]
-fn when_beer_lambert_runs(world: &mut SpikeWorld) {
+fn when_beer_lambert_runs(world: &mut UatWorld) {
     // The guard fires at Energy::new BEFORE CureCalculator::cure_depth is called
     // (callers wrap critical_energy_mj_cm2 in Energy::new — see
     // services/failure_predictor.rs:129).
@@ -92,7 +99,7 @@ fn when_beer_lambert_runs(world: &mut SpikeWorld) {
 #[then(
     regex = r"^the system fails loudly with a clear diagnostic message referencing critical_energy$"
 )]
-fn then_loud_diagnostic(world: &mut SpikeWorld) {
+fn then_loud_diagnostic(world: &mut UatWorld) {
     // SPIKE NOTE: Energy::new's message is the generic
     // "energy must be positive and finite" — it does NOT reference
     // critical_energy specifically (Energy::new doesn't know its caller's
@@ -112,7 +119,7 @@ fn then_loud_diagnostic(world: &mut SpikeWorld) {
 #[then(
     regex = r"^does NOT silently return a negative cure depth or a false is_sufficient result$"
 )]
-fn then_no_silent_bad_result_scenario1(world: &mut SpikeWorld) {
+fn then_no_silent_bad_result_scenario1(world: &mut UatWorld) {
     // Load-bearing tautology: Energy::new returning Err means
     // CureCalculator::cure_depth is never reached — no negative cure depth,
     // no false is_sufficient. Asserts the precondition the previous Then
@@ -129,13 +136,13 @@ fn then_no_silent_bad_result_scenario1(world: &mut SpikeWorld) {
 #[given(
     regex = r"^a print with a uniformity profile where the intensity factor computation produces a non-finite value$"
 )]
-fn given_nan_intensity_factor(_world: &mut SpikeWorld) {
-    // SpikeWorld::default() already initialises last_panic_msg to None
+fn given_nan_intensity_factor(_world: &mut UatWorld) {
+    // UatWorld::default() already initialises last_panic_msg to None
     // and cucumber constructs a fresh World per scenario.
 }
 
 #[when(regex = r"^the uniformity-corrected cure depth is computed$")]
-fn when_uniformity_corrected_cure_depth(world: &mut SpikeWorld) {
+fn when_uniformity_corrected_cure_depth(world: &mut UatWorld) {
     let energy =
         Energy::new(10.0).expect("scenario invariant: 10 mJ/cm² is in Energy domain");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -160,7 +167,7 @@ fn when_uniformity_corrected_cure_depth(world: &mut SpikeWorld) {
 #[then(
     regex = r#"^the system panics with a clear "scale factor must be positive and finite" message from Energy::scale$"#
 )]
-fn then_scale_factor_panic_message(world: &mut SpikeWorld) {
+fn then_scale_factor_panic_message(world: &mut UatWorld) {
     let msg = world
         .last_panic_msg
         .as_ref()
@@ -174,7 +181,7 @@ fn then_scale_factor_panic_message(world: &mut SpikeWorld) {
 #[then(
     regex = r"^does NOT silently produce a NaN cure depth that is misinterpreted as undercure$"
 )]
-fn then_no_silent_nan_cure(world: &mut SpikeWorld) {
+fn then_no_silent_nan_cure(world: &mut UatWorld) {
     // Load-bearing tautology: if Energy::scale panics, control never reaches
     // CureCalculator and no NaN cure depth is produced. Asserts the prior
     // Then captured a panic so the tautology actually holds.
@@ -187,38 +194,80 @@ fn then_no_silent_nan_cure(world: &mut SpikeWorld) {
 // ---- Harness entry point (cucumber-rs harness=false convention) ----
 //
 // Run with: `cargo test --test uat_gherkin -p resinsim-core`
-//
-// NOT compatible with `cargo nextest`. nextest enumerates tests via libtest's
-// terse listing protocol (`--list --format terse`); cucumber's writer doesn't
-// speak that protocol, and even the libtest writer feature emits streaming
-// JSON rather than terse listing. Configured to be excluded from nextest via
-// `.config/nextest.toml` so the full `cargo nextest run -p resinsim-core`
-// keeps working. See docs/adr/0008-bdd-uat-spike-notes.md for full context.
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    // Anchor the feature directory to the crate at compile time so the
-    // harness doesn't silently find zero scenarios when CWD differs from
-    // the package root (cargo test sets CWD correctly today, but invocations
-    // via --manifest-path or under a debugger may not).
-    let features =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/uat");
-    let features_display = features.display().to_string();
-    let writer = SpikeWorld::cucumber().run(features).await;
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
 
-    // Guard against silent green: if the feature directory is empty or all
-    // scenarios are filtered out, .run() exits 0 with zero work done. Sum of
-    // step states must be > 0 for the harness to have done anything.
-    let total_steps =
-        writer.passed_steps() + writer.skipped_steps() + writer.failed_steps();
-    assert!(
-        total_steps > 0,
-        "no cucumber steps ran — check that {features_display} contains .feature files",
+    // ---- Run 1: legacy spike features in tests/uat/ (deleted in step 4) ----
+    let spike_features = manifest.join("tests/uat");
+    let spike_display = spike_features.display().to_string();
+    let spike_writer = UatWorld::cucumber().run(&spike_features).await;
+
+    // ---- Run 2: step 2 smoke test — extract one migrated spec/uat file,
+    // synthesise a .feature in CARGO_TARGET_TMPDIR, run cucumber against it. ----
+    let smoke_md = manifest
+        .ancestors()
+        .nth(2)
+        .expect("repo ancestor resolves from CARGO_MANIFEST_DIR")
+        .join("spec/uat/recipe-outside-printer-range.md");
+    let md_source = std::fs::read_to_string(&smoke_md).unwrap_or_else(|e| {
+        panic!(
+            "smoke test: failed to read {}: {e}",
+            smoke_md.display()
+        );
+    });
+    let scenarios = uat_steps::extract::extract(&md_source);
+    assert_eq!(
+        scenarios.len(),
+        2,
+        "smoke test: expected 2 extracted scenarios from {}",
+        smoke_md.display(),
     );
 
-    // Surface failures via process exit code so cargo test marks the binary
-    // as failed when scenarios fail.
-    if writer.execution_has_failed() {
+    let feature_text = synthesize_feature(
+        "Recipe outside printer envelope",
+        &scenarios,
+    );
+    let tmpdir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("uat-gherkin-rollout-smoke");
+    std::fs::create_dir_all(&tmpdir).expect("create tempdir for smoke .feature");
+    let feature_path = tmpdir.join("recipe-outside-printer-range.feature");
+    std::fs::write(&feature_path, &feature_text)
+        .expect("write synthesised smoke .feature");
+    let smoke_writer = UatWorld::cucumber().run(&tmpdir).await;
+
+    // ---- Silent-green guard across both runs ----
+    let total_steps = spike_writer.passed_steps()
+        + spike_writer.skipped_steps()
+        + spike_writer.failed_steps()
+        + smoke_writer.passed_steps()
+        + smoke_writer.skipped_steps()
+        + smoke_writer.failed_steps();
+    assert!(
+        total_steps > 0,
+        "no cucumber steps ran — check {spike_display} and {}",
+        feature_path.display(),
+    );
+
+    if spike_writer.execution_has_failed() || smoke_writer.execution_has_failed() {
         std::process::exit(1);
     }
+}
+
+/// Wrap extracted scenario fences with a synthesised `Feature:` header so
+/// cucumber-rs's default Basic parser can pick them up as a .feature file.
+fn synthesize_feature(
+    feature_name: &str,
+    scenarios: &[uat_steps::extract::ExtractedScenario],
+) -> String {
+    let mut out = format!("Feature: {feature_name}\n\n");
+    for scenario in scenarios {
+        out.push_str(&scenario.gherkin);
+        if !scenario.gherkin.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    out
 }

@@ -179,6 +179,60 @@ fn scenario_outline_prefix_stripped_from_title() {
     assert_eq!(out[0].title, "parameterised");
 }
 
+// ---- Step 2 smoke test: real spec/uat file round-trips --------------------
+
+#[test]
+fn recipe_outside_printer_range_md_extracts_two_scenarios_with_compound_inputs() {
+    // This test reads the real migrated file under spec/uat/. It pins the
+    // plan's step 2 acceptance criterion: the DocString (```gherkin ... ```
+    // fences containing "\"\"\"" blocks) and the DataTable ("| col |" rows)
+    // round-trip through markdown into the extracted gherkin verbatim.
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let md_path = manifest
+        .ancestors()
+        .nth(2)
+        .expect("CARGO_MANIFEST_DIR has workspace + repo ancestors")
+        .join("spec/uat/recipe-outside-printer-range.md");
+
+    let source = std::fs::read_to_string(&md_path).unwrap_or_else(|e| {
+        panic!("failed to read {}: {e}", md_path.display());
+    });
+
+    let out = extract(&source);
+    assert_eq!(
+        out.len(),
+        2,
+        "expected 2 extracted scenarios from {md_path:?}, got {out:#?}",
+    );
+
+    let titles: Vec<&str> = out.iter().map(|s| s.title.as_str()).collect();
+    assert!(
+        titles[0].contains("UAT-1") || titles[0].contains("Pairing fails"),
+        "first scenario title should reference UAT-1 / pairing: {titles:?}",
+    );
+    assert!(
+        titles[1].contains("UAT-2") || titles[1].contains("ALL violations"),
+        "second scenario title should reference UAT-2 / all violations: {titles:?}",
+    );
+
+    // UAT-2 carries the DataTable for printer ranges + resin recipe.
+    let uat2 = &out[1].gherkin;
+    assert!(
+        uat2.contains("| layer_height_range_um "),
+        "UAT-2 must retain printer DataTable after extraction: {uat2}",
+    );
+    assert!(
+        uat2.contains("| normal_exposure_sec "),
+        "UAT-2 must retain recipe DataTable after extraction: {uat2}",
+    );
+
+    // UAT-2 also carries a DocString for the expected error message.
+    assert!(
+        uat2.contains("\"\"\""),
+        "UAT-2 must retain DocString triple-quote delimiters after extraction: {uat2}",
+    );
+}
+
 // ---- Property tests --------------------------------------------------------
 
 proptest! {
