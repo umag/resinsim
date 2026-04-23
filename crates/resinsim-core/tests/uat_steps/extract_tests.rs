@@ -179,6 +179,84 @@ fn scenario_outline_prefix_stripped_from_title() {
     assert_eq!(out[0].title, "parameterised");
 }
 
+// ---- Step 3 whole-suite invariant: extract all migrated UAT files ---------
+
+#[test]
+fn spec_uat_dir_extracts_expected_scenarios_across_all_files() {
+    // Plan step 3 invariant: every spec/uat/*.md file is extractable, and
+    // the union of extracted titles is unique across the suite. Exact
+    // counts are pinned per file so a future edit that drops or doubles a
+    // fence fails this assertion at nextest time.
+    let spec_dir = spec_uat_dir();
+
+    // (filename, expected_fence_count) — counts == `\`\`\`gherkin fences,
+    // which after step 3 equals one fence per `**Scenario...**` block in
+    // the pre-migration source.
+    let expectations: &[(&str, usize)] = &[
+        ("cli-profile-by-name-loading.md", 7),
+        ("cli-requires-resin-for-recipe-fields.md", 3),
+        ("cli-temperature-flag-validation.md", 6),
+        ("cure-depth-nan-guard.md", 2),
+        ("legacy-resin-toml-defaults.md", 2),
+        ("legacy-resin-toml-without-recipe.md", 2),
+        ("legacy-resin-toml-without-ref-lift-speed.md", 2),
+        ("recipe-inside-printer-range.md", 2),
+        ("recipe-outside-printer-range.md", 2),
+        ("resin-switch-changes-simulation.md", 2),
+        ("safety-factor-zero-force.md", 1),
+        ("suction-detector-raft-false-positive.md", 6),
+        ("thermal-degradation.md", 1),
+    ];
+
+    let mut all_titles: Vec<(String, String)> = Vec::new();
+    let mut total = 0usize;
+    for (file, expected) in expectations {
+        let md = std::fs::read_to_string(spec_dir.join(file))
+            .unwrap_or_else(|e| panic!("failed to read {file}: {e}"));
+        let out = extract(&md);
+        assert_eq!(
+            out.len(),
+            *expected,
+            "{file} expected {expected} fences, got {} — titles {:#?}",
+            out.len(),
+            out.iter().map(|s| &s.title).collect::<Vec<_>>(),
+        );
+        total += out.len();
+        for scenario in out {
+            all_titles.push((file.to_string(), scenario.title));
+        }
+    }
+
+    // Whole-suite count invariant. Sum of the per-file expectations above
+    // is 38 (plan's "35" count treats compound UAT-Ns as single scenarios;
+    // the honest-per-`**Scenario**`-block count is 38). Pin the actual
+    // realised number so drift surfaces.
+    assert_eq!(total, 38, "whole-suite scenario count drifted");
+
+    // Unique-title invariant. Titles come from the most recent heading
+    // (H2 or H3) before each fence; compound UAT-Ns have H3 sub-headings
+    // introduced in step 3 so titles don't collide across sibling fences
+    // under a shared H2.
+    let mut seen: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for (file, title) in &all_titles {
+        if let Some(first_file) = seen.get(title) {
+            panic!(
+                "duplicate extracted title {title:?}: first seen in {first_file}, now in {file}"
+            );
+        }
+        seen.insert(title.clone(), file.clone());
+    }
+}
+
+fn spec_uat_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("CARGO_MANIFEST_DIR has workspace + repo ancestors")
+        .join("spec/uat")
+}
+
 // ---- Step 2 smoke test: real spec/uat file round-trips --------------------
 
 #[test]

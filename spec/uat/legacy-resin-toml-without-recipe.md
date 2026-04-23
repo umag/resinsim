@@ -33,16 +33,14 @@ thermal thresholds have reasonable defaults (50 °C / 15 °C) that work across
 most resins. Recipe has NO reasonable default per-resin (that's the refactor's
 motivating observation).
 
-**Scenario:**
-
-Given a pre-ADR-0005 resin TOML file containing:
-  - all chemistry fields (name, penetration_depth_um, critical_energy_mj_cm2,
-    tensile_strength_mpa, peel_adhesion_kpa, ref_lift_speed_mm_min, etc.)
-  - NO `[recipe]` table
-When `toml::from_str::<ResinProfile>(&contents)` is called
-Then parse returns `Err`
-  And the error message names the missing field (`recipe`)
+```gherkin
+Scenario: UAT-1 missing [recipe] table rejected at deserialize
+  Given a pre-ADR-0005 resin TOML file containing all chemistry fields (name, penetration_depth_um, critical_energy_mj_cm2, tensile_strength_mpa, peel_adhesion_kpa, ref_lift_speed_mm_min, etc.) but NO [recipe] table
+  When "toml::from_str::<ResinProfile>(&contents)" is called
+  Then parse returns Err
+  And the error message names the missing field ("recipe")
   And validate() is NEVER reached — the parse layer is the gate
+```
 
 ## UAT-2: `[recipe]` with NaN field rejected at validate()
 
@@ -51,13 +49,12 @@ field (e.g. `normal_exposure_sec = nan`) must fail `validate()`. Locks the
 parse-then-validate loop per `docs/patterns/nan-two-layer-defence.md`: the
 parse layer is permissive; the validate layer is the invariant gate.
 
-**Scenario:**
-
-Given a resin TOML file with a full `[recipe]` table but with
-  `recipe.normal_exposure_sec = nan`
-When the file is deserialised into `ResinProfile` then `validate()` is called
-Then deserialize succeeds (serde accepts NaN as a valid f32)
-  And `validate()` returns Err
-  And the error message prefix is `"recipe:"` (because `ResinProfile::validate()`
-    delegates to `Recipe::validate()` and tags the error)
-  And the error names `normal_exposure_sec` as the offending field
+```gherkin
+Scenario: UAT-2 [recipe] with NaN field rejected at validate()
+  Given a resin TOML file with a full [recipe] table but with recipe.normal_exposure_sec = nan
+  When the file is deserialised into ResinProfile then validate() is called
+  Then deserialize succeeds (serde accepts NaN as a valid f32)
+  And validate() returns Err
+  And the error message prefix is "recipe:" (because ResinProfile::validate() delegates to Recipe::validate() and tags the error)
+  And the error names "normal_exposure_sec" as the offending field
+```

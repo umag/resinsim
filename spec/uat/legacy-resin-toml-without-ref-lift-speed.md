@@ -19,18 +19,16 @@ required `[recipe]` table. Both migrations are documented in the sibling UAT
 case. This UAT locks the `ref_lift_speed_mm_min` case specifically so a future PR cannot
 silently reintroduce `#[serde(default)]` on the chemistry side without a failing test.
 
-**Scenario:**
-
-Given a pre-ADR-0005 resin TOML containing:
-  - `name`, `penetration_depth_um`, `critical_energy_mj_cm2`, `tensile_strength_mpa`,
-    `peel_adhesion_kpa`, `viscosity_mpa_s`, `reference_temp_c`,
-    `activation_energy_kj_mol`, `density_g_cm3`, `linear_shrinkage_pct`
-  - a valid `[recipe]` table (isolating the `ref_lift_speed_mm_min` failure mode)
-  - NO `ref_lift_speed_mm_min` field
-When `toml::from_str::<ResinProfile>(&contents)` is called
-Then parse returns `Err`
-  And the error message names the missing `ref_lift_speed_mm_min` field
-  And `validate()` is never reached (parse is the gate)
+```gherkin
+Scenario: UAT-1 missing ref_lift_speed_mm_min rejected at parse
+  Given a pre-ADR-0005 resin TOML containing name, penetration_depth_um, critical_energy_mj_cm2, tensile_strength_mpa, peel_adhesion_kpa, viscosity_mpa_s, reference_temp_c, activation_energy_kj_mol, density_g_cm3, linear_shrinkage_pct
+  And a valid [recipe] table (isolating the ref_lift_speed_mm_min failure mode)
+  And NO ref_lift_speed_mm_min field
+  When "toml::from_str::<ResinProfile>(&contents)" is called
+  Then parse returns Err
+  And the error message names the missing "ref_lift_speed_mm_min" field
+  And validate() is never reached (parse is the gate)
+```
 
 ## UAT-2: Migration patch adds `ref_lift_speed_mm_min = 60.0` and the same TOML then loads
 
@@ -40,12 +38,12 @@ Then parse returns `Err`
 unknown. This scenario confirms the migration path works — a pre-ADR-0005 TOML plus the
 single-line migration patch produces a valid `ResinProfile`.
 
-**Scenario:**
-
-Given the same pre-ADR-0005 resin TOML from UAT-1
-When a user appends `ref_lift_speed_mm_min = 60.0` to the chemistry section
-  (the industry-standard default per KB-112)
-And `toml::from_str::<ResinProfile>(&contents)` is called
-Then parse returns `Ok(profile)`
-  And `profile.validate()` returns `Ok`
-  And `profile.ref_lift_speed_mm_min() == 60.0`
+```gherkin
+Scenario: UAT-2 migration patch adds ref_lift_speed_mm_min = 60.0 and the TOML loads
+  Given the same pre-ADR-0005 resin TOML from UAT-1
+  When a user appends "ref_lift_speed_mm_min = 60.0" to the chemistry section (the industry-standard default per KB-112)
+  And "toml::from_str::<ResinProfile>(&contents)" is called
+  Then parse returns Ok(profile)
+  And profile.validate() returns Ok
+  And profile.ref_lift_speed_mm_min() == 60.0
+```

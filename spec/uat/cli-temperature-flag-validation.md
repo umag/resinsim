@@ -14,34 +14,37 @@ panicked mid-simulation via `VatTemperature::new().expect()`. The
 `cmd_thermal` / `cmd_report_health` was introduced to convert that crash
 into an actionable user-facing error.
 
-**Scenario:**
-
-Given the resinsim inspect thermal subcommand
-When the user invokes it with `--initial-led-temp=-300`
-Then the process exits with a non-zero code (2)
-And stderr names the flag "initial" or "invalid" AND the phrase "absolute zero"
-And no simulation rows are printed on stdout
+```gherkin
+Scenario: UAT-1 --initial-led-temp rejects values at/below absolute zero
+  Given the resinsim inspect thermal subcommand
+  When the user invokes it with "--initial-led-temp=-300"
+  Then the process exits with a non-zero code (2)
+  And stderr names the flag "initial" or "invalid" AND the phrase "absolute zero"
+  And no simulation rows are printed on stdout
+```
 
 ## UAT-2: `--initial-led-temp=NaN` rejects without panic
 
-**Scenario:**
-
-Given the resinsim inspect thermal subcommand
-When the user invokes it with `--initial-led-temp NaN`
-Then the process exits with a non-zero code
-And the error path does NOT produce a Rust panic / stack trace
+```gherkin
+Scenario: UAT-2 --initial-led-temp=NaN rejects without panic
+  Given the resinsim inspect thermal subcommand
+  When the user invokes it with "--initial-led-temp NaN"
+  Then the process exits with a non-zero code
+  And the error path does NOT produce a Rust panic / stack trace
+```
 
 ## UAT-3: `--ambient` rejects values at/below absolute zero
 
 **Rationale.** Round-4 extended the typed-boundary pattern to cover
 `--ambient`; the same invariant applies symmetrically.
 
-**Scenario:**
-
-Given the resinsim inspect thermal subcommand (or report health)
-When the user invokes it with `--ambient=-300` or `--ambient=NaN`
-Then the process exits with code 2
-And stderr names the flag ("invalid --ambient") AND the violated bound
+```gherkin
+Scenario: UAT-3 --ambient rejects unphysical values
+  Given the resinsim inspect thermal subcommand (or report health)
+  When the user invokes it with "--ambient=-300" or "--ambient=NaN"
+  Then the process exits with code 2
+  And stderr names the flag ("invalid --ambient") AND the violated bound
+```
 
 ## UAT-4: loud warning when resin TOML lacks measured Ea_cure
 
@@ -50,24 +53,23 @@ ESTIMATE that may be wrong by ±50 %. Downstream users must see the warning
 across every surface (inspect thermal, report health) so they don't
 mistakenly treat Ec(T) drift as measured.
 
-**Scenario:**
-
-Given a resin profile whose TOML omits `cure_kinetics_ea_kj_mol`
-When the user invokes `resinsim inspect thermal --resin <that> --printer <any>`
-Then stderr contains the strings "30 kJ/mol", "literature midpoint estimate",
-    and "KB-153"
-And the warning surfaces in `report health` as well (not just `inspect thermal`)
+```gherkin
+Scenario: UAT-4 loud warning when resin TOML lacks measured Ea_cure
+  Given a resin profile whose TOML omits "cure_kinetics_ea_kj_mol"
+  When the user invokes "resinsim inspect thermal --resin <that> --printer <any>"
+  Then stderr contains the strings "30 kJ/mol", "literature midpoint estimate", and "KB-153"
+  And the warning surfaces in "report health" as well (not just "inspect thermal")
+```
 
 ## UAT-5: measured Ea_cure suppresses the warning
 
-**Scenario:**
-
-Given a resin profile whose TOML includes a finite positive
-    `cure_kinetics_ea_kj_mol` in (0.0, 200.0]
-When the user invokes `resinsim inspect thermal --resin <that>`
-Then stderr does NOT contain "30 kJ/mol"
-And the JSON output path (when `--json`) carries
-    `"cure_kinetics_ea_is_default": false`
+```gherkin
+Scenario: UAT-5 measured Ea_cure suppresses the warning
+  Given a resin profile whose TOML includes a finite positive "cure_kinetics_ea_kj_mol" in (0.0, 200.0]
+  When the user invokes "resinsim inspect thermal --resin <that>"
+  Then stderr does NOT contain "30 kJ/mol"
+  And the JSON output path (when --json) carries "cure_kinetics_ea_is_default": false
+```
 
 ## UAT-6: two-stage thermal plateau approaches the fitted Mars 5 Ultra value
 
@@ -77,12 +79,11 @@ ambient 23 °C, initial LED 27 °C on the Mars 5 Ultra (Tilt release,
 coupling 0.71, led_delta 13.5, τ 4000 s) must approach the plateau
 predicted by the formula.
 
-**Scenario:**
-
-Given `PrinterProfile::elegoo_mars5_ultra()` + `ResinProfile::generic_standard()`
-When `SimulationRunner::run_from_areas` runs 3500+ layers at
-    ambient = 23 °C, initial_led = 27 °C
-Then the vat temperature at cumulative time ≥ 4 h exceeds half-rise
-And the vat temperature at cumulative time ≥ 8 h is within ±1 °C of the 4 h sample
-And the cure depth at the thermal plateau on a normal-phase layer
-    EXCEEDS the cure depth at an earlier normal-phase layer (Ec(T) correction)
+```gherkin
+Scenario: UAT-6 two-stage thermal plateau approaches fitted Mars 5 Ultra value
+  Given PrinterProfile::elegoo_mars5_ultra() + ResinProfile::generic_standard()
+  When SimulationRunner::run_from_areas runs 3500+ layers at ambient = 23 °C, initial_led = 27 °C
+  Then the vat temperature at cumulative time ≥ 4 h exceeds half-rise
+  And the vat temperature at cumulative time ≥ 8 h is within ±1 °C of the 4 h sample
+  And the cure depth at the thermal plateau on a normal-phase layer EXCEEDS the cure depth at an earlier normal-phase layer (Ec(T) correction)
+```

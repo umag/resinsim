@@ -24,15 +24,14 @@ invariant. This is user-facing behaviour: loading an old resin profile
 must produce either a valid profile or a clear error, never a silently
 misaligned one.
 
-**Scenario:**
-
-Given a resin TOML file written before KB-150 that is missing both
-  `degradation_temp_c` and `min_safe_temp_c`
-When the resin profile is deserialised and validated
-Then `degradation_temp_c` takes the documented default of 50.0 °C
-  And `min_safe_temp_c` takes the documented default of 15.0 °C
-  And `validate()` returns Ok because the defaulted pair satisfies
-      `min_safe_temp_c < degradation_temp_c`
+```gherkin
+Scenario: UAT-1 legacy TOML defaulting — missing thermal fields apply documented defaults
+  Given a resin TOML file written before KB-150 that is missing both "degradation_temp_c" and "min_safe_temp_c"
+  When the resin profile is deserialised and validated
+  Then "degradation_temp_c" takes the documented default of 50.0 °C
+  And "min_safe_temp_c" takes the documented default of 15.0 °C
+  And validate() returns Ok because the defaulted pair satisfies min_safe_temp_c < degradation_temp_c
+```
 
 ## UAT-2: Invariant-crossing via serde default
 
@@ -43,13 +42,11 @@ crosses the ordering invariant. Without coverage, a future change to
 `default_degradation_temp_c()` could silently reject old files at load
 time in production.
 
-**Scenario:**
-
-Given a resin TOML file with `min_safe_temp_c` explicitly set to 55.0 °C
-  but with `degradation_temp_c` absent
-When the resin profile is deserialised and validated
-Then serde applies the default `degradation_temp_c` of 50.0 °C
-  And `validate()` returns Err citing BOTH fields by name because
-      55.0 > 50.0 violates the strict-less-than ordering invariant
-  And the profile is NOT silently accepted with misaligned thermal
-      thresholds
+```gherkin
+Scenario: UAT-2 invariant-crossing via serde default — explicit + defaulted fields cross ordering
+  Given a resin TOML file with "min_safe_temp_c" explicitly set to 55.0 °C but with "degradation_temp_c" absent
+  When the resin profile is deserialised and validated
+  Then serde applies the default "degradation_temp_c" of 50.0 °C
+  And validate() returns Err citing BOTH fields by name because 55.0 > 50.0 violates the strict-less-than ordering invariant
+  And the profile is NOT silently accepted with misaligned thermal thresholds
+```
