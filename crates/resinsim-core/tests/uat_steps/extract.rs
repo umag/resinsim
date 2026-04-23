@@ -121,3 +121,130 @@ fn normalize_heading(raw: &str) -> String {
         .unwrap_or(trimmed);
     stripped.trim().to_string()
 }
+
+/// Wrap a sequence of [`ExtractedScenario`] bodies into a synthesised
+/// cucumber `Feature:` document. Each fence body is appended verbatim
+/// separated by blank lines; the caller supplies the feature title
+/// (conventionally derived from the source file name).
+pub fn synthesize_feature(feature_title: &str, scenarios: &[ExtractedScenario]) -> String {
+    let mut out = format!("Feature: {feature_title}\n\n");
+    for scenario in scenarios {
+        out.push_str(&scenario.gherkin);
+        if !scenario.gherkin.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Validation error from [`validate_spec_uat_dir`].
+#[derive(Debug)]
+pub enum SpecUatDirError {
+    /// Reading the directory entries failed.
+    ReadDirFailed {
+        path: std::path::PathBuf,
+        err: std::io::Error,
+    },
+    /// The directory exists but contains no `.md` files with the expected
+    /// `issue:` frontmatter field. Emitted with the resolved path + the
+    /// expected pattern so "path exists but is wrong dir" failure modes
+    /// surface loudly instead of yielding a silent-green cucumber run.
+    NoFrontmatterMatches {
+        path: std::path::PathBuf,
+        expected_pattern: &'static str,
+    },
+    /// Reading a specific `.md` file failed.
+    ReadFileFailed {
+        path: std::path::PathBuf,
+        err: std::io::Error,
+    },
+}
+
+impl std::fmt::Display for SpecUatDirError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SpecUatDirError::ReadDirFailed { path, err } => {
+                write!(f, "read_dir {} failed: {err}", path.display())
+            }
+            SpecUatDirError::NoFrontmatterMatches {
+                path,
+                expected_pattern,
+            } => write!(
+                f,
+                "no *.md files with frontmatter matching {expected_pattern:?} under {}",
+                path.display()
+            ),
+            SpecUatDirError::ReadFileFailed { path, err } => {
+                write!(f, "read {} failed: {err}", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for SpecUatDirError {}
+
+/// Scan `dir` for `*.md` files whose YAML frontmatter includes an
+/// `issue:` key. Returns the sorted list of matching paths or an error
+/// if the directory is empty / contains no frontmatter-bearing files —
+/// the latter catches the "path resolves but points at the wrong
+/// directory" failure mode the plan step 4 flagged.
+pub fn validate_spec_uat_dir(
+    dir: &std::path::Path,
+) -> Result<Vec<std::path::PathBuf>, SpecUatDirError> {
+    let entries = std::fs::read_dir(dir).map_err(|err| SpecUatDirError::ReadDirFailed {
+        path: dir.to_path_buf(),
+        err,
+    })?;
+
+    let mut matches: Vec<std::path::PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let content =
+            std::fs::read_to_string(&path).map_err(|err| SpecUatDirError::ReadFileFailed {
+                path: path.clone(),
+                err,
+            })?;
+        if frontmatter_has_issue_field(&content) {
+            matches.push(path);
+        }
+    }
+
+    if matches.is_empty() {
+        return Err(SpecUatDirError::NoFrontmatterMatches {
+            path: dir.to_path_buf(),
+            expected_pattern: "---\\nissue: <slug>\\n...\\n---",
+        });
+    }
+
+    matches.sort();
+    Ok(matches)
+}
+
+/// Pattern check for a YAML frontmatter block beginning with `---` and
+/// containing an `issue:` line before the closing `---`. Intentionally
+/// strict: the UAT files all follow this pattern, and looseness would
+/// defeat the point of the check.
+fn frontmatter_has_issue_field(source: &str) -> bool {
+    let source = strip_bom(source);
+    let Some(rest) = source.strip_prefix("---") else {
+        return false;
+    };
+    let Some(nl_idx) = rest.find('\n') else {
+        return false;
+    };
+    let after_opener = &rest[nl_idx + 1..];
+    for line in after_opener.split('\n') {
+        let line = line.trim_end_matches('\r');
+        if line == "---" {
+            return false;
+        }
+        if line.trim_start().starts_with("issue:") {
+            return true;
+        }
+    }
+    false
+}

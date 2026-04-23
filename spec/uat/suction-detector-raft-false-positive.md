@@ -36,9 +36,11 @@ to the vat and creates no vacuum during peel.
 ```gherkin
 Scenario: UAT-1 fluid-permeable supports produce no suction event
   Given a LayerInput stack comprising:
-    - a solid raft (width × height fully-solid LayerMask) for the first ~23 layers
-    - a discrete-column layer (multiple small solid footprints with inter-column gaps spanning the full bbox width/height) for ~8 layers
-    - a solid model body above
+    """
+    solid raft (width × height fully-solid LayerMask) for the first ~23 layers
+    discrete-column layer (multiple small solid footprints with inter-column gaps spanning the full bbox width/height) for ~8 layers
+    solid model body above
+    """
   When SimulationRunner.run_from_layer_inputs(layers, resin, printer, ...) is invoked
   Then no FailureEvent { failure_type: SuctionCup, severity: Critical } appears in sim.failures()
 ```
@@ -57,9 +59,11 @@ exactly one event at the layer that closes the cavity from the FEP side.
 ```gherkin
 Scenario: UAT-2 topologically-sealed cavity produces one event at closure
   Given a LayerInput stack comprising:
-    - a solid base mask for layer 0
-    - ring-wall masks (outer frame solid, interior void) for layers 1..N-1
-    - a solid cap mask at layer N
+    """
+    solid base mask for layer 0
+    ring-wall masks (outer frame solid, interior void) for layers 1..N-1
+    solid cap mask at layer N
+    """
   When the simulation runs
   Then exactly one SuctionCup failure appears in sim.failures()
   And it is at layer N (the cap layer)

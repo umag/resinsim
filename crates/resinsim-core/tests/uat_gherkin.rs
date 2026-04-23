@@ -1,21 +1,27 @@
-// Cucumber-rs harness driving the UAT suite. Spike-era step defs for the
-// safety-factor-zero-force and cure-depth-nan-guard scenarios stay inline
-// below; they move into per-file modules in rollout step 6.
+// Cucumber-rs harness driving the UAT suite (post step-4 refactor).
 //
-// Step 2 extends the harness to run a SECOND cucumber pass against the
-// freshly migrated `spec/uat/recipe-outside-printer-range.md` after
-// extracting its `\`\`\`gherkin fenced code blocks into a synthetic
-// `.feature` file under `$CARGO_TARGET_TMPDIR`. Step 4 replaces this
-// tempdir shuffle with a custom cucumber `Parser` that reads spec/uat/
-// directly.
+// Reads scenarios from the workspace-root `spec/uat/` directory via the
+// markdown extractor — no more `tests/uat/*.feature` duplication from
+// the spike, and no more per-file tempdir shuffle from the step-2 smoke.
 //
-// Harness contract (preserved from spike):
-// - `harness = false` in Cargo.toml — libtest discovery is off, so
-//   `#[test]` attributes inside this binary do nothing. Extractor unit
-//   tests live in the `uat_extractor` binary instead.
-// - Silent-green guard: if neither cucumber run reports any executed
-//   steps, the harness panics.
-// - Any cucumber failure surfaces via exit code 1.
+// Harness flow:
+// 1. Resolve `spec/uat/` from `CARGO_MANIFEST_DIR` by walking up two
+//    ancestors (crate -> workspace -> repo root) and canonicalising.
+// 2. Validate the directory: iterate `*.md`, check each file's YAML
+//    frontmatter carries an `issue:` field. Zero matches panics with
+//    both resolved path AND expected pattern so a "right path, wrong
+//    dir" slip fails loudly instead of silent-green.
+// 3. Extract each .md, synthesise a `Feature:` block per file, write
+//    the synthesised tree under `$CARGO_TARGET_TMPDIR/spec-uat-features`.
+// 4. Run cucumber once against that tree. Silent-green guard
+//    (passed+skipped+failed > 0) and `execution_has_failed` exit
+//    preserved from the spike.
+//
+// Step defs for the safety-factor-zero-force + cure-depth-nan-guard
+// scenarios remain inline below; step 6 moves them into per-file
+// modules under `tests/uat_steps/`. Step defs for the recipe-outside
+// scenarios live in `tests/uat_steps/recipe_out_of_range.rs` since
+// step 2.
 
 use cucumber::{StatsWriter as _, World, given, then, when};
 use resinsim_core::values::{Energy, PeelForce, SafetyFactor, SupportCapacity};
@@ -191,83 +197,75 @@ fn then_no_silent_nan_cure(world: &mut UatWorld) {
     );
 }
 
-// ---- Harness entry point (cucumber-rs harness=false convention) ----
+// ---- Harness entry point -------------------------------------------------
 //
 // Run with: `cargo test --test uat_gherkin -p resinsim-core`
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let spec_uat = resolve_spec_uat_dir();
 
-    // ---- Run 1: legacy spike features in tests/uat/ (deleted in step 4) ----
-    let spike_features = manifest.join("tests/uat");
-    let spike_display = spike_features.display().to_string();
-    let spike_writer = UatWorld::cucumber().run(&spike_features).await;
+    // Loud-fail when the resolved path is the wrong directory.
+    let md_files = uat_steps::extract::validate_spec_uat_dir(&spec_uat)
+        .unwrap_or_else(|e| panic!("spec/uat validation failed: {e}"));
 
-    // ---- Run 2: step 2 smoke test — extract one migrated spec/uat file,
-    // synthesise a .feature in CARGO_TARGET_TMPDIR, run cucumber against it. ----
-    let smoke_md = manifest
-        .ancestors()
-        .nth(2)
-        .expect("repo ancestor resolves from CARGO_MANIFEST_DIR")
-        .join("spec/uat/recipe-outside-printer-range.md");
-    let md_source = std::fs::read_to_string(&smoke_md).unwrap_or_else(|e| {
-        panic!(
-            "smoke test: failed to read {}: {e}",
-            smoke_md.display()
-        );
-    });
-    let scenarios = uat_steps::extract::extract(&md_source);
-    assert_eq!(
-        scenarios.len(),
-        2,
-        "smoke test: expected 2 extracted scenarios from {}",
-        smoke_md.display(),
-    );
+    // Stage synthesised .feature files under CARGO_TARGET_TMPDIR.
+    let features_dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("spec-uat-features");
+    // Clean any prior run's tree so stale files don't resurrect scenarios.
+    let _ = std::fs::remove_dir_all(&features_dir);
+    std::fs::create_dir_all(&features_dir).expect("create spec-uat-features tempdir");
 
-    let feature_text = synthesize_feature(
-        "Recipe outside printer envelope",
-        &scenarios,
-    );
-    let tmpdir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("uat-gherkin-rollout-smoke");
-    std::fs::create_dir_all(&tmpdir).expect("create tempdir for smoke .feature");
-    let feature_path = tmpdir.join("recipe-outside-printer-range.feature");
-    std::fs::write(&feature_path, &feature_text)
-        .expect("write synthesised smoke .feature");
-    let smoke_writer = UatWorld::cucumber().run(&tmpdir).await;
+    for md_path in &md_files {
+        let md = std::fs::read_to_string(md_path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", md_path.display()));
+        let scenarios = uat_steps::extract::extract(&md);
+        if scenarios.is_empty() {
+            continue;
+        }
+        let file_stem = md_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .expect("spec/uat .md files have UTF-8 stems");
+        let feature_title = file_stem.replace('-', " ");
+        let feature_text =
+            uat_steps::extract::synthesize_feature(&feature_title, &scenarios);
+        let feature_path = features_dir.join(format!("{file_stem}.feature"));
+        std::fs::write(&feature_path, feature_text)
+            .unwrap_or_else(|e| panic!("write {}: {e}", feature_path.display()));
+    }
 
-    // ---- Silent-green guard across both runs ----
-    let total_steps = spike_writer.passed_steps()
-        + spike_writer.skipped_steps()
-        + spike_writer.failed_steps()
-        + smoke_writer.passed_steps()
-        + smoke_writer.skipped_steps()
-        + smoke_writer.failed_steps();
+    let writer = UatWorld::cucumber().run(&features_dir).await;
+
+    let total_steps = writer.passed_steps() + writer.skipped_steps() + writer.failed_steps();
     assert!(
         total_steps > 0,
-        "no cucumber steps ran — check {spike_display} and {}",
-        feature_path.display(),
+        "no cucumber steps ran — check synthesised tree at {}",
+        features_dir.display(),
     );
 
-    if spike_writer.execution_has_failed() || smoke_writer.execution_has_failed() {
+    if writer.execution_has_failed() {
         std::process::exit(1);
     }
 }
 
-/// Wrap extracted scenario fences with a synthesised `Feature:` header so
-/// cucumber-rs's default Basic parser can pick them up as a .feature file.
-fn synthesize_feature(
-    feature_name: &str,
-    scenarios: &[uat_steps::extract::ExtractedScenario],
-) -> String {
-    let mut out = format!("Feature: {feature_name}\n\n");
-    for scenario in scenarios {
-        out.push_str(&scenario.gherkin);
-        if !scenario.gherkin.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push('\n');
-    }
-    out
+/// Resolve `spec/uat/` by walking up two ancestors from `CARGO_MANIFEST_DIR`
+/// (crate -> workspace -> repo root) and canonicalising. The extractor's
+/// frontmatter-glob check inside [`uat_steps::extract::validate_spec_uat_dir`]
+/// then loud-fails if this path is wrong.
+fn resolve_spec_uat_dir() -> std::path::PathBuf {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest
+        .ancestors()
+        .nth(2)
+        .expect("CARGO_MANIFEST_DIR has crate + workspace + repo ancestors");
+    repo_root
+        .join("spec/uat")
+        .canonicalize()
+        .unwrap_or_else(|e| {
+            panic!(
+                "failed to canonicalise spec/uat under {}: {e}",
+                repo_root.display()
+            )
+        })
 }
