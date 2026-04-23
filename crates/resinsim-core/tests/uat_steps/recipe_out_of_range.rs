@@ -15,60 +15,10 @@
 use cucumber::gherkin::Step;
 use cucumber::{given, then, when};
 use resinsim_core::app::simulation_runner::SimulationRunner;
-use resinsim_core::entities::{PrinterProfile, ResinProfile};
-use resinsim_core::services::build_plate::PlateAdhesionProfile;
-use resinsim_core::services::failure_predictor::SupportConfig;
-use resinsim_core::values::{AmbientTemperature, CrossSectionArea};
+use resinsim_core::entities::ResinProfile;
 
+use super::fixtures::{cube_areas, default_plate, printer_with_ranges, test_ambient, test_supports};
 use super::world::UatWorld;
-
-// ---- Helpers duplicated from simulation_runner.rs's #[cfg(test)] block ----
-// (those helpers are not re-exported; step 7's builders will replace these.)
-
-fn default_plate() -> PlateAdhesionProfile {
-    PlateAdhesionProfile::default_textured()
-}
-
-fn test_ambient() -> AmbientTemperature {
-    AmbientTemperature::new(22.0)
-        .expect("22.0 °C is in AmbientTemperature domain")
-}
-
-fn cube_areas(n_layers: usize, area_mm2: f64) -> Vec<CrossSectionArea> {
-    let a = CrossSectionArea::new(area_mm2)
-        .expect("100.0 mm² is non-negative and finite");
-    vec![a; n_layers]
-}
-
-/// Build a `PrinterProfile` via TOML round-trip so integration tests can
-/// set the `pub(crate)` range fields without piercing the visibility.
-fn printer_with_ranges(
-    layer_min: f32,
-    layer_max: f32,
-    exposure_min: f32,
-    exposure_max: f32,
-) -> PrinterProfile {
-    let toml_str = format!(
-        r#"
-name = "UatNarrowed"
-led_power_mw_cm2 = 4.0
-pixel_pitch_um = 50.0
-layer_height_range_um = {{ min = {layer_min}, max = {layer_max} }}
-exposure_range_sec = {{ min = {exposure_min}, max = {exposure_max} }}
-lift_speed_range_mm_min = {{ min = 10.0, max = 200.0 }}
-bottom_layer_count_max = 15
-z_stiffness_n_per_mm = 460.0
-delta_t_steady_c = 10.0
-thermal_tau_sec = 1200.0
-lcd_uniformity_variation = 0.22
-"#
-    );
-    let p: PrinterProfile = toml::from_str(&toml_str)
-        .expect("narrowed printer TOML parses into PrinterProfile");
-    p.validate()
-        .expect("narrowed printer satisfies PrinterProfile::validate()");
-    p
-}
 
 // ---- UAT-1: single-range narrowing + natural-prose Given/And ----
 
@@ -105,10 +55,7 @@ fn when_run_from_areas(world: &mut UatWorld) {
         &areas,
         resin,
         printer,
-        &SupportConfig {
-            tip_radius_mm: 0.2,
-            n_supports: 10,
-        },
+        &test_supports(),
         &default_plate(),
         test_ambient(),
         None,
