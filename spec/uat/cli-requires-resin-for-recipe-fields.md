@@ -17,21 +17,25 @@ This UAT locks the new CLI contract: passing `--resin` sources layer_height from
 the resin's recipe; omitting both `--resin` and `--layer-height` falls back to
 50.0 µm (no silent error, no panic).
 
-**Scenario (profile-sourced):**
+### UAT-1 (profile-sourced): --resin supplies layer_height
 
-Given the user invokes
-  `resinsim inspect zaxis --force 50 --resin generic_standard --data-dir <dir> --json`
-When the binary resolves the profile (ADR-0004 4-stage data-dir chain)
-Then `layer_height` in the JSON output equals `50.0` (from
-     `ResinProfile::generic_standard().recipe().layer_height_um()`)
+```gherkin
+Scenario: UAT-1 profile-sourced — --resin supplies layer_height
+  Given the user invokes "resinsim inspect zaxis --force 50 --resin generic_standard --data-dir <dir> --json"
+  When the binary resolves the profile (ADR-0004 4-stage data-dir chain)
+  Then layer_height in the JSON output equals 50.0 (from ResinProfile::generic_standard().recipe().layer_height_um())
   And no error is printed to stderr
+```
 
-**Scenario (explicit flag wins over resin):**
+### UAT-1 (explicit flag wins): --layer-height overrides --resin
 
-Given the same command with `--layer-height 30.0` also supplied
-When the binary runs
-Then `layer_height` in the JSON output equals `30.0`
+```gherkin
+Scenario: UAT-1 explicit flag wins over resin — --layer-height supersedes --resin
+  Given the same command with "--layer-height 30.0" also supplied
+  When the binary runs
+  Then layer_height in the JSON output equals 30.0
   And the resin's recipe value is ignored in favour of the explicit flag
+```
 
 ## UAT-2: No `--resin`, no `--layer-height` — built-in default applies
 
@@ -40,11 +44,11 @@ without `--resin` (matching the pre-ADR-0005 CLI), the subcommand must still
 return a sensible result rather than erroring out. The built-in 50 µm default
 is appropriate: zaxis is a scalar inspector, and 50 µm is the MSLA 4K norm.
 
-**Scenario:**
-
-Given `resinsim inspect zaxis --force 50 --printer generic_msla_4k --data-dir <dir> --json`
-  with no `--resin` or `--layer-height` flag
-When the binary runs
-Then `layer_height` in the JSON output equals `50.0` (the built-in default)
+```gherkin
+Scenario: UAT-2 no --resin and no --layer-height — built-in default applies
+  Given "resinsim inspect zaxis --force 50 --printer generic_msla_4k --data-dir <dir> --json" with no --resin or --layer-height flag
+  When the binary runs
+  Then layer_height in the JSON output equals 50.0 (the built-in default)
   And no error is printed to stderr
   And the subcommand exits 0
+```
