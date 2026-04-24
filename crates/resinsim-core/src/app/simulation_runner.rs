@@ -207,7 +207,7 @@ impl SimulationRunner {
             initial_led_temp,
         };
 
-        let mut sim = PrintSimulation::new();
+        let mut sim = PrintSimulation::new(recipe.clone(), printer.clone());
         let mut prev_area = CrossSectionArea::new(0.0).expect("zero is valid");
 
         for (i, &area) in areas.iter().enumerate() {

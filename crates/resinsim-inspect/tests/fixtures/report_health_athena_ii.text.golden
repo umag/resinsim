@@ -7,6 +7,10 @@ Summary (1200 layers):
   Min safety factor: 3.85 at layer 6
   Max temperature: 27.0°C
   Max Z deflection: 31.2 µm
+  Total time: 4:42:48
+    bottom:     0:03:39
+    transition: 0:01:15
+    normal:     4:37:54
 
 Result: WARN — 1 warning(s)
 

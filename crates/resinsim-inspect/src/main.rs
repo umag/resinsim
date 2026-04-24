@@ -25,7 +25,9 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum ReportType {
-    /// Full print risk assessment from an STL file.
+    /// Full print risk assessment from an STL file — force, safety factor,
+    /// thermals, deflection extrema, plus total print time with bottom /
+    /// transition / normal phase breakdown.
     ///
     /// Resolves --printer and --resin by loading TOML from the data
     /// directory (see ADR-0004 for the 4-stage resolution chain: --data-dir

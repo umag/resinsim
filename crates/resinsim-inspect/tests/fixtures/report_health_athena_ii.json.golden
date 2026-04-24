@@ -10,6 +10,7 @@
   "resin": "Generic Standard",
   "stl": "__STL_PATH__",
   "summary": {
+    "bottom_time_sec": 219.0,
     "critical_failures": 0,
     "max_force_layer": 0,
     "max_peel_force_n": 46.80000305175781,
@@ -17,7 +18,10 @@
     "max_z_deflection_um": 31.200002670288086,
     "min_safety_factor": 3.846153974533081,
     "min_safety_layer": 6,
+    "normal_time_sec": 16674.0,
     "total_layers": 1200,
+    "total_time_sec": 16968.75,
+    "transition_time_sec": 75.75,
     "warnings": 1
   }
 }

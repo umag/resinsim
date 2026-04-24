@@ -1,5 +1,5 @@
 ---
-issue: reportgenerator-extraction
+issue: [reportgenerator-extraction, print-time-on-reportgenerator]
 date: 2026-04-24
 ---
 
