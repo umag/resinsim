@@ -201,9 +201,13 @@ impl FailurePredictor {
         let total_force = PeelForceCalculator::total_force(peel, suction);
 
         // --- Holding capacity + safety assessment (plan v3 §6) ---
-        let assessment =
-            SupportAnalyzer::assess(layer, area, total_force, resin, supports, plate);
-        if let Some(event) = assessment.overload.clone() {
+        let crate::services::SupportAssessment {
+            overload,
+            total_capacity,
+            safety_factor,
+            ..
+        } = SupportAnalyzer::assess(layer, area, total_force, resin, supports, plate);
+        if let Some(event) = overload {
             failures.push(event);
         }
 
@@ -271,10 +275,8 @@ impl FailurePredictor {
             peel_force_n: peel.value(),
             suction_force_n: suction.value(),
             total_force_n: total_force.value(),
-            support_capacity_n: assessment.total_capacity.value(),
-            safety_factor: assessment
-                .safety_factor
-                .map_or(f32::INFINITY, |s| s.value()), // INFINITY = no load; print_simulation accumulator handles it correctly
+            support_capacity_n: total_capacity.value(),
+            safety_factor: safety_factor.map_or(f32::INFINITY, |s| s.value()), // INFINITY = no load; print_simulation accumulator handles it correctly
             cross_section_area_mm2: area.value(),
             area_delta_mm2: delta,
             vat_temperature_c: vat_temp.value(),

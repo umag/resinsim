@@ -116,7 +116,6 @@ impl SupportAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entities::ResinProfile;
 
     fn area(mm2: f64) -> CrossSectionArea {
         CrossSectionArea::new(mm2)
@@ -235,6 +234,27 @@ mod tests {
         assert_eq!(event.failure_type, FailureType::SupportOverload);
         assert_eq!(event.severity, Severity::Critical);
         assert_eq!(event.layer, 0);
+        // Outer message-format lock — "Peel force X.X N exceeds capacity {source} (SF=Y.YY)"
+        assert!(
+            event.message.starts_with("Peel force "),
+            "message must start with 'Peel force ', got: {}",
+            event.message
+        );
+        assert!(
+            event.message.contains(" exceeds capacity "),
+            "message must contain ' exceeds capacity ', got: {}",
+            event.message
+        );
+        assert!(
+            event.message.contains(" (SF="),
+            "message must contain ' (SF=', got: {}",
+            event.message
+        );
+        assert!(
+            event.message.ends_with(')'),
+            "message must end with ')', got: {}",
+            event.message
+        );
     }
 
     // --- assess: inclusive SF=1.0 boundary (A-MED1 lock) ---
