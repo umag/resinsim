@@ -4,12 +4,12 @@ use crate::entities::{
 use crate::services::build_plate::PlateAdhesionProfile;
 use crate::services::uniformity_calculator::UniformityProfile;
 use crate::services::{
-    BuildPlate, CureCalculator, PeelForceCalculator, ThermalCalculator, UniformityCalculator,
+    CureCalculator, PeelForceCalculator, SupportAnalyzer, ThermalCalculator, UniformityCalculator,
     ZAxisCompensator,
 };
 use crate::values::{
     AmbientTemperature, CrossSectionArea, Energy, InitialLedTemperature, PeelForce,
-    PenetrationDepth, SafetyFactor,
+    PenetrationDepth,
 };
 
 /// Domain service: orchestrates all physics checks for a single layer.
@@ -200,42 +200,11 @@ impl FailurePredictor {
         );
         let total_force = PeelForceCalculator::total_force(peel, suction);
 
-        // --- Holding capacity: build plate adhesion + supports ---
-        let support_cap = PeelForceCalculator::support_capacity(
-            resin.tensile_strength_mpa,
-            supports.tip_radius_mm,
-            supports.n_supports,
-        );
-        let plate_cap = BuildPlate::holding_capacity(layer, area, plate);
-        let total_capacity = BuildPlate::total_capacity(plate_cap, support_cap.value());
-        let capacity = crate::values::SupportCapacity::new(total_capacity)
-            .expect("sum of non-negative plate and support capacity is non-negative");
-        let safety = SafetyFactor::compute(capacity, total_force);
-
-        if let Some(safety) = safety.filter(|s| !s.is_safe()) {
-            let source = if plate_cap > 0.0 && support_cap.value() > 0.0 {
-                format!(
-                    "plate {:.1} N + supports {:.1} N = {:.1} N",
-                    plate_cap,
-                    support_cap.value(),
-                    total_capacity
-                )
-            } else if plate_cap > 0.0 {
-                format!("plate adhesion {:.1} N (no supports)", plate_cap)
-            } else {
-                format!("supports {:.1} N (no plate adhesion)", support_cap.value())
-            };
-            failures.push(FailureEvent {
-                layer,
-                failure_type: FailureType::SupportOverload,
-                severity: Severity::Critical,
-                message: format!(
-                    "Peel force {:.1} N exceeds capacity {} (SF={:.2})",
-                    total_force.value(),
-                    source,
-                    safety.value()
-                ),
-            });
+        // --- Holding capacity + safety assessment (plan v3 §6) ---
+        let assessment =
+            SupportAnalyzer::assess(layer, area, total_force, resin, supports, plate);
+        if let Some(event) = assessment.overload.clone() {
+            failures.push(event);
         }
 
         // --- Suction warning ---
@@ -302,8 +271,10 @@ impl FailurePredictor {
             peel_force_n: peel.value(),
             suction_force_n: suction.value(),
             total_force_n: total_force.value(),
-            support_capacity_n: capacity.value(),
-            safety_factor: safety.map_or(f32::INFINITY, |s| s.value()), // INFINITY = no load; print_simulation accumulator handles it correctly
+            support_capacity_n: assessment.total_capacity.value(),
+            safety_factor: assessment
+                .safety_factor
+                .map_or(f32::INFINITY, |s| s.value()), // INFINITY = no load; print_simulation accumulator handles it correctly
             cross_section_area_mm2: area.value(),
             area_delta_mm2: delta,
             vat_temperature_c: vat_temp.value(),
