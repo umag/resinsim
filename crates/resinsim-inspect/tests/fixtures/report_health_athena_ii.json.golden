@@ -1,0 +1,23 @@
+{
+  "failures": [
+    {
+      "layer": 0,
+      "message": "Area increased by 3600.0 mm² (>100 threshold)",
+      "severity": "Warning",
+      "type": "RapidAreaIncrease"
+    }
+  ],
+  "resin": "Generic Standard",
+  "stl": "__STL_PATH__",
+  "summary": {
+    "critical_failures": 0,
+    "max_force_layer": 0,
+    "max_peel_force_n": 46.80000305175781,
+    "max_temperature_c": 26.999996185302734,
+    "max_z_deflection_um": 31.200002670288086,
+    "min_safety_factor": 3.846153974533081,
+    "min_safety_layer": 6,
+    "total_layers": 1200,
+    "warnings": 1
+  }
+}

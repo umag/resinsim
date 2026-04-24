@@ -1,0 +1,13 @@
+Print health report: __STL_PATH__
+  Resin: Generic Standard, Printer: Athena II
+  Supports: 0 x 0.0mm radius
+
+Summary (1200 layers):
+  Max peel force: 46.8 N at layer 0
+  Min safety factor: 3.85 at layer 6
+  Max temperature: 27.0°C
+  Max Z deflection: 31.2 µm
+
+Result: WARN — 1 warning(s)
+
+  [WARN] Layer 0: Area increased by 3600.0 mm² (>100 threshold)

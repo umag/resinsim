@@ -1069,6 +1069,7 @@ dependencies = [
  "pulldown-cmark",
  "rayon",
  "serde",
+ "serde_json",
  "stl_io",
  "thiserror",
  "tokio",

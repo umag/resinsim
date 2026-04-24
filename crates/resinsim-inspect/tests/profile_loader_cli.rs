@@ -325,6 +325,95 @@ fn no_profile_flag_skips_resolution_even_with_bogus_env() {
     );
 }
 
+// --- Byte-identity regression guards (issue: reportgenerator-extraction) ---
+//
+// These two tests are the byte-identity acceptance check for extracting report
+// assembly out of cmd_report_health into a ReportGenerator application service.
+// They were written and committed BEFORE the extraction touched any production
+// code, so they pass against the unmodified CLI and become the regression
+// guard: any drift in stdout (text or JSON) that the existing field-grep tests
+// at :194 / :245 cannot catch will be caught here.
+//
+// The goldens contain `__STL_PATH__` as a placeholder for the per-run tmpdir
+// path; the test substitutes the actual path before comparing.
+
+#[test]
+fn report_health_athena_ii_text_byte_identity() {
+    let cube = tmpdir("text_byte_id");
+    let stl = cube.join("cube-60mm.stl");
+    std::fs::write(&stl, cube_60mm_stl()).expect("write stl");
+    let data = workspace_data_dir();
+    let out = Command::new(bin())
+        .args(["report", "health", "--stl"])
+        .arg(&stl)
+        .args(["--data-dir"])
+        .arg(&data)
+        .args([
+            "--printer",
+            "athena_ii",
+            "--resin",
+            "generic_standard",
+            "--tip-radius",
+            "0",
+            "--n-supports",
+            "0",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(
+        out.status.success(),
+        "report health text mode should succeed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).expect("stdout is utf-8");
+    let golden = include_str!("fixtures/report_health_athena_ii.text.golden")
+        .replace("__STL_PATH__", stl.to_str().expect("stl path is utf-8"));
+    assert_eq!(
+        stdout, golden,
+        "text-mode stdout must be byte-identical to fixtures/report_health_athena_ii.text.golden"
+    );
+    std::fs::remove_dir_all(&cube).ok();
+}
+
+#[test]
+fn report_health_athena_ii_json_byte_identity() {
+    let cube = tmpdir("json_byte_id");
+    let stl = cube.join("cube-60mm.stl");
+    std::fs::write(&stl, cube_60mm_stl()).expect("write stl");
+    let data = workspace_data_dir();
+    let out = Command::new(bin())
+        .args(["report", "health", "--stl"])
+        .arg(&stl)
+        .args(["--data-dir"])
+        .arg(&data)
+        .args([
+            "--printer",
+            "athena_ii",
+            "--resin",
+            "generic_standard",
+            "--tip-radius",
+            "0",
+            "--n-supports",
+            "0",
+            "--json",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(
+        out.status.success(),
+        "report health json mode should succeed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).expect("stdout is utf-8");
+    let golden = include_str!("fixtures/report_health_athena_ii.json.golden")
+        .replace("__STL_PATH__", stl.to_str().expect("stl path is utf-8"));
+    assert_eq!(
+        stdout, golden,
+        "json-mode stdout must be byte-identical to fixtures/report_health_athena_ii.json.golden"
+    );
+    std::fs::remove_dir_all(&cube).ok();
+}
+
 // --- Helpers ---
 
 fn extract_f64(json: &str, key: &str) -> f64 {

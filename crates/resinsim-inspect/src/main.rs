@@ -1135,8 +1135,8 @@ fn cmd_report_health(
     initial_led_temp: Option<f32>,
     json: bool,
 ) {
-    use resinsim_core::app::SimulationRunner;
-    use resinsim_core::entities::{DEFAULT_CURE_KINETICS_EA_KJ_MOL, Severity};
+    use resinsim_core::app::{ReportContext, ReportGenerator, SimulationRunner};
+    use resinsim_core::entities::DEFAULT_CURE_KINETICS_EA_KJ_MOL;
     use resinsim_core::services::build_plate::PlateAdhesionProfile;
     use resinsim_core::services::failure_predictor::SupportConfig;
     use resinsim_core::values::{AmbientTemperature, InitialLedTemperature};
@@ -1219,81 +1219,19 @@ fn cmd_report_health(
         }
     };
 
-    let summary = sim.summary();
+    let ctx = ReportContext {
+        stl_path: path.to_string(),
+        resin_name: resin.name().to_string(),
+        printer_name: printer.name().to_string(),
+        n_supports,
+        tip_radius_mm: tip_radius,
+    };
 
     if json {
-        let failures: Vec<serde_json::Value> = sim
-            .failures()
-            .iter()
-            .map(|f| {
-                serde_json::json!({
-                    "layer": f.layer,
-                    "type": format!("{:?}", f.failure_type),
-                    "severity": format!("{:?}", f.severity),
-                    "message": f.message,
-                })
-            })
-            .collect();
-
-        let result = serde_json::json!({
-            "stl": path,
-            "resin": resin.name(),
-            "summary": {
-                "total_layers": summary.total_layers,
-                "critical_failures": summary.critical_failures,
-                "warnings": summary.warnings,
-                "max_peel_force_n": summary.max_peel_force_n,
-                "max_force_layer": summary.max_force_layer,
-                "min_safety_factor": summary.min_safety_factor,
-                "min_safety_layer": summary.min_safety_layer,
-                "max_temperature_c": summary.max_temperature_c,
-                "max_z_deflection_um": summary.max_z_deflection_um,
-            },
-            "failures": failures,
-        });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&result)
-                .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")
-        );
+        print!("{}", ReportGenerator::json_format(&sim, &ctx));
+        println!();
     } else {
-        println!("Print health report: {path}");
-        println!("  Resin: {}, Printer: {}", resin.name(), printer.name());
-        println!("  Supports: {} x {:.1}mm radius", n_supports, tip_radius);
-        println!();
-        println!("Summary ({} layers):", summary.total_layers);
-        println!(
-            "  Max peel force: {:.1} N at layer {}",
-            summary.max_peel_force_n, summary.max_force_layer
-        );
-        println!(
-            "  Min safety factor: {:.2} at layer {}",
-            summary.min_safety_factor, summary.min_safety_layer
-        );
-        println!("  Max temperature: {:.1}°C", summary.max_temperature_c);
-        println!("  Max Z deflection: {:.1} µm", summary.max_z_deflection_um);
-        println!();
-
-        let crits = summary.critical_failures;
-        let warns = summary.warnings;
-        if crits == 0 && warns == 0 {
-            println!("Result: PASS — no failures detected");
-        } else {
-            if crits > 0 {
-                println!("Result: FAIL — {crits} critical failure(s), {warns} warning(s)");
-            } else {
-                println!("Result: WARN — {warns} warning(s)");
-            }
-            println!();
-            for f in sim.failures() {
-                let sev = match f.severity {
-                    Severity::Critical => "CRIT",
-                    Severity::Warning => "WARN",
-                    Severity::Info => "INFO",
-                };
-                println!("  [{sev}] Layer {}: {}", f.layer, f.message);
-            }
-        }
+        print!("{}", ReportGenerator::text_format(&sim, &ctx));
     }
 }
 
