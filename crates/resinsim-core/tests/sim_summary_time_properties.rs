@@ -36,7 +36,8 @@ fn dummy_layer(index: u32) -> LayerResult {
 fn build_sim(n: u32, recipe: Recipe, printer: PrinterProfile) -> PrintSimulation {
     let mut sim = PrintSimulation::new(recipe, printer);
     for i in 0..n {
-        sim.add_layer(dummy_layer(i), vec![]);
+        sim.add_layer(dummy_layer(i), vec![])
+            .expect("test fixture: sequential index i in 0..n satisfies add_layer's contiguity precondition");
     }
     sim
 }

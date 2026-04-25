@@ -225,7 +225,8 @@ impl SimulationRunner {
                 i as u32, area, prev_area, &overrides, resin, printer, recipe, supports, plate,
                 &thermal,
             );
-            sim.add_layer(result, failures);
+            sim.add_layer(result, failures)
+                .map_err(|e| format!("simulation: {e}"))?;
             prev_area = area;
         }
 

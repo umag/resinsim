@@ -202,8 +202,10 @@ mod tests {
 
     fn pass_sim() -> PrintSimulation {
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        sim.add_layer(make_layer(0, 10.0, 5.0, 25.0), vec![]);
-        sim.add_layer(make_layer(1, 12.0, 4.5, 26.0), vec![]);
+        sim.add_layer(make_layer(0, 10.0, 5.0, 25.0), vec![])
+            .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
+        sim.add_layer(make_layer(1, 12.0, 4.5, 26.0), vec![])
+            .expect("test fixture: explicit index 1 matches layer count 1 at this call site");
         sim
     }
 
@@ -264,7 +266,8 @@ mod tests {
                 severity: Severity::Warning,
                 message: "rapid area".to_string(),
             }],
-        );
+        )
+        .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
         let out = ReportGenerator::text_format(&sim, &ctx());
         assert!(
             out.contains("Result: WARN — 1 warning(s)\n"),
@@ -295,7 +298,8 @@ mod tests {
                     message: "crit second".to_string(),
                 },
             ],
-        );
+        )
+        .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
         let out = ReportGenerator::text_format(&sim, &ctx());
         assert!(
             out.contains("Result: FAIL — 1 critical failure(s), 1 warning(s)\n"),
@@ -324,7 +328,8 @@ mod tests {
                 severity: Severity::Critical,
                 message: "boom".to_string(),
             }],
-        );
+        )
+        .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
         let raw = ReportGenerator::json_format(&sim, &ctx());
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
         assert_eq!(parsed["stl"], "/fixtures/test.stl");
@@ -397,7 +402,8 @@ mod tests {
                     message: "last warn".to_string(),
                 },
             ],
-        );
+        )
+        .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
 
         let text = ReportGenerator::text_format(&sim, &ctx());
         let p1 = text.find("first warn").expect("first warn present");

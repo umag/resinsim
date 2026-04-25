@@ -14,6 +14,10 @@ and any other constructor / mutator that owns the invariants.
 
 For an aggregate like `PrintSimulation`:
 
+*Example shows the pre-`AggregateError` historical signature; current
+`add_layer` returns `Result<(), AggregateError>` — the pattern's subject
+(`validate()` as deserialize-bypass guard) is unchanged.*
+
 ```rust
 pub fn new(recipe: Recipe, printer: PrinterProfile) -> Self { ... }
 

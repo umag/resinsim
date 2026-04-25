@@ -68,7 +68,8 @@ fn build_sim(n: u32, with_failures_at: &[u32]) -> PrintSimulation {
         } else {
             vec![]
         };
-        sim.add_layer(dummy_layer(i), failures);
+        sim.add_layer(dummy_layer(i), failures)
+            .expect("test fixture: sequential index i in 0..n satisfies add_layer's contiguity precondition");
     }
     sim
 }

@@ -1,7 +1,19 @@
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::entities::{FailureEvent, LayerResult, PrinterProfile, Recipe, Severity};
 use crate::services::LayerTimingCalculator;
+
+/// Errors returned by [`PrintSimulation`] mutators.
+#[derive(Debug, Clone, PartialEq, Error)]
+pub enum AggregateError {
+    /// `add_layer` was called with a `LayerResult` whose `index` did not
+    /// match the next sequential position. The aggregate's layer Vec is
+    /// append-only and contiguous from 0; mis-ordered layers are caller
+    /// bugs, not domain failures.
+    #[error("layers must be sequential: expected {expected}, got {got}")]
+    NonContiguousLayer { expected: u32, got: u32 },
+}
 
 /// Aggregate root: a complete simulation run for one geometry + resin + printer.
 ///
@@ -69,16 +81,35 @@ impl PrintSimulation {
     }
 
     /// Add a layer result and its associated failures.
-    /// Enforces invariant: layers must be added sequentially.
-    pub fn add_layer(&mut self, result: LayerResult, mut layer_failures: Vec<FailureEvent>) {
+    ///
+    /// Enforces invariant: layers must be added sequentially. Returns
+    /// `Err(AggregateError::NonContiguousLayer { expected, got })` when
+    /// `result.index` does not match `self.layers.len() as u32` — replaces
+    /// the older `assert_eq!` panic so callers can recover or surface the
+    /// error through their own `Result` chain.
+    ///
+    /// # Move semantics on `Err`
+    ///
+    /// `layer_failures` is moved into the call. On `Err` it is dropped, not
+    /// returned — callers that want to retry must reconstruct the failures
+    /// vector. Currently only `SimulationRunner::run_inner` (private) calls
+    /// this; it propagates via `?` and never retries, so the drop is the
+    /// same outcome as the historical panic path.
+    pub fn add_layer(
+        &mut self,
+        result: LayerResult,
+        mut layer_failures: Vec<FailureEvent>,
+    ) -> Result<(), AggregateError> {
         let expected = self.layers.len() as u32;
-        assert_eq!(
-            result.index, expected,
-            "layers must be sequential: expected {expected}, got {}",
-            result.index
-        );
+        if result.index != expected {
+            return Err(AggregateError::NonContiguousLayer {
+                expected,
+                got: result.index,
+            });
+        }
         self.layers.push(result);
         self.failures.append(&mut layer_failures);
+        Ok(())
     }
 
     pub fn layers(&self) -> &[LayerResult] {
@@ -104,6 +135,14 @@ impl PrintSimulation {
     /// ("layers must be sequential"). `SimulationRepository::load` calls this
     /// after `serde_json::from_str` so a tampered or schema-evolved file
     /// cannot silently violate aggregate invariants.
+    ///
+    /// Both paths now reject contiguity violations, with intentionally
+    /// different return shapes: `add_layer` returns
+    /// `Err(AggregateError::NonContiguousLayer)` on the live-mutation path,
+    /// while `validate()` returns `Err(String)` on the deserialize-bypass
+    /// path. The string return matches the freeform-text shape of the
+    /// other deserialize-bypass guards in this method (recipe/printer
+    /// child validate); converging the two paths is out of scope here.
     ///
     /// Returns `Err` on first failure with a message identifying the
     /// violation. See ADR-0009.
@@ -282,23 +321,35 @@ pub(crate) mod tests {
     #[test]
     fn sequential_layers_accepted() {
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![]);
-        sim.add_layer(make_layer(1, 6.0, 2.5, 22.5), vec![]);
+        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![])
+            .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
+        sim.add_layer(make_layer(1, 6.0, 2.5, 22.5), vec![])
+            .expect("test fixture: explicit index 1 matches layer count 1 at this call site");
         assert_eq!(sim.layers().len(), 2);
     }
 
     #[test]
-    #[should_panic(expected = "layers must be sequential")]
-    fn non_sequential_layer_panics() {
+    fn non_sequential_layer_returns_err() {
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![]);
-        sim.add_layer(make_layer(5, 6.0, 2.5, 22.5), vec![]); // skip
+        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![])
+            .expect("test fixture: index 0 satisfies add_layer's contiguity precondition on an empty sim");
+        let err = sim
+            .add_layer(make_layer(5, 6.0, 2.5, 22.5), vec![])
+            .expect_err("non-contiguous index 5 (expected 1) must return Err");
+        assert_eq!(
+            err,
+            AggregateError::NonContiguousLayer {
+                expected: 1,
+                got: 5,
+            }
+        );
     }
 
     #[test]
     fn summary_finds_extremes() {
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![]);
+        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![])
+            .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
         sim.add_layer(
             make_layer(1, 20.0, 0.8, 25.0),
             vec![FailureEvent {
@@ -307,8 +358,10 @@ pub(crate) mod tests {
                 severity: Severity::Critical,
                 message: "test".into(),
             }],
-        );
-        sim.add_layer(make_layer(2, 10.0, 2.0, 24.0), vec![]);
+        )
+        .expect("test fixture: explicit index 1 matches layer count 1 at this call site");
+        sim.add_layer(make_layer(2, 10.0, 2.0, 24.0), vec![])
+            .expect("test fixture: explicit index 2 matches layer count 2 at this call site");
 
         let s = sim.summary();
         assert_eq!(s.total_layers, 3);
@@ -333,7 +386,8 @@ pub(crate) mod tests {
         let printer = linear_printer();
         let mut sim = PrintSimulation::new(recipe.clone(), printer.clone());
         for i in 0..100 {
-            sim.add_layer(make_layer(i, 1.0, 3.0, 22.0), vec![]);
+            sim.add_layer(make_layer(i, 1.0, 3.0, 22.0), vec![])
+                .expect("test fixture: sequential index i in 0..100 satisfies add_layer's contiguity precondition");
         }
         let s = sim.summary();
         let expected = *LayerTimingCalculator::cumulative_times_sec(&recipe, &printer, 100)
@@ -354,7 +408,8 @@ pub(crate) mod tests {
     fn summary_per_phase_adds_to_total() {
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
         for i in 0..100 {
-            sim.add_layer(make_layer(i, 1.0, 3.0, 22.0), vec![]);
+            sim.add_layer(make_layer(i, 1.0, 3.0, 22.0), vec![])
+                .expect("test fixture: sequential index i in 0..100 satisfies add_layer's contiguity precondition");
         }
         let s = sim.summary();
         let sum = s.bottom_time_sec + s.transition_time_sec + s.normal_time_sec;
@@ -371,7 +426,8 @@ pub(crate) mod tests {
         // n=1 with default recipe (bottom_count=6) — firmly in the bottom phase.
         // Exercises cumulative[0] indexing + the bottom_n=min(6,1)=1 clamp branch.
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        sim.add_layer(make_layer(0, 1.0, 3.0, 22.0), vec![]);
+        sim.add_layer(make_layer(0, 1.0, 3.0, 22.0), vec![])
+            .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
         let s = sim.summary();
         assert!(s.bottom_time_sec > 0.0);
         assert_eq!(s.transition_time_sec, 0.0);
@@ -396,7 +452,8 @@ pub(crate) mod tests {
         let bottom_only_n = recipe.bottom_layer_count() - 1;
         let mut sim_b = PrintSimulation::new(recipe.clone(), printer.clone());
         for i in 0..bottom_only_n {
-            sim_b.add_layer(make_layer(i, 1.0, 3.0, 22.0), vec![]);
+            sim_b.add_layer(make_layer(i, 1.0, 3.0, 22.0), vec![])
+                .expect("test fixture: sequential index i in 0..bottom_only_n satisfies add_layer's contiguity precondition");
         }
         let b = sim_b.summary();
         assert!(b.bottom_time_sec > 0.0);
@@ -408,7 +465,8 @@ pub(crate) mod tests {
         let mid_n = recipe.bottom_layer_count() + recipe.transition_layers() - 1;
         let mut sim_t = PrintSimulation::new(recipe.clone(), printer.clone());
         for i in 0..mid_n {
-            sim_t.add_layer(make_layer(i, 1.0, 3.0, 22.0), vec![]);
+            sim_t.add_layer(make_layer(i, 1.0, 3.0, 22.0), vec![])
+                .expect("test fixture: sequential index i in 0..mid_n satisfies add_layer's contiguity precondition");
         }
         let t = sim_t.summary();
         assert!(t.bottom_time_sec > 0.0);
@@ -420,9 +478,12 @@ pub(crate) mod tests {
 
     fn build_three_layer_sim() -> PrintSimulation {
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![]);
-        sim.add_layer(make_layer(1, 6.0, 2.5, 22.5), vec![]);
-        sim.add_layer(make_layer(2, 7.0, 2.0, 23.0), vec![]);
+        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![])
+            .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
+        sim.add_layer(make_layer(1, 6.0, 2.5, 22.5), vec![])
+            .expect("test fixture: explicit index 1 matches layer count 1 at this call site");
+        sim.add_layer(make_layer(2, 7.0, 2.0, 23.0), vec![])
+            .expect("test fixture: explicit index 2 matches layer count 2 at this call site");
         sim
     }
 

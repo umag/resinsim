@@ -129,7 +129,8 @@ mod tests {
 
     fn build_sim() -> PrintSimulation {
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![]);
+        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![])
+            .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
         sim.add_layer(
             make_layer(1, 20.0, 0.8, 22.5),
             vec![FailureEvent {
@@ -138,8 +139,10 @@ mod tests {
                 severity: Severity::Critical,
                 message: "test".into(),
             }],
-        );
-        sim.add_layer(make_layer(2, 10.0, 2.0, 23.0), vec![]);
+        )
+        .expect("test fixture: explicit index 1 matches layer count 1 at this call site");
+        sim.add_layer(make_layer(2, 10.0, 2.0, 23.0), vec![])
+            .expect("test fixture: explicit index 2 matches layer count 2 at this call site");
         sim
     }
 
