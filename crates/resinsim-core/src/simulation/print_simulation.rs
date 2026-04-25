@@ -96,6 +96,36 @@ impl PrintSimulation {
             .collect()
     }
 
+    /// Re-check aggregate-level invariants on a deserialized aggregate.
+    ///
+    /// `#[derive(Deserialize)]` reconstructs `PrintSimulation` directly from
+    /// fields and bypasses both `Recipe::validate()` / `PrinterProfile::validate()`
+    /// on the child entities AND the `add_layer` constructor invariant
+    /// ("layers must be sequential"). `SimulationRepository::load` calls this
+    /// after `serde_json::from_str` so a tampered or schema-evolved file
+    /// cannot silently violate aggregate invariants.
+    ///
+    /// Returns `Err` on first failure with a message identifying the
+    /// violation. See ADR-0009.
+    pub fn validate(&self) -> Result<(), String> {
+        self.recipe
+            .validate()
+            .map_err(|e| format!("recipe: {e}"))?;
+        self.printer
+            .validate()
+            .map_err(|e| format!("printer: {e}"))?;
+        for (i, layer) in self.layers.iter().enumerate() {
+            let expected = i as u32;
+            if layer.index != expected {
+                return Err(format!(
+                    "layer index mismatch at position {i}: expected {expected}, got {}",
+                    layer.index
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Compute summary statistics, including per-phase print duration.
     ///
     /// Reads `self.recipe + self.printer` (set at construction) to project
@@ -227,7 +257,10 @@ pub(crate) mod tests {
         PrinterProfile::generic_msla_4k()
     }
 
-    fn make_layer(index: u32, force: f32, sf: f32, temp: f32) -> LayerResult {
+    /// Shared fixture: synthetic LayerResult for tests that don't need
+    /// physics realism. `pub(crate)` so other in-crate test modules
+    /// (simulation_repo.rs) reuse it.
+    pub(crate) fn make_layer(index: u32, force: f32, sf: f32, temp: f32) -> LayerResult {
         LayerResult {
             index,
             cure_depth_um: 100.0,
@@ -381,5 +414,73 @@ pub(crate) mod tests {
         assert!(t.bottom_time_sec > 0.0);
         assert!(t.transition_time_sec > 0.0);
         assert_eq!(t.normal_time_sec, 0.0);
+    }
+
+    // --- validate() — aggregate-level deserialize-bypass guard (ADR-0009) ---
+
+    fn build_three_layer_sim() -> PrintSimulation {
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![]);
+        sim.add_layer(make_layer(1, 6.0, 2.5, 22.5), vec![]);
+        sim.add_layer(make_layer(2, 7.0, 2.0, 23.0), vec![]);
+        sim
+    }
+
+    #[test]
+    fn validate_ok_for_well_formed_aggregate() {
+        let sim = build_three_layer_sim();
+        sim.validate().expect("well-formed aggregate must validate");
+    }
+
+    #[test]
+    fn validate_returns_err_when_recipe_invalid() {
+        let sim = build_three_layer_sim();
+        let mut value =
+            serde_json::to_value(&sim).expect("PrintSimulation must serialize to JSON");
+        value["recipe"]["layer_height_um"] = serde_json::json!(-1.0);
+        let tampered: PrintSimulation =
+            serde_json::from_value(value).expect("tampered JSON must still deserialize");
+        let err = tampered
+            .validate()
+            .expect_err("invalid recipe must fail validate()");
+        assert!(
+            err.contains("recipe") && err.contains("layer_height_um"),
+            "error must identify the recipe field; got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_returns_err_when_printer_invalid() {
+        let sim = build_three_layer_sim();
+        let mut value =
+            serde_json::to_value(&sim).expect("PrintSimulation must serialize to JSON");
+        value["printer"]["name"] = serde_json::json!("");
+        let tampered: PrintSimulation =
+            serde_json::from_value(value).expect("tampered JSON must still deserialize");
+        let err = tampered
+            .validate()
+            .expect_err("invalid printer must fail validate()");
+        assert!(
+            err.contains("printer") && err.contains("name"),
+            "error must identify the printer field; got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_returns_err_when_layer_indices_non_sequential() {
+        let sim = build_three_layer_sim();
+        let mut value =
+            serde_json::to_value(&sim).expect("PrintSimulation must serialize to JSON");
+        // Skip index 1 — layers now read [0, 5, 2], with position 1 violating.
+        value["layers"][1]["index"] = serde_json::json!(5);
+        let tampered: PrintSimulation =
+            serde_json::from_value(value).expect("tampered JSON must still deserialize");
+        let err = tampered
+            .validate()
+            .expect_err("non-sequential layer indices must fail validate()");
+        assert!(
+            err.contains("layer index mismatch at position 1"),
+            "error must point at the first non-sequential position; got: {err}"
+        );
     }
 }
