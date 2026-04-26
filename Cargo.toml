@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/resinsim-core",
     "crates/resinsim-inspect",
+    "crates/resinsim-viz",
 ]
 
 [workspace.lints.clippy]

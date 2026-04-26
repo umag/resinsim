@@ -1,0 +1,17 @@
+[package]
+name = "resinsim-viz"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "resinsim-viz"
+path = "src/main.rs"
+
+[dependencies]
+resinsim-core = { path = "../resinsim-core" }
+bevy = { version = "0.18", default-features = true }
+bevy_panorbit_camera = "0.34"
+clap = { version = "4", features = ["derive"] }
+
+[lints]
+workspace = true
