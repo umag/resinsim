@@ -114,12 +114,21 @@ despawns priors of *both* kinds, and clap's `conflicts_with` rejects
 respects the same invariant — a `.ctb` drop despawns any
 `LoadedStlMesh` and vice versa.
 
-This is a v1 scope cut, not a permanent shape. The deferred-capability
-trigger lands when 03-per-layer-heatmap-overlay's coloured-mesh
-marker is added: at that point a `GeometryLayer` enum lets multiple
-markers coexist (STL native + CTB voxel + heatmap-coloured), and the
-single-source rule generalises to "one of each kind". Until then,
-overlaying STL + CTB is out of scope.
+Per-vertex `Mesh::ATTRIBUTE_COLOR` was the chosen carrier for per-layer
+scalar overlays (issue 03's cure-depth heatmap) because it does not
+introduce a new entity marker, preserving the single-source
+mutual-exclusion rule. The heatmap rides on the same `LoadedSliceStack`
+mesh — a sibling cursor entity (`LayerCursor`) handles the active-layer
+indicator with its own thin Plane3d mesh + transparent material.
+
+This is a v1 scope cut, not a permanent shape. The earlier "deferred-
+capability trigger" anticipated issue 03 introducing a separate
+coloured-mesh marker; in practice issue 03 baked the colours into the
+existing `LoadedSliceStack` mesh, leaving the single-source rule
+untouched. The trigger now lands when STL + CTB co-display becomes a
+real requirement (e.g. comparing a re-sliced model against its source
+STL) — at that point a `GeometryLayer` enum lets multiple markers
+coexist and the single-source rule generalises to "one of each kind".
 
 ## Cross-format BoundingBox reuse
 

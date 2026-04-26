@@ -40,6 +40,33 @@
 use crate::simulation::PrintSimulation;
 use std::path::{Path, PathBuf};
 
+/// Load a simulation from an absolute path. Sibling to
+/// [`SimulationRepository`], used by callers that hand in a full path
+/// (e.g. `resinsim-viz --load-sim PATH.json`) without a `data_dir + name`
+/// split.
+///
+/// Calls `PrintSimulation::validate()` after `serde_json::from_str` so a
+/// tampered or schema-evolved file cannot silently violate aggregate
+/// invariants — same deserialize-bypass guard documented at the module
+/// level. Errors carry three stable substrings that downstream callers
+/// (and human grep) match against:
+///
+/// - `"failed to read"` — `std::fs::read_to_string` failed.
+/// - `"failed to parse"` — `serde_json::from_str` failed.
+/// - `"invalid simulation"` — the deserialised aggregate failed `validate()`.
+///
+/// All three substrings appear alongside the failing path so debugging
+/// is unambiguous when an absolute path is supplied.
+pub fn load_simulation(path: &Path) -> Result<PrintSimulation, String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let sim: PrintSimulation = serde_json::from_str(&contents)
+        .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+    sim.validate()
+        .map_err(|e| format!("invalid simulation {}: {e}", path.display()))?;
+    Ok(sim)
+}
+
 pub struct SimulationRepository {
     data_dir: PathBuf,
 }
@@ -71,17 +98,13 @@ impl SimulationRepository {
 
     /// Load a simulation by name (filename without `.json` extension).
     ///
-    /// Calls `PrintSimulation::validate()` after deserialize so a tampered
-    /// or schema-evolved file cannot silently violate aggregate invariants.
+    /// Thin wrapper that joins `data_dir + name.json` and delegates to the
+    /// free function [`load_simulation`]. The validate() deserialize-bypass
+    /// guard lives in the free function so both call sites — repo-by-name
+    /// and viz-by-absolute-path (`--load-sim`) — share one code path.
     pub fn load(&self, name: &str) -> Result<PrintSimulation, String> {
         let path = self.data_dir.join(format!("{name}.json"));
-        let contents = std::fs::read_to_string(&path)
-            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-        let sim: PrintSimulation = serde_json::from_str(&contents)
-            .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
-        sim.validate()
-            .map_err(|e| format!("invalid simulation {}: {e}", path.display()))?;
-        Ok(sim)
+        load_simulation(&path)
     }
 
     /// List available simulation names (filenames stripped of `.json`).
@@ -229,5 +252,93 @@ mod tests {
             nested.join("first-run.json").is_file(),
             "save must have written the file inside the new data_dir"
         );
+    }
+
+    #[test]
+    fn load_simulation_round_trips_from_absolute_path() {
+        // Free-fn variant: callers (resinsim-viz --load-sim) hand it an
+        // absolute path with no data_dir/name split. Same validate() guard
+        // as SimulationRepository::load(name).
+        let dir = test_dir("free-fn-round-trip");
+        let repo = SimulationRepository::new(&dir);
+        let saved = build_sim();
+        repo.save("via-repo", &saved).expect("save");
+        let path = dir.join("via-repo.json");
+
+        let loaded = load_simulation(&path).expect("load_simulation must succeed");
+        assert_eq!(saved.layers().len(), loaded.layers().len());
+    }
+
+    #[test]
+    fn load_simulation_validates_via_same_guard() {
+        // Same deserialize-bypass guard as load(name): tampered file must
+        // fail with "invalid simulation".
+        let dir = test_dir("free-fn-validates");
+        let saved = build_sim();
+        let mut value = serde_json::to_value(&saved).expect("serialize");
+        value["recipe"]["layer_height_um"] = serde_json::json!(-1.0);
+        let path = dir.join("tampered.json");
+        std::fs::write(&path, serde_json::to_string_pretty(&value).expect("serialize"))
+            .expect("write tampered file");
+
+        let err = load_simulation(&path).expect_err("must reject invalid recipe");
+        assert!(
+            err.contains("invalid simulation") && err.contains("layer_height_um"),
+            "free fn must surface the same 'invalid simulation' substring; got: {err}"
+        );
+    }
+
+    #[test]
+    fn load_simulation_missing_path_mentions_absolute_path() {
+        // The free fn is fed an absolute path by the viz CLI; on missing
+        // file the error must mention the full path so debugging is
+        // unambiguous (not just the basename).
+        let path = std::path::PathBuf::from("/definitely/does/not/exist/nope.json");
+        let err = load_simulation(&path).expect_err("missing file must fail");
+        assert!(
+            err.contains("/definitely/does/not/exist/nope.json"),
+            "error must echo the full path; got: {err}"
+        );
+        assert!(
+            err.contains("failed to read"),
+            "error must contain stable substring 'failed to read'; got: {err}"
+        );
+    }
+
+    #[test]
+    fn error_messages_contain_stable_substrings() {
+        // Pin the three historical error-message substrings that downstream
+        // code (and human grep) match against. After the load -> load_simulation
+        // refactor these MUST still appear verbatim in the surfaced errors.
+        // - "failed to read"   on missing file
+        // - "failed to parse"  on garbage JSON
+        // - "invalid simulation" on validate() rejection
+        let dir = test_dir("stable-substrings");
+        let repo = SimulationRepository::new(&dir);
+
+        // 1. Missing file -> "failed to read".
+        let err = repo
+            .load("never-saved")
+            .expect_err("missing must fail");
+        assert!(err.contains("failed to read"), "missing-file substring lost: {err}");
+
+        // 2. Garbage JSON -> "failed to parse".
+        let garbage_path = dir.join("garbage.json");
+        std::fs::write(&garbage_path, b"this is not json")
+            .expect("write garbage");
+        let err = load_simulation(&garbage_path).expect_err("garbage must fail");
+        assert!(err.contains("failed to parse"), "parse substring lost: {err}");
+
+        // 3. Tampered (deserialises but fails validate()) -> "invalid simulation".
+        let saved = build_sim();
+        let mut value = serde_json::to_value(&saved).expect("serialize");
+        value["recipe"]["layer_height_um"] = serde_json::json!(-1.0);
+        std::fs::write(
+            dir.join("tampered.json"),
+            serde_json::to_string_pretty(&value).expect("serialize tampered"),
+        )
+        .expect("write tampered");
+        let err = repo.load("tampered").expect_err("tampered must fail");
+        assert!(err.contains("invalid simulation"), "invalid substring lost: {err}");
     }
 }

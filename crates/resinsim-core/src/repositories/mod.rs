@@ -4,4 +4,4 @@ pub mod simulation_repo;
 
 pub use printer_repo::PrinterProfileRepository;
 pub use resin_repo::ResinProfileRepository;
-pub use simulation_repo::SimulationRepository;
+pub use simulation_repo::{SimulationRepository, load_simulation};

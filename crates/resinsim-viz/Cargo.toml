@@ -13,5 +13,10 @@ bevy = { version = "0.18", default-features = true }
 bevy_panorbit_camera = "0.34"
 clap = { version = "4", features = ["derive"] }
 
+[dev-dependencies]
+# Used only by the env-var-gated heatmap smoke test to write a synthetic
+# sim JSON when RESINSIM_SIM_FIXTURE is unset. Not a runtime dep.
+serde_json = "1"
+
 [lints]
 workspace = true

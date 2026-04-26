@@ -50,18 +50,33 @@ fn first_mask_dims(layers: &[LayerInput]) -> Option<(u32, u32, f32)> {
     None
 }
 
-/// Accumulate the layer-stack Z extent in f64 then narrow to f32.
+/// Cumulative-Z prefix sum (mm) over the layer stack, returned as a
+/// length-`n+1` vector. Element `i` is the bottom-Z of layer `i`;
+/// element `n` is the top-Z of the topmost layer (== total stack
+/// height). Empty input returns `vec![0.0]`.
 ///
-/// f32 alone drifts ~50 µm over 4500 layers at 20 µm because the
-/// mantissa step at 90 mm magnitude is ~5 µm, amplified by cumulative
-/// summation. The single f64 fold pre-empts this without changing the
-/// public BoundingBox shape.
-fn cumulative_z_mm_f32(layers: &[LayerInput]) -> f32 {
-    let total_um: f64 = layers
-        .iter()
-        .map(|l| l.layer_height_um as f64)
-        .sum();
-    (total_um / 1000.0) as f32
+/// **Why f64 internally.** f32 alone drifts ~50 µm over 4500 layers at
+/// 20 µm because the mantissa step at 90 mm magnitude is ~5 µm,
+/// amplified by cumulative summation. The single f64 fold pre-empts
+/// this; values are narrowed to f32 only at the vector boundary because
+/// downstream consumers (Bevy mesh vertices, PanOrbitCamera bbox) are
+/// f32-typed. See `docs/patterns/voxel-mask-stack-to-bevy-mesh.md` —
+/// the f64-prefix-sum invariant must survive any future tidying pass.
+///
+/// **Why public.** `slice_stack_bounding_box` and
+/// `slice_stack_to_bevy_mesh` consume this internally; the heatmap
+/// layer-cursor system in `main.rs` also reads it to position a cursor
+/// entity at `z_prefix[current_layer]`. Single source of truth across
+/// all three call sites.
+pub fn cumulative_z_mm(layers: &[LayerInput]) -> Vec<f32> {
+    let mut prefix: Vec<f32> = Vec::with_capacity(layers.len() + 1);
+    prefix.push(0.0);
+    let mut acc: f64 = 0.0;
+    for layer in layers {
+        acc += layer.layer_height_um as f64 / 1000.0;
+        prefix.push(acc as f32);
+    }
+    prefix
 }
 
 /// Compute the bounding box of a slice stack in physical mm.
@@ -84,7 +99,12 @@ pub fn slice_stack_bounding_box(layers: &[LayerInput]) -> BoundingBox {
     };
     let max_x = w as f32 * voxel_size_mm;
     let max_y = h as f32 * voxel_size_mm;
-    let max_z = cumulative_z_mm_f32(layers);
+    // Last prefix-sum entry == total stack height. Empty layers vec is
+    // covered above by `first_mask_dims` returning None; the path here
+    // always has ≥ 1 layer so `last()` is Some.
+    let max_z = *cumulative_z_mm(layers)
+        .last()
+        .expect("cumulative_z_mm always returns at least one element");
     BoundingBox {
         min: [0.0, 0.0, 0.0],
         max: [max_x, max_y, max_z],
@@ -92,7 +112,8 @@ pub fn slice_stack_bounding_box(layers: &[LayerInput]) -> BoundingBox {
 }
 
 /// Convert a slice of `LayerInput` into a flat-shaded Bevy `Mesh` via
-/// face-culling boundary-quad emission.
+/// face-culling boundary-quad emission, optionally with per-layer
+/// vertex colours baked into `Mesh::ATTRIBUTE_COLOR`.
 ///
 /// Each emitted face becomes 2 triangles = 6 unique vertex positions
 /// with one face normal replicated, and sequential indices. Topology
@@ -103,7 +124,39 @@ pub fn slice_stack_bounding_box(layers: &[LayerInput]) -> BoundingBox {
 /// AND expose the ±Z faces of any mask-bearing neighbour. Mismatched
 /// dims across layers fail soft (empty mesh + `warn!`), detected in a
 /// discrete first pass before any vertex emission.
-pub fn slice_stack_to_bevy_mesh(layers: &[LayerInput]) -> Mesh {
+///
+/// # Per-layer colours (heatmap support)
+///
+/// `colors` is the heatmap input — exactly one RGBA per layer (in the
+/// same order as `layers`). When `Some(c)` and `c.len() == layers.len()`,
+/// every voxel face emitted from layer `i` carries colour `c[i]` on all
+/// six of its vertices, and the resulting `Mesh` has
+/// `Mesh::ATTRIBUTE_COLOR` (`VertexFormat::Float32x4`, attribute index 5
+/// per `bevy_mesh-0.18.1::mesh.rs:316`) set.
+///
+/// Bevy 0.18's `StandardMaterial` pipeline detects `ATTRIBUTE_COLOR`
+/// and sets the `VERTEX_COLORS` shader_def
+/// (`bevy_pbr-0.18.1::render::mesh.rs:2415`); the PBR fragment shader
+/// then **replaces** `base_color` with the vertex colour
+/// (`pbr_fragment.wgsl:54-55`: `pbr_input.material.base_color = in.color;`).
+/// Caller can therefore use `StandardMaterial::default()` at the spawn
+/// site — no `base_color` tweak required.
+///
+/// Mismatched length (`colors.len() != layers.len()`) emits one `warn!`
+/// and the resulting mesh has NO `ATTRIBUTE_COLOR` (white fallback).
+/// `None` skips the colour buffer entirely (zero overhead).
+///
+/// **Bake-once contract.** The colour buffer is baked into the Mesh
+/// asset at build time and MUST NOT be mutated afterwards by any
+/// system. Layer-change is achieved via a separate cursor entity whose
+/// `Transform.translation.z` updates each tick — no
+/// `Assets<Mesh>::get_mut()` on this mesh handle. Honouring this
+/// contract is what satisfies the issue's "Update on layer change
+/// without re-uploading the mesh" constraint.
+pub fn slice_stack_to_bevy_mesh(
+    layers: &[LayerInput],
+    colors: Option<&[[f32; 4]]>,
+) -> Mesh {
     // Pass 1 — dim validation. Returns early on all-None or mismatch.
     let Some((w, h, voxel_size_mm)) = first_mask_dims(layers) else {
         return empty_mesh();
@@ -125,16 +178,28 @@ pub fn slice_stack_to_bevy_mesh(layers: &[LayerInput]) -> Mesh {
         }
     }
 
-    // Pass 2 — Z prefix sum (f64) + emission with immediate-neighbour
-    // face culling.
+    // Validate colour-buffer length. On mismatch, drop the buffer and
+    // warn so the caller's hard-error policy (in main.rs) can take
+    // precedence — viz-side soft fallback is the second line of defence.
+    let effective_colors: Option<&[[f32; 4]]> = match colors {
+        Some(c) if c.len() == layers.len() => Some(c),
+        Some(c) => {
+            warn!(
+                "slice_stack: per-layer colors length {} differs from \
+                 layers length {}; emitting mesh without ATTRIBUTE_COLOR",
+                c.len(),
+                layers.len()
+            );
+            None
+        }
+        None => None,
+    };
+    let mut colors_buf: Option<Vec<[f32; 4]>> = effective_colors.map(|_| Vec::new());
+
+    // Pass 2 — Z prefix sum (f64-internal, length n+1) + emission with
+    // immediate-neighbour face culling.
     let n = layers.len();
-    let mut z_prefix: Vec<f64> = Vec::with_capacity(n + 1);
-    z_prefix.push(0.0);
-    let mut acc: f64 = 0.0;
-    for layer in layers {
-        acc += layer.layer_height_um as f64 / 1000.0;
-        z_prefix.push(acc);
-    }
+    let z_prefix = cumulative_z_mm(layers);
 
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
@@ -144,8 +209,11 @@ pub fn slice_stack_to_bevy_mesh(layers: &[LayerInput]) -> Mesh {
         let Some(mask) = layers[i].mask.as_ref() else {
             continue;
         };
-        let z0 = z_prefix[i] as f32;
-        let z1 = z_prefix[i + 1] as f32;
+        let z0 = z_prefix[i];
+        let z1 = z_prefix[i + 1];
+        // Per-layer colour: when colours are active, this is c[i] which
+        // gets replicated 6× per face below.
+        let layer_color = effective_colors.map(|c| c[i]);
 
         for cy in 0..h {
             for cx in 0..w {
@@ -171,6 +239,7 @@ pub fn slice_stack_to_bevy_mesh(layers: &[LayerInput]) -> Mesh {
                             [x0, y1, z1],
                         ],
                     );
+                    push_face_color(colors_buf.as_mut(), layer_color);
                 }
                 // +X face.
                 if cx + 1 == w || !mask.is_solid(cx + 1, cy) {
@@ -186,6 +255,7 @@ pub fn slice_stack_to_bevy_mesh(layers: &[LayerInput]) -> Mesh {
                             [x1, y0, z1],
                         ],
                     );
+                    push_face_color(colors_buf.as_mut(), layer_color);
                 }
                 // -Y face.
                 if cy == 0 || !mask.is_solid(cx, cy - 1) {
@@ -201,6 +271,7 @@ pub fn slice_stack_to_bevy_mesh(layers: &[LayerInput]) -> Mesh {
                             [x0, y0, z1],
                         ],
                     );
+                    push_face_color(colors_buf.as_mut(), layer_color);
                 }
                 // +Y face.
                 if cy + 1 == h || !mask.is_solid(cx, cy + 1) {
@@ -216,6 +287,7 @@ pub fn slice_stack_to_bevy_mesh(layers: &[LayerInput]) -> Mesh {
                             [x1, y1, z1],
                         ],
                     );
+                    push_face_color(colors_buf.as_mut(), layer_color);
                 }
                 // -Z face: i==0 OR previous layer's mask is None OR
                 // previous layer's voxel at (cx, cy) is empty.
@@ -234,6 +306,7 @@ pub fn slice_stack_to_bevy_mesh(layers: &[LayerInput]) -> Mesh {
                             [x1, y0, z0],
                         ],
                     );
+                    push_face_color(colors_buf.as_mut(), layer_color);
                 }
                 // +Z face.
                 let pos_z_exposed = i + 1 == n
@@ -251,15 +324,33 @@ pub fn slice_stack_to_bevy_mesh(layers: &[LayerInput]) -> Mesh {
                             [x1, y1, z1],
                         ],
                     );
+                    push_face_color(colors_buf.as_mut(), layer_color);
                 }
             }
         }
     }
 
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-        .with_inserted_indices(Indices::U32(indices))
+        .with_inserted_indices(Indices::U32(indices));
+    if let Some(buf) = colors_buf {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, buf);
+    }
+    mesh
+}
+
+/// Push 6 copies of `color` into the colour buffer, in lockstep with a
+/// preceding `push_quad` that emitted 6 vertices. No-op if either the
+/// buffer or the colour is absent — the two are always populated
+/// together in the heatmap path, but the helper guards both for
+/// readability at the call site.
+fn push_face_color(buf: Option<&mut Vec<[f32; 4]>>, color: Option<[f32; 4]>) {
+    if let (Some(b), Some(c)) = (buf, color) {
+        for _ in 0..6 {
+            b.push(c);
+        }
+    }
 }
 
 /// `true` iff the neighbour at `layers[idx]` does NOT cover (cx, cy).
@@ -363,7 +454,7 @@ mod tests {
 
     #[test]
     fn empty_input_yields_empty_mesh() {
-        let mesh = slice_stack_to_bevy_mesh(&[]);
+        let mesh = slice_stack_to_bevy_mesh(&[], None);
         assert!(positions_of(&mesh).is_empty());
         assert!(normals_of(&mesh).is_empty());
         assert!(indices_of(&mesh).is_empty());
@@ -373,7 +464,7 @@ mod tests {
     fn single_solid_voxel_yields_12_triangles() {
         // 1×1 mask with cell (0,0) solid, one layer 100µm thick at 0.5mm voxel.
         let layers = vec![solid_mask_layer(100.0, 1, 1, 0.5)];
-        let mesh = slice_stack_to_bevy_mesh(&layers);
+        let mesh = slice_stack_to_bevy_mesh(&layers, None);
         let positions = positions_of(&mesh);
         let normals = normals_of(&mesh);
         let indices = indices_of(&mesh);
@@ -406,7 +497,7 @@ mod tests {
             solid_mask_layer(100.0, 2, 2, 0.5),
             solid_mask_layer(100.0, 2, 2, 0.5),
         ];
-        let mesh = slice_stack_to_bevy_mesh(&layers);
+        let mesh = slice_stack_to_bevy_mesh(&layers, None);
         assert_eq!(positions_of(&mesh).len(), 144);
     }
 
@@ -421,7 +512,7 @@ mod tests {
             no_mask_layer(100.0),
             solid_mask_layer(100.0, 2, 2, 0.5),
         ];
-        let mesh = slice_stack_to_bevy_mesh(&layers);
+        let mesh = slice_stack_to_bevy_mesh(&layers, None);
         assert_eq!(
             positions_of(&mesh).len(),
             192,
@@ -437,7 +528,7 @@ mod tests {
             solid_mask_layer(100.0, 2, 2, 0.5),
             solid_mask_layer(100.0, 3, 3, 0.5),
         ];
-        let mesh = slice_stack_to_bevy_mesh(&layers);
+        let mesh = slice_stack_to_bevy_mesh(&layers, None);
         assert_eq!(positions_of(&mesh).len(), 0);
     }
 
@@ -490,7 +581,7 @@ mod tests {
     #[test]
     fn all_none_masks_yields_empty_mesh() {
         let layers = vec![no_mask_layer(100.0), no_mask_layer(100.0), no_mask_layer(100.0)];
-        let mesh = slice_stack_to_bevy_mesh(&layers);
+        let mesh = slice_stack_to_bevy_mesh(&layers, None);
         assert_eq!(positions_of(&mesh).len(), 0);
     }
 
@@ -517,5 +608,152 @@ mod tests {
             "f64 prefix sum: top-of-bbox should be 100.0 mm ± 1e-3, got {}",
             bbox.max[2]
         );
+    }
+
+    #[test]
+    fn cumulative_z_mm_empty_input_returns_single_zero() {
+        // Empty layer stack — the prefix sum is just the starting Z = 0.
+        let prefix = cumulative_z_mm(&[]);
+        assert_eq!(prefix, vec![0.0]);
+    }
+
+    #[test]
+    fn cumulative_z_mm_three_layers_returns_four_entries() {
+        // 3 × 100µm = 0, 0.1, 0.2, 0.3 mm — entry i is the bottom-Z of
+        // layer i, entry n is the top-Z of the stack.
+        let layers = vec![
+            empty_mask_layer(100.0, 1, 1, 0.5),
+            empty_mask_layer(100.0, 1, 1, 0.5),
+            empty_mask_layer(100.0, 1, 1, 0.5),
+        ];
+        let prefix = cumulative_z_mm(&layers);
+        assert_eq!(prefix.len(), 4);
+        for (i, expected) in [0.0_f32, 0.1, 0.2, 0.3].iter().enumerate() {
+            assert!(
+                (prefix[i] - expected).abs() < 1e-6,
+                "prefix[{i}] = {} not {expected}",
+                prefix[i]
+            );
+        }
+    }
+
+    #[test]
+    fn cumulative_z_mm_handles_varying_layer_heights() {
+        // Mixed layer heights: 50µm, 20µm, 100µm — prefix is
+        // [0.0, 0.05, 0.07, 0.17] mm.
+        let layers = vec![
+            empty_mask_layer(50.0, 1, 1, 0.5),
+            empty_mask_layer(20.0, 1, 1, 0.5),
+            empty_mask_layer(100.0, 1, 1, 0.5),
+        ];
+        let prefix = cumulative_z_mm(&layers);
+        let expected = [0.0_f32, 0.05, 0.07, 0.17];
+        for (i, e) in expected.iter().enumerate() {
+            assert!(
+                (prefix[i] - e).abs() < 1e-6,
+                "prefix[{i}] = {} not {e}",
+                prefix[i]
+            );
+        }
+    }
+
+    #[test]
+    fn cumulative_z_mm_resists_drift_over_5000_layers() {
+        // Same drift test as the bbox test but exercises the helper
+        // directly. 5000 × 20µm — top entry within 1e-3 mm of 100.0.
+        let layers: Vec<LayerInput> = (0..5000)
+            .map(|_| empty_mask_layer(20.0, 1, 1, 0.5))
+            .collect();
+        let prefix = cumulative_z_mm(&layers);
+        assert_eq!(prefix.len(), 5001);
+        let top = *prefix.last().expect("non-empty");
+        assert!(
+            (top - 100.0).abs() < 1e-3,
+            "f64 prefix sum: top should be 100.0 mm ± 1e-3, got {top}"
+        );
+    }
+
+    fn colors_of(mesh: &Mesh) -> Option<Vec<[f32; 4]>> {
+        mesh.attribute(Mesh::ATTRIBUTE_COLOR).map(|attr| match attr {
+            VertexAttributeValues::Float32x4(v) => v.clone(),
+            other => panic!("expected Float32x4 colors, got {other:?}"),
+        })
+    }
+
+    #[test]
+    fn none_colors_omits_attribute_color() {
+        // Default path: no per-layer colors → no ATTRIBUTE_COLOR on the
+        // resulting mesh. Existing 11 tests in this file rely on this
+        // shape for byte-equality with their pre-refactor expectations.
+        let layers = vec![solid_mask_layer(100.0, 1, 1, 0.5)];
+        let mesh = slice_stack_to_bevy_mesh(&layers, None);
+        assert!(
+            colors_of(&mesh).is_none(),
+            "ATTRIBUTE_COLOR must be absent when colors=None"
+        );
+    }
+
+    #[test]
+    fn some_colors_emits_attribute_color_with_replicated_layer_color() {
+        // Single 1×1 voxel, one layer, red colour [1,0,0,1] → 6 faces ×
+        // 6 vertices = 36 vertices, all carrying [1,0,0,1].
+        let layers = vec![solid_mask_layer(100.0, 1, 1, 0.5)];
+        let red = [1.0_f32, 0.0, 0.0, 1.0];
+        let mesh = slice_stack_to_bevy_mesh(&layers, Some(&[red]));
+        let colors = colors_of(&mesh).expect("ATTRIBUTE_COLOR must be present");
+        assert_eq!(colors.len(), 36, "1×1×1 voxel emits 36 vertices");
+        for (i, c) in colors.iter().enumerate() {
+            assert_eq!(*c, red, "vertex {i}: {c:?} expected {red:?}");
+        }
+    }
+
+    #[test]
+    fn two_layer_distinct_colors_partition_vertices_by_layer() {
+        // Two layers, each 1×1 solid, distinct colours. Interior +Z/-Z
+        // faces between them are culled; layer-0 emits 5 faces (≠ +Z),
+        // layer-1 emits 5 faces (≠ -Z). Each emits 30 vertices.
+        let layers = vec![
+            solid_mask_layer(100.0, 1, 1, 0.5),
+            solid_mask_layer(100.0, 1, 1, 0.5),
+        ];
+        let red = [1.0_f32, 0.0, 0.0, 1.0];
+        let blue = [0.0_f32, 0.0, 1.0, 1.0];
+        let mesh = slice_stack_to_bevy_mesh(&layers, Some(&[red, blue]));
+        let colors = colors_of(&mesh).expect("ATTRIBUTE_COLOR must be present");
+        // Total vertices: 2 layers × 5 faces × 6 vertices = 60.
+        assert_eq!(colors.len(), 60);
+        let red_count = colors.iter().filter(|c| **c == red).count();
+        let blue_count = colors.iter().filter(|c| **c == blue).count();
+        assert_eq!(red_count, 30, "30 red verts (layer 0, 5 faces × 6 verts)");
+        assert_eq!(blue_count, 30, "30 blue verts (layer 1, 5 faces × 6 verts)");
+    }
+
+    #[test]
+    fn mismatched_colors_length_omits_attribute_color() {
+        // Layers.len() = 2, colors.len() = 1 → length mismatch. The
+        // viz-side soft fallback drops the colour buffer (warn) so the
+        // mesh has NO ATTRIBUTE_COLOR. main.rs's hard-error policy is
+        // the first line of defence; this is the second.
+        let layers = vec![
+            solid_mask_layer(100.0, 1, 1, 0.5),
+            solid_mask_layer(100.0, 1, 1, 0.5),
+        ];
+        let red = [1.0_f32, 0.0, 0.0, 1.0];
+        let mesh = slice_stack_to_bevy_mesh(&layers, Some(&[red]));
+        assert!(
+            colors_of(&mesh).is_none(),
+            "mismatched colors length must drop ATTRIBUTE_COLOR (warn fallback)"
+        );
+    }
+
+    #[test]
+    fn empty_colors_with_zero_layers_yields_no_attribute_color() {
+        // Edge case: zero layers + zero colors is a "matching" length
+        // pair, but the empty-input early return omits ATTRIBUTE_COLOR
+        // unconditionally (no faces emitted, nothing to colour). Locks
+        // in that the early-return path doesn't accidentally insert an
+        // empty colour buffer.
+        let mesh = slice_stack_to_bevy_mesh(&[], Some(&[]));
+        assert!(colors_of(&mesh).is_none());
     }
 }

@@ -4798,6 +4798,7 @@ dependencies = [
  "bevy_panorbit_camera",
  "clap",
  "resinsim-core",
+ "serde_json",
 ]
 
 [[package]]
