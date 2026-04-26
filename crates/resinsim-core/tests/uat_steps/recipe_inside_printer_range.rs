@@ -86,9 +86,7 @@ fn when_run_simulation(world: &mut UatWorld) {
         .resin
         .as_ref()
         .expect("scenario invariant: Given step set resin");
-    world.pairing_result = Some(
-        pairing_validator::validate_pairing(printer, resin.recipe()).map_err(|v| v),
-    );
+    world.pairing_result = Some(pairing_validator::validate_pairing(printer, resin.recipe()));
     let areas = cube_areas(10, 100.0);
     let result = SimulationRunner::run_from_areas(
         &areas,
@@ -329,7 +327,7 @@ lift_distance_mm = 5.0
     let r: ResinProfile = toml::from_str(&toml_str).expect("slightly-off TOML parses");
     r.validate().expect("slightly-off resin is valid");
     let res = pairing_validator::validate_pairing(printer, r.recipe());
-    let violations = res.err().expect("slightly-off pairing must return Err");
+    let violations = res.expect_err("slightly-off pairing must return Err");
     let joined = violations.join("; ");
     assert!(
         joined.contains("layer_height_um"),

@@ -113,12 +113,12 @@ impl Recipe {
         }
         // retract_speed_mm_min: when present, must be finite and > 0. None is legal
         // (falls back to lift_speed_mm_min at read time).
-        if let Some(v) = self.retract_speed_mm_min {
-            if !v.is_finite() || v <= 0.0 {
-                return Err(format!(
-                    "retract_speed_mm_min must be finite and > 0 when set (got {v})"
-                ));
-            }
+        if let Some(v) = self.retract_speed_mm_min
+            && (!v.is_finite() || v <= 0.0)
+        {
+            return Err(format!(
+                "retract_speed_mm_min must be finite and > 0 when set (got {v})"
+            ));
         }
         Ok(())
     }

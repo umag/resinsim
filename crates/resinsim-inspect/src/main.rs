@@ -1124,7 +1124,6 @@ fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
 // CLI handler — 9 args after --data-dir (ADR-0004). Profile resolution is
 // unconditional here because both --printer and --resin have clap defaults.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn cmd_report_health(
     path: Option<&str>,
     file_path: Option<&str>,

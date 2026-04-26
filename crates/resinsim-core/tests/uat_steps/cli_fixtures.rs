@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! CLI subprocess fixtures for UAT step defs.
 //!
 //! The `resinsim` binary lives in the `resinsim-inspect` package, so

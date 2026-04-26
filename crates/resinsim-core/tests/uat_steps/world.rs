@@ -57,7 +57,7 @@ pub struct UatWorld {
     // ---- Suction-detector scenarios ----
     pub cavity_events: Option<Vec<CavityEventSummary>>,
     /// Not asserted directly — captured for post-hoc diagnostics only.
-    #[expect(dead_code, reason = "diagnostic capture; not yet asserted")]
+    #[allow(dead_code, reason = "diagnostic capture; not yet asserted")]
     pub suction_failure_count: Option<usize>,
     pub suction_event_layer: Option<u32>,
     pub sealed_area_mm2: Option<f32>,

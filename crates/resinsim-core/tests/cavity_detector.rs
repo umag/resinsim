@@ -88,9 +88,9 @@ fn sealed_cube_primitive_is_internally_consistent() {
     assert_eq!(stack[0].solid_cell_count(), 49);
     assert_eq!(stack[6].solid_cell_count(), 49);
     // Layers 1..6 are rings (outer frame solid, 5×5 interior void)
-    for i in 1..6 {
+    for (i, layer) in stack.iter().enumerate().take(6).skip(1) {
         assert_eq!(
-            stack[i].solid_cell_count(),
+            layer.solid_cell_count(),
             49 - 25,
             "layer {i} ring wall count"
         );
@@ -107,8 +107,8 @@ fn open_tube_primitive_is_internally_consistent() {
     let stack = open_tube(7, 1.0);
     assert_eq!(stack.len(), 7);
     assert_eq!(stack[0].solid_cell_count(), 49); // solid base
-    for i in 1..7 {
-        assert_eq!(stack[i].solid_cell_count(), 24, "layer {i} ring");
+    for (i, layer) in stack.iter().enumerate().take(7).skip(1) {
+        assert_eq!(layer.solid_cell_count(), 24, "layer {i} ring");
     }
     // No closure → no events
     let events = CavityDetector::detect(&stack).expect("valid primitive");
@@ -340,8 +340,8 @@ fn disjoint_cavity_specs(
             if !z_adjacent_or_overlap {
                 return false;
             }
-            let x_clear = c.x0 + 3 + 1 <= a.x0 || a.x0 + 3 + 1 <= c.x0;
-            let y_clear = c.y0 + 3 + 1 <= a.y0 || a.y0 + 3 + 1 <= c.y0;
+            let x_clear = c.x0 + 3 < a.x0 || a.x0 + 3 < c.x0;
+            let y_clear = c.y0 + 3 < a.y0 || a.y0 + 3 < c.y0;
             !(x_clear || y_clear)
         });
         if overlaps {
@@ -506,8 +506,8 @@ fn disjoint_cavity_specs_of_size(
             if !z_adjacent_or_overlap {
                 return false;
             }
-            let x_clear = c.x0 + footprint + 1 <= a.x0 || a.x0 + footprint + 1 <= c.x0;
-            let y_clear = c.y0 + footprint + 1 <= a.y0 || a.y0 + footprint + 1 <= c.y0;
+            let x_clear = c.x0 + footprint < a.x0 || a.x0 + footprint < c.x0;
+            let y_clear = c.y0 + footprint < a.y0 || a.y0 + footprint < c.y0;
             !(x_clear || y_clear)
         });
         if overlaps {

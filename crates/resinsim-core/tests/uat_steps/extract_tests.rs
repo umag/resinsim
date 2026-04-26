@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Unit + property tests for [`super::extract::extract`].
 //!
 //! Coverage target (plan step 1):

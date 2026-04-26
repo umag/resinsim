@@ -173,8 +173,11 @@ mod tests {
         let mut value = serde_json::to_value(&saved).expect("serialize");
         value["recipe"]["layer_height_um"] = serde_json::json!(-1.0);
         let path = dir.join("tampered.json");
-        std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap())
-            .expect("test setup: write tampered file");
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&value).expect("serialize tampered value"),
+        )
+        .expect("test setup: write tampered file");
 
         let err = repo
             .load("tampered")

@@ -166,6 +166,12 @@ pub struct CavityDetector;
 
 type PocketId = u32;
 
+/// Per-cell pocket label map for one layer (None = solid, Some(id) = void in pocket id).
+type PocketLabelMap = Vec<Option<PocketId>>;
+
+/// List of connected void components within one layer; each component is its (x, y) cells.
+type VoidComponents = Vec<Vec<(u32, u32)>>;
+
 #[derive(Debug, Clone)]
 struct PocketInfo {
     first_open_layer: u32,
@@ -242,8 +248,7 @@ impl CavityDetector {
         }
 
         // Layers 1..N
-        for k in 1..masks.len() {
-            let mask_k = &masks[k];
+        for (k, mask_k) in masks.iter().enumerate().skip(1) {
             let (local_labels, components) =
                 connected_components_of_void(mask_k, width, height);
             let mut new_labels: Vec<Option<PocketId>> = vec![None; cell_count];
@@ -279,14 +284,14 @@ impl CavityDetector {
                         if other == canonical {
                             continue;
                         }
-                        if let Some(other_info) = pockets.remove(&other) {
-                            if let Some(canon) = pockets.get_mut(&canonical) {
-                                if other_info.first_open_layer < canon.first_open_layer {
-                                    canon.first_open_layer = other_info.first_open_layer;
-                                }
-                                canon.touches_lateral_exterior |=
-                                    other_info.touches_lateral_exterior;
+                        if let Some(other_info) = pockets.remove(&other)
+                            && let Some(canon) = pockets.get_mut(&canonical)
+                        {
+                            if other_info.first_open_layer < canon.first_open_layer {
+                                canon.first_open_layer = other_info.first_open_layer;
                             }
+                            canon.touches_lateral_exterior |=
+                                other_info.touches_lateral_exterior;
                         }
                         // Rewrite any prev_labels that pointed to `other` → `canonical`,
                         // so the pending sealed-area count lands on the right pocket.
@@ -370,7 +375,7 @@ fn connected_components_of_void(
     mask: &LayerMask,
     width: u32,
     height: u32,
-) -> (Vec<Option<PocketId>>, Vec<Vec<(u32, u32)>>) {
+) -> (PocketLabelMap, VoidComponents) {
     let total = (width as usize) * (height as usize);
     let mut labels: Vec<Option<PocketId>> = vec![None; total];
     let mut components: Vec<Vec<(u32, u32)>> = Vec::new();
@@ -621,10 +626,7 @@ mod tests {
         // voxel) — below MIN_SEALED_AREA_MM2 (1.0 mm²).
         // Actually at MIN = 1.0 and 1 cell = 1.0 mm², this is exactly at the
         // threshold. Make the voxel smaller so we're clearly below.
-        let mut floor =
-            LayerMask::new_all_solid(3, 3, 0.5).expect("valid");
-        let _ = floor; // unused dimension check
-        let mut floor = LayerMask::new_all_solid(3, 3, 0.5).expect("valid");
+        let floor = LayerMask::new_all_solid(3, 3, 0.5).expect("valid");
         let mut wall = LayerMask::new_all_solid(3, 3, 0.5).expect("valid");
         wall.clear(1, 1).expect("in bounds"); // interior void = 1 cell × 0.25 mm² = 0.25 mm²
         let cap = LayerMask::new_all_solid(3, 3, 0.5).expect("valid");

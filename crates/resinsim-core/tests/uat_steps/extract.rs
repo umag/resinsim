@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Extract Gherkin from ```gherkin fenced code blocks in markdown source.
 //!
 //! `spec/uat/*.md` is the single source of truth for UAT scenarios. Each

@@ -159,17 +159,17 @@ mod tests {
         let phases = LayerPhase::classify_sequence(&areas, &generic_recipe());
 
         // Layers 0-4: Raft
-        for i in 0..5 {
-            assert_eq!(phases[i], LayerPhase::Raft, "layer {i}");
+        for (i, phase) in phases.iter().enumerate().take(5) {
+            assert_eq!(*phase, LayerPhase::Raft, "layer {i}");
         }
         // Next bottom_layer_count (generic = 6) layers: BurnIn → layers 5-10
         let bottom = generic_recipe().bottom_layer_count() as usize;
-        for i in 5..(5 + bottom) {
-            assert_eq!(phases[i], LayerPhase::BurnIn, "layer {i}");
+        for (i, phase) in phases.iter().enumerate().take(5 + bottom).skip(5) {
+            assert_eq!(*phase, LayerPhase::BurnIn, "layer {i}");
         }
         // Remainder: Normal → layers 11..
-        for i in (5 + bottom)..phases.len() {
-            assert_eq!(phases[i], LayerPhase::Normal, "layer {i}");
+        for (i, phase) in phases.iter().enumerate().skip(5 + bottom) {
+            assert_eq!(*phase, LayerPhase::Normal, "layer {i}");
         }
     }
 
@@ -200,11 +200,11 @@ mod tests {
         areas.extend(vec![area(106.0); 3]); // only 3 non-raft layers
         let phases = LayerPhase::classify_sequence(&areas, &generic_recipe());
         assert_eq!(phases.len(), 8);
-        for i in 0..5 {
-            assert_eq!(phases[i], LayerPhase::Raft);
+        for phase in phases.iter().take(5) {
+            assert_eq!(*phase, LayerPhase::Raft);
         }
-        for i in 5..8 {
-            assert_eq!(phases[i], LayerPhase::BurnIn);
+        for phase in phases.iter().take(8).skip(5) {
+            assert_eq!(*phase, LayerPhase::BurnIn);
         }
     }
 }

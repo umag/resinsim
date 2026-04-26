@@ -231,13 +231,13 @@ impl ResinProfile {
                 self.min_safe_temp_c
             ));
         }
-        if let Some(ea) = self.cure_kinetics_ea_kj_mol {
-            if !ea.is_finite() || ea <= 0.0 || ea > 200.0 {
-                return Err(format!(
-                    "cure_kinetics_ea_kj_mol, when present, must be finite and in \
-                     (0.0, 200.0] kJ/mol (got {ea})"
-                ));
-            }
+        if let Some(ea) = self.cure_kinetics_ea_kj_mol
+            && (!ea.is_finite() || ea <= 0.0 || ea > 200.0)
+        {
+            return Err(format!(
+                "cure_kinetics_ea_kj_mol, when present, must be finite and in \
+                 (0.0, 200.0] kJ/mol (got {ea})"
+            ));
         }
         // Both fields are validated finite above, so `>=` is safe on f32.
         if self.min_safe_temp_c >= self.degradation_temp_c {
