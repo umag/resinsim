@@ -97,6 +97,26 @@ The seam adds one level of indirection: `setup_scene` lives next to
 `main` instead of being inlined. In exchange, the system gains a
 testable surface and a stable name that test code addresses.
 
+## Caveat: asset-touching tests need `AssetPlugin`
+
+Tests that exercise systems touching `Assets<Mesh>`,
+`Assets<StandardMaterial>`, etc., cannot be fully plugin-less. The
+`init_asset::<T>()` helper requires an `AssetServer` resource, which
+is only inserted by `bevy::asset::AssetPlugin`. Add the plugin
+explicitly before calling `init_asset`:
+
+```rust
+let mut app = App::new();
+app.add_plugins(bevy::asset::AssetPlugin::default())
+    .init_asset::<Mesh>()
+    .init_asset::<StandardMaterial>();
+```
+
+This still avoids the windowing backend, the renderer, and any of the
+heavyweight `DefaultPlugins` machinery — `AssetPlugin` alone is
+lightweight and synchronous. First seen in
+`crates/resinsim-viz/src/main.rs::tests::make_loader_app` (issue 02).
+
 ## See also
 
 - `crates/resinsim-viz/src/main.rs` — first instance of this pattern
