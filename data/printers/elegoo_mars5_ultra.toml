@@ -34,3 +34,9 @@ release_mechanism = "tilt"
 led_delta_t_steady_c = 13.5   # plateau ~40.5 °C − idle ~27 °C
 led_tau_sec = 4000.0          # 3–4 h to 95 % of plateau (3τ ≈ 3–4 h)
 led_to_vat_coupling = 0.71    # user estimate (no vat sensor); recalibrate when added
+
+# Build envelope (ADR-0012). Elegoo published spec.
+[build_envelope_mm]
+width_mm = 153.36
+depth_mm = 77.76
+max_z_mm = 165.0

@@ -24,3 +24,9 @@ thermal_tau_sec = 1200.0
 
 # LCD uniformity — KB-120
 lcd_uniformity_variation = 0.22
+
+# Build envelope (ADR-0012). Typical 8.9" / 4K monoLCD class.
+[build_envelope_mm]
+width_mm = 192.0
+depth_mm = 120.0
+max_z_mm = 200.0

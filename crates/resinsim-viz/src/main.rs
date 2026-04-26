@@ -1,7 +1,22 @@
+//! resinsim-viz binary entry point.
+//!
+//! World coordinate convention (ADR-0011): Z-up, plate at top of envelope,
+//! model hangs upside-down below it. The CTB slice mesh data is rendered
+//! with a 180° X-axis rotation + translate-to-(envelope.depth, envelope.max_z)
+//! entity `Transform`, so native layer 0 (slicer "bottom" = first printed)
+//! glues to the plate's underside and native layer N hangs at the lowest
+//! world Z. Mesh data (vertex positions) is unchanged from the issue 09
+//! contract — only the entity Transform applies the flip + anchor.
+//!
+//! STL meshes render at native coords with identity Transform — no
+//! auto-rotation, no plate anchor. Anchoring an STL like a CTB is a
+//! follow-up (track via a future issue if it becomes a real workflow).
+
 mod data_dir;
 mod heatmap;
 mod mesh;
 mod profile_repos;
+mod scene;
 mod sim;
 mod slice;
 mod ui;
@@ -9,9 +24,10 @@ mod ui;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::FileDragAndDrop;
-use bevy_egui::EguiPlugin;
+use bevy_egui::{EguiContexts, EguiPlugin, egui};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, TrackpadBehavior};
 use clap::Parser;
 use resinsim_core::io::{ctb, stl};
@@ -24,6 +40,10 @@ use crate::data_dir::resolve_data_dir;
 use crate::heatmap::{cure_depth_domain, ramp};
 use crate::mesh::{LoadedStlMesh, fit_panorbit_to_bbox, triangles_to_bevy_mesh};
 use crate::profile_repos::ProfileRepos;
+use crate::scene::{
+    ActivePrinterProfile, BUILD_PLATE_THICKNESS_MM, BuildPlate, PrinterEnvelope,
+    resolve_envelope_after_ctb_load, spawn_build_plate,
+};
 use crate::sim::{
     RunConfig, RunSimRequest, SimulationResult, apply_run_request, load_sim_from_path,
 };
@@ -219,6 +239,156 @@ pub fn route_drop(path: &Path) -> DropAction {
 // Scene setup
 // ---------------------------------------------------------------------------
 
+/// Bundle of the four "prior geometry" queries threaded through every
+/// CTB / STL load. Bevy 0.18 caps a system at 16 SystemParams; folding
+/// these four queries into one [`SystemParam`] keeps `setup_initial_load`
+/// and `handle_dropped_files` under the cap as the issue 10 work added
+/// the [`BuildPlate`] query alongside the existing STL / slice-stack /
+/// layer-cursor ones.
+#[derive(SystemParam)]
+pub struct PriorGeometry<'w, 's> {
+    pub stl: Query<'w, 's, Entity, With<LoadedStlMesh>>,
+    pub slice: Query<'w, 's, Entity, With<LoadedSliceStack>>,
+    pub cursor: Query<'w, 's, Entity, With<LayerCursor>>,
+    pub plate: Query<'w, 's, Entity, With<BuildPlate>>,
+}
+
+/// World up axis configuration for `PanOrbitCamera` (ADR-0011 — Z-up world).
+///
+/// `axis[0]` = right (X), `axis[1]` = up (Z), `axis[2]` = forward (Y).
+/// Matches the upstream `bevy_panorbit_camera-0.34/src/util.rs:73 AXIS_Z_UP`
+/// test convention. Yaw rotates around Z; pitch elevates from the XY plane.
+const AXIS_Z_UP: [Vec3; 3] = [Vec3::X, Vec3::Z, Vec3::Y];
+
+/// Yaw + pitch for the default initial camera view (ADR-0011).
+///
+/// Canonical 3/4 view: `yaw = 45°` (corner-on around the up axis), `pitch =
+/// -120°` (30° below horizon). The camera lands at vat level looking UP at
+/// the model hanging from the plate.
+///
+/// `update_orbit_transform` applies
+/// `pitch_rot = Quat::from_axis_angle(axis[0], -pitch)`, so the
+/// back-of-camera direction `(0, 0, R)` is rotated by `+120°` about X.
+///
+/// **Pitch regime in `axis = AXIS_Z_UP`** (full 360° unrolled):
+///
+/// - `pitch =     0°` → camera directly overhead (looking straight down).
+/// - `pitch ∈ (0°, -90°)` → above horizon, descending.
+/// - `pitch =  -90°` → at horizon (camera level with focus).
+/// - `pitch ∈ (-90°, -180°)` → below horizon, descending toward
+///   "directly-below". Default `-120°` lives here (30° below horizon).
+/// - `pitch = -180°` → camera directly below focus (overhead-from-vat).
+///
+/// `util::calculate_from_translation_and_focus` is NOT used to derive
+/// these values: it is not a true inverse of `update_orbit_transform`
+/// for AXIS_Z_UP in `bevy_panorbit_camera 0.34` (see `util.rs:138
+/// above_z_as_up_axis` test — input `(0, 0, 5)` round-trips to
+/// `pitch = π/2`, which the forward path then maps to camera
+/// `(0, R, 0)` ≠ input). Direct angles avoid the round-trip mismatch.
+pub fn three_quarter_yaw_pitch() -> (f32, f32) {
+    let yaw = 45f32.to_radians();
+    let pitch = -120f32.to_radians();
+    (yaw, pitch)
+}
+
+/// Mesh-anchor `Transform` for `LoadedSliceStack` (ADR-0011).
+///
+/// 180° rotation about X + translate so native layer 0 (slicer "bottom" =
+/// first printed) glues to plate's underside at world `Z = envelope.max_z`,
+/// and native layer N hangs at the lowest world Z.
+///
+/// Issue 09 mesh native ranges: `x ∈ 0..bed_width`, `y ∈ 0..bed_depth`,
+/// `z ∈ 0..mesh_max_z`. After rotation about X (`y → -y, z → -z`) and
+/// translation `(0, envelope.depth_mm, envelope.max_z_mm)`:
+///
+/// - native `(x, y, z)` → world `(x, envelope.depth_mm - y, envelope.max_z_mm - z)`
+/// - native layer 0 plane (z=0) → world plane `z = envelope.max_z_mm` (plate underside)
+/// - native layer N plane (z=mesh_max_z) → world plane `z = envelope.max_z_mm - mesh_max_z` (hanging end)
+pub fn ctb_anchor_transform(envelope: &PrinterEnvelope) -> Transform {
+    Transform {
+        translation: Vec3::new(0.0, envelope.depth_mm, envelope.max_z_mm),
+        rotation: Quat::from_rotation_x(std::f32::consts::PI),
+        scale: Vec3::ONE,
+    }
+}
+
+/// Camera-coords debug HUD rendered as an egui `Area`. Runs in the
+/// `EguiPrimaryContextPass` schedule so it composites on top of the
+/// `left_panel` / `right_panel` SidePanels (a Bevy UI text node would
+/// be drawn UNDER egui in `bevy_egui 0.39`, hiding the HUD beneath the
+/// left panel).
+///
+/// Reads `PanOrbitCamera` yaw / pitch / radius / focus and the camera
+/// entity's world Transform every frame; useful for dialing in the
+/// default view angle interactively. Currently always-on; a future
+/// `--debug-hud` flag (or F2 toggle) is tracked as a follow-up.
+pub fn debug_camera_overlay(
+    mut contexts: EguiContexts,
+    cam_q: Query<(&PanOrbitCamera, &Transform), With<Camera3d>>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+    let Some((cam, transform)) = cam_q.iter().next() else {
+        return;
+    };
+    let yaw_rad = cam.yaw.unwrap_or(cam.target_yaw);
+    let pitch_rad = cam.pitch.unwrap_or(cam.target_pitch);
+    let radius = cam.radius.unwrap_or(cam.target_radius);
+    let focus = cam.focus;
+    let cam_pos = transform.translation;
+    let body = format!(
+        "yaw    : {yaw_rad:7.3} rad  ({:6.1} deg)\n\
+         pitch  : {pitch_rad:7.3} rad  ({:6.1} deg)\n\
+         radius : {radius:7.1} mm\n\
+         focus  : ({:7.1}, {:7.1}, {:7.1})\n\
+         cam_pos: ({:7.1}, {:7.1}, {:7.1})\n\
+         axis   : right={}, up={}, fwd={}\n\
+         elevation above horizon: {:5.1} deg  (= 90 - |pitch_deg|)",
+        yaw_rad.to_degrees(),
+        pitch_rad.to_degrees(),
+        focus.x,
+        focus.y,
+        focus.z,
+        cam_pos.x,
+        cam_pos.y,
+        cam_pos.z,
+        format_axis(cam.axis[0]),
+        format_axis(cam.axis[1]),
+        format_axis(cam.axis[2]),
+        90.0 - pitch_rad.to_degrees().abs(),
+    );
+    egui::Area::new(egui::Id::new("debug_camera_hud"))
+        .anchor(egui::Align2::LEFT_TOP, egui::vec2(296.0, 8.0))
+        .interactable(false)
+        .order(egui::Order::Tooltip)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style())
+                .corner_radius(4.0)
+                .inner_margin(6.0)
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(body)
+                            .monospace()
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(217, 230, 255)),
+                    );
+                });
+        });
+}
+
+fn format_axis(v: Vec3) -> &'static str {
+    if v == Vec3::X {
+        "X"
+    } else if v == Vec3::Y {
+        "Y"
+    } else if v == Vec3::Z {
+        "Z"
+    } else {
+        "?"
+    }
+}
+
 pub fn setup_scene(mut commands: Commands) {
     // Camera carries its own DirectionalLight as a child entity — a
     // "headlamp" rig. Both Camera3d and DirectionalLight point along
@@ -229,11 +399,26 @@ pub fn setup_scene(mut commands: Commands) {
     // self-shadowing acne that masks the geometry we're trying to
     // inspect. Ambient (200 brightness from issue 01) provides fill for
     // back-facing surfaces.
+    let (yaw_3q, pitch_3q) = three_quarter_yaw_pitch();
     commands
         .spawn((
             Camera3d::default(),
-            Transform::from_xyz(0.0, 5.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+            // PanOrbitCamera recomputes Transform every frame from
+            // focus + yaw + pitch + radius (lib.rs:584); the initial
+            // translation only matters for the very first frame before
+            // initialization. looking_at is overridden by the orbit
+            // recompute, so we skip it.
+            Transform::from_xyz(0.0, 5.0, 10.0),
             PanOrbitCamera {
+                axis: AXIS_Z_UP,
+                yaw: Some(yaw_3q),
+                pitch: Some(pitch_3q),
+                target_yaw: yaw_3q,
+                target_pitch: pitch_3q,
+                // Free orbit (ADR-0011) — let the user inspect the
+                // underside of the plate without hitting the upside-down
+                // soft limit.
+                allow_upside_down: true,
                 trackpad_behavior: TrackpadBehavior::BlenderLike {
                     modifier_pan: None,
                     modifier_zoom: None,
@@ -270,6 +455,14 @@ pub fn setup_scene(mut commands: Commands) {
 /// Mutual exclusion: STL geometry doesn't carry a heatmap in v1, so the
 /// LayerCursor is despawned along with any prior LoadedSliceStack to
 /// keep the world consistent.
+///
+/// **Plate persistence contract (ADR-0011).** The `BuildPlate` is NOT
+/// despawned by an STL load. The plate represents the printer envelope
+/// (constant per session, not per geometry); STL meshes render in their
+/// native coords and don't override the envelope, so the plate stays at
+/// whatever dimensions the active `PrinterEnvelope` resource holds.
+/// CTB load is the only path that respawns the plate (because a CTB
+/// header can override `bed_size_mm` when no profile envelope is set).
 #[allow(clippy::too_many_arguments)]
 fn load_stl_into_world(
     path: &Path,
@@ -280,6 +473,7 @@ fn load_stl_into_world(
     prior_slice: &Query<Entity, With<LoadedSliceStack>>,
     prior_cursor: &Query<Entity, With<LayerCursor>>,
     camera: &mut Query<&mut PanOrbitCamera, With<Camera3d>>,
+    preserve_view: bool,
 ) {
     despawn_geometry(commands, prior_stl, prior_slice, prior_cursor);
 
@@ -302,7 +496,7 @@ fn load_stl_into_world(
     ));
 
     for mut cam in camera.iter_mut() {
-        fit_panorbit_to_bbox(&mut cam, &bbox);
+        fit_panorbit_to_bbox(&mut cam, &bbox, preserve_view);
     }
 }
 
@@ -349,11 +543,16 @@ fn load_ctb_into_world(
     prior_stl: &Query<Entity, With<LoadedStlMesh>>,
     prior_slice: &Query<Entity, With<LoadedSliceStack>>,
     prior_cursor: &Query<Entity, With<LayerCursor>>,
+    prior_plate: &Query<Entity, With<BuildPlate>>,
     camera: &mut Query<&mut PanOrbitCamera, With<Camera3d>>,
     loaded_sim: &LoadedSimulation,
     current_layer: &mut CurrentLayer,
     z_prefix_res: &mut LayerZPrefix,
     domain_res: &mut CureDepthDomain,
+    active_profile: &ActivePrinterProfile,
+    envelope: &mut PrinterEnvelope,
+    warned_about_envelope_mismatch: &mut bool,
+    preserve_view: bool,
     allow_mismatch: bool,
     smoke_exit: bool,
     exit_writer: &mut MessageWriter<AppExit>,
@@ -366,13 +565,24 @@ fn load_ctb_into_world(
     z_prefix_res.0.clear();
     domain_res.0 = None;
 
-    let (_info, layers) = match ctb::parse_ctb(path) {
+    let (info, layers) = match ctb::parse_ctb(path) {
         Ok(parsed) => parsed,
         Err(e) => {
             error!("CTB load failed for {}: {e}", path.display());
             return;
         }
     };
+    // Reconcile envelope with the freshly-parsed CTB header (priority chain
+    // documented on resolve_envelope_after_ctb_load + ADR-0011 / ADR-0012).
+    // Then respawn the plate so its position + XY footprint reflect the new
+    // dimensions.
+    resolve_envelope_after_ctb_load(
+        active_profile,
+        info.bed_size_mm,
+        envelope,
+        warned_about_envelope_mismatch,
+    );
+    spawn_build_plate(commands, meshes, materials, prior_plate, envelope);
 
     // Decide whether to bake a heatmap.
     let layer_colors: Option<Vec<[f32; 4]>> = match loaded_sim.0.as_ref() {
@@ -416,14 +626,20 @@ fn load_ctb_into_world(
     let mesh_handle =
         meshes.add(slice_stack_to_bevy_mesh(&layers, layer_colors.as_deref()));
     let material_handle = materials.add(StandardMaterial::from(Color::WHITE));
-    commands.spawn((
-        Mesh3d(mesh_handle),
-        MeshMaterial3d(material_handle),
-        Transform::default(),
-        LoadedSliceStack {
-            path: path.to_path_buf(),
-        },
-    ));
+    // Mesh-anchor Transform (ADR-0011): 180° X-rotation + translate so
+    // native layer 0 glues to plate's underside; native layer N hangs at
+    // the lowest world Z. Mesh data unchanged — issue 09 contract preserved
+    // at the data layer; the entity Transform applies the flip + anchor.
+    let stack_entity = commands
+        .spawn((
+            Mesh3d(mesh_handle),
+            MeshMaterial3d(material_handle),
+            ctb_anchor_transform(envelope),
+            LoadedSliceStack {
+                path: path.to_path_buf(),
+            },
+        ))
+        .id();
 
     // Cursor: only spawn when a heatmap is active (sim present + matching
     // counts, OR allow_mismatch). Mismatch-allowed has layer_colors=None
@@ -469,11 +685,17 @@ fn load_ctb_into_world(
         });
         let cursor_z =
             z_prefix_res.0[current_layer.index as usize] + LAYER_CURSOR_EPSILON_MM;
+        // Parented to the slice stack entity so the cursor inherits the
+        // mesh-anchor Transform (180° X-rotation + envelope.depth/max_z
+        // translate). Cursor coords stay in NATIVE CTB space — matches
+        // z_prefix_res entries — and update_layer_cursor doesn't need to
+        // know about the world-space anchor.
         commands.spawn((
             Mesh3d(cursor_mesh),
             MeshMaterial3d(cursor_material),
             Transform::from_xyz(center_x, center_y, cursor_z),
             LayerCursor,
+            ChildOf(stack_entity),
         ));
 
         // Controls hint + first-layer HUD line. Fires on Startup AND on
@@ -485,8 +707,21 @@ fn load_ctb_into_world(
         }
     }
 
+    // Combined model + plate bbox in WORLD coords (the camera frames the
+    // visible span, not the native mesh bounds). Native bbox at
+    // (0..bed, 0..bed, 0..mesh_max_z); the entity Transform maps it to
+    // the world span computed below.
+    let mesh_max_z = bbox.max[2];
+    let world_bbox = resinsim_core::io::stl::BoundingBox {
+        min: [0.0, 0.0, envelope.max_z_mm - mesh_max_z],
+        max: [
+            envelope.width_mm,
+            envelope.depth_mm,
+            envelope.max_z_mm + BUILD_PLATE_THICKNESS_MM,
+        ],
+    };
     for mut cam in camera.iter_mut() {
-        fit_panorbit_to_bbox(&mut cam, &bbox);
+        fit_panorbit_to_bbox(&mut cam, &world_bbox, preserve_view);
     }
 }
 
@@ -524,14 +759,15 @@ fn setup_initial_load(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    prior_stl: Query<Entity, With<LoadedStlMesh>>,
-    prior_slice: Query<Entity, With<LoadedSliceStack>>,
-    prior_cursor: Query<Entity, With<LayerCursor>>,
+    prior: PriorGeometry,
     mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
     mut loaded_sim: ResMut<LoadedSimulation>,
     mut current_layer: ResMut<CurrentLayer>,
     mut z_prefix: ResMut<LayerZPrefix>,
     mut domain: ResMut<CureDepthDomain>,
+    active_profile: Res<ActivePrinterProfile>,
+    mut envelope: ResMut<PrinterEnvelope>,
+    mut warned_about_envelope_mismatch: Local<bool>,
     mut exit_writer: MessageWriter<AppExit>,
 ) {
     // Pre-load: --load-sim if any. On Err leave LoadedSimulation as None.
@@ -573,24 +809,31 @@ fn setup_initial_load(
             &mut commands,
             &mut meshes,
             &mut materials,
-            &prior_stl,
-            &prior_slice,
-            &prior_cursor,
+            &prior.stl,
+            &prior.slice,
+            &prior.cursor,
             &mut camera,
+            // Startup = first load: re-frame AND lock the 3/4 view.
+            false,
         ),
         (None, Some(path)) => load_ctb_into_world(
             path,
             &mut commands,
             &mut meshes,
             &mut materials,
-            &prior_stl,
-            &prior_slice,
-            &prior_cursor,
+            &prior.stl,
+            &prior.slice,
+            &prior.cursor,
+            &prior.plate,
             &mut camera,
             &loaded_sim,
             &mut current_layer,
             &mut z_prefix,
             &mut domain,
+            &active_profile,
+            &mut envelope,
+            &mut warned_about_envelope_mismatch,
+            false,
             args.allow_mismatch,
             args.smoke_exit,
             &mut exit_writer,
@@ -623,15 +866,16 @@ fn handle_dropped_files(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    prior_stl: Query<Entity, With<LoadedStlMesh>>,
-    prior_slice: Query<Entity, With<LoadedSliceStack>>,
-    prior_cursor: Query<Entity, With<LayerCursor>>,
+    prior: PriorGeometry,
     mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
     args: Res<Args>,
     loaded_sim: Res<LoadedSimulation>,
     mut current_layer: ResMut<CurrentLayer>,
     mut z_prefix: ResMut<LayerZPrefix>,
     mut domain: ResMut<CureDepthDomain>,
+    active_profile: Res<ActivePrinterProfile>,
+    mut envelope: ResMut<PrinterEnvelope>,
+    mut warned_about_envelope_mismatch: Local<bool>,
     mut exit_writer: MessageWriter<AppExit>,
 ) {
     let dropped: Vec<PathBuf> = events
@@ -657,24 +901,31 @@ fn handle_dropped_files(
             &mut commands,
             &mut meshes,
             &mut materials,
-            &prior_stl,
-            &prior_slice,
-            &prior_cursor,
+            &prior.stl,
+            &prior.slice,
+            &prior.cursor,
             &mut camera,
+            // Drag-drop = reload: preserve user's current orbit angle.
+            true,
         ),
         DropAction::Ctb => load_ctb_into_world(
             path,
             &mut commands,
             &mut meshes,
             &mut materials,
-            &prior_stl,
-            &prior_slice,
-            &prior_cursor,
+            &prior.stl,
+            &prior.slice,
+            &prior.cursor,
+            &prior.plate,
             &mut camera,
             &loaded_sim,
             &mut current_layer,
             &mut z_prefix,
             &mut domain,
+            &active_profile,
+            &mut envelope,
+            &mut warned_about_envelope_mismatch,
+            true,
             args.allow_mismatch,
             DROP_IS_INTERACTIVE,
             &mut exit_writer,
@@ -858,6 +1109,73 @@ fn setup_profile_repos(
     }
 }
 
+/// Startup system that runs after `setup_profile_repos`: insert the
+/// [`ActivePrinterProfile`] + [`PrinterEnvelope`] resources used by issue
+/// 10's plate / mesh-anchor logic, and spawn the initial build plate.
+///
+/// Reads `state.selected_printer` (populated by `setup_profile_repos`
+/// from `--printer <id>` after listing-validation) rather than re-parsing
+/// `args.printer`, so a typo'd flag warns once from `setup_profile_repos`
+/// instead of twice across both systems.
+///
+/// Resolution chain (ADR-0011, ADR-0012):
+///   1. `state.selected_printer` Some → load via `repos.printer.load(name)`
+///      and use the profile's `build_envelope_mm` if `Some`.
+///   2. Profile lacks envelope OR `selected_printer` is None → cold-start
+///      default envelope (192 / 120 / 200 mm). The first CTB load may
+///      override XY from the header (see `resolve_envelope_after_ctb_load`).
+///
+/// `ActivePrinterProfile` is ALWAYS inserted (with `.0 = None` if no
+/// `--printer`) so downstream systems can read it unconditionally.
+#[allow(clippy::too_many_arguments)]
+fn setup_active_printer_and_plate(
+    state: Res<PickerState>,
+    repos: Option<Res<ProfileRepos>>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    prior_plate: Query<Entity, With<BuildPlate>>,
+) {
+    let active = match (state.selected_printer.as_deref(), repos.as_deref()) {
+        (Some(name), Some(repos)) => match repos.printer.load(name) {
+            Ok(profile) => {
+                info!("active printer profile: {}", profile.name());
+                ActivePrinterProfile(Some(profile))
+            }
+            Err(e) => {
+                // `setup_profile_repos` already validated that `name` is
+                // in the listing; reaching here means the .toml file
+                // changed under us between listing and load. Rare but
+                // worth a warn (NOT a duplicate of `setup_profile_repos`'
+                // bad-flag warn — that path keeps `selected_printer`
+                // unset, so we never enter this branch on a typo).
+                warn!(
+                    "active printer profile load failed (name={name}): {e}; \
+                     plate falls back to default envelope"
+                );
+                ActivePrinterProfile(None)
+            }
+        },
+        _ => ActivePrinterProfile(None),
+    };
+
+    let envelope = active
+        .0
+        .as_ref()
+        .and_then(PrinterEnvelope::from_profile)
+        .unwrap_or_default();
+
+    commands.insert_resource(active);
+    commands.insert_resource(envelope);
+    spawn_build_plate(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &prior_plate,
+        &envelope,
+    );
+}
+
 /// Update: keep `state.loaded_*` in sync with `state.selected_*`
 /// when the user changes a ComboBox selection. Idempotent body —
 /// equal names short-circuit, no `is_changed` ping-pong.
@@ -894,7 +1212,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .add_message::<RunSimRequest>()
     .add_systems(
         Startup,
-        (setup_scene, setup_initial_load, setup_profile_repos).chain(),
+        (
+            setup_scene,
+            setup_profile_repos,
+            setup_active_printer_and_plate,
+            setup_initial_load,
+        )
+            .chain(),
     )
     .add_systems(
         Update,
@@ -907,7 +1231,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             apply_run_request,
         ),
     )
-    .add_systems(bevy_egui::EguiPrimaryContextPass, (left_panel, right_panel));
+    .add_systems(
+        bevy_egui::EguiPrimaryContextPass,
+        (left_panel, right_panel, debug_camera_overlay),
+    );
     if smoke_exit {
         app.add_systems(Update, smoke_exit_after_one_frame);
     }
@@ -1052,6 +1379,9 @@ mod tests {
             .init_resource::<CurrentLayer>()
             .init_resource::<LayerZPrefix>()
             .init_resource::<CureDepthDomain>()
+            // Issue 10 plate / envelope resources read by load_ctb_into_world.
+            .init_resource::<ActivePrinterProfile>()
+            .insert_resource(PrinterEnvelope::default())
             .add_message::<AppExit>();
         app.world_mut()
             .spawn((Camera3d::default(), PanOrbitCamera::default()));
@@ -1203,6 +1533,7 @@ mod tests {
                     &prior_slice,
                     &prior_cursor,
                     &mut camera,
+                    false,
                 );
             },
         );
@@ -1244,6 +1575,7 @@ mod tests {
                     &prior_slice,
                     &prior_cursor,
                     &mut camera,
+                    false,
                 );
             },
         );
@@ -1282,6 +1614,7 @@ mod tests {
                     &prior_slice,
                     &prior_cursor,
                     &mut camera,
+                    false,
                 );
             },
         );
@@ -1329,11 +1662,15 @@ mod tests {
                   prior_stl: Query<Entity, With<LoadedStlMesh>>,
                   prior_slice: Query<Entity, With<LoadedSliceStack>>,
                   prior_cursor: Query<Entity, With<LayerCursor>>,
+                  prior_plate: Query<Entity, With<BuildPlate>>,
                   mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
                   loaded_sim: Res<LoadedSimulation>,
                   mut current: ResMut<CurrentLayer>,
                   mut z_prefix: ResMut<LayerZPrefix>,
                   mut domain: ResMut<CureDepthDomain>,
+                  active_profile: Res<ActivePrinterProfile>,
+                  mut envelope: ResMut<PrinterEnvelope>,
+                  mut warned: Local<bool>,
                   mut exit_writer: MessageWriter<AppExit>| {
                 load_ctb_into_world(
                     &bad_path,
@@ -1343,11 +1680,16 @@ mod tests {
                     &prior_stl,
                     &prior_slice,
                     &prior_cursor,
+                    &prior_plate,
                     &mut camera,
                     &loaded_sim,
                     &mut current,
                     &mut z_prefix,
                     &mut domain,
+                    &active_profile,
+                    &mut envelope,
+                    &mut warned,
+                    false,
                     false,
                     false,
                     &mut exit_writer,
@@ -1382,11 +1724,15 @@ mod tests {
                   prior_stl: Query<Entity, With<LoadedStlMesh>>,
                   prior_slice: Query<Entity, With<LoadedSliceStack>>,
                   prior_cursor: Query<Entity, With<LayerCursor>>,
+                  prior_plate: Query<Entity, With<BuildPlate>>,
                   mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
                   loaded_sim: Res<LoadedSimulation>,
                   mut current: ResMut<CurrentLayer>,
                   mut z_prefix: ResMut<LayerZPrefix>,
                   mut domain: ResMut<CureDepthDomain>,
+                  active_profile: Res<ActivePrinterProfile>,
+                  mut envelope: ResMut<PrinterEnvelope>,
+                  mut warned: Local<bool>,
                   mut exit_writer: MessageWriter<AppExit>| {
                 load_ctb_into_world(
                     &bad_path,
@@ -1396,11 +1742,16 @@ mod tests {
                     &prior_stl,
                     &prior_slice,
                     &prior_cursor,
+                    &prior_plate,
                     &mut camera,
                     &loaded_sim,
                     &mut current,
                     &mut z_prefix,
                     &mut domain,
+                    &active_profile,
+                    &mut envelope,
+                    &mut warned,
+                    false,
                     false,
                     false,
                     &mut exit_writer,
@@ -1436,11 +1787,15 @@ mod tests {
                   prior_stl: Query<Entity, With<LoadedStlMesh>>,
                   prior_slice: Query<Entity, With<LoadedSliceStack>>,
                   prior_cursor: Query<Entity, With<LayerCursor>>,
+                  prior_plate: Query<Entity, With<BuildPlate>>,
                   mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
                   loaded_sim: Res<LoadedSimulation>,
                   mut current: ResMut<CurrentLayer>,
                   mut z_prefix: ResMut<LayerZPrefix>,
                   mut domain: ResMut<CureDepthDomain>,
+                  active_profile: Res<ActivePrinterProfile>,
+                  mut envelope: ResMut<PrinterEnvelope>,
+                  mut warned: Local<bool>,
                   mut exit_writer: MessageWriter<AppExit>| {
                 load_ctb_into_world(
                     &bad_path,
@@ -1450,11 +1805,16 @@ mod tests {
                     &prior_stl,
                     &prior_slice,
                     &prior_cursor,
+                    &prior_plate,
                     &mut camera,
                     &loaded_sim,
                     &mut current,
                     &mut z_prefix,
                     &mut domain,
+                    &active_profile,
+                    &mut envelope,
+                    &mut warned,
+                    false,
                     false,
                     false,
                     &mut exit_writer,
@@ -1489,11 +1849,15 @@ mod tests {
                   prior_stl: Query<Entity, With<LoadedStlMesh>>,
                   prior_slice: Query<Entity, With<LoadedSliceStack>>,
                   prior_cursor: Query<Entity, With<LayerCursor>>,
+                  prior_plate: Query<Entity, With<BuildPlate>>,
                   mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
                   loaded_sim: Res<LoadedSimulation>,
                   mut current: ResMut<CurrentLayer>,
                   mut z_prefix: ResMut<LayerZPrefix>,
                   mut domain: ResMut<CureDepthDomain>,
+                  active_profile: Res<ActivePrinterProfile>,
+                  mut envelope: ResMut<PrinterEnvelope>,
+                  mut warned: Local<bool>,
                   mut exit_writer: MessageWriter<AppExit>| {
                 load_ctb_into_world(
                     &bad_path,
@@ -1503,11 +1867,16 @@ mod tests {
                     &prior_stl,
                     &prior_slice,
                     &prior_cursor,
+                    &prior_plate,
                     &mut camera,
                     &loaded_sim,
                     &mut current,
                     &mut z_prefix,
                     &mut domain,
+                    &active_profile,
+                    &mut envelope,
+                    &mut warned,
+                    false,
                     false,
                     false,
                     &mut exit_writer,
@@ -2100,6 +2469,71 @@ mod tests {
             state.available_resins.contains(&"generic_standard".to_string()),
             "setup_profile_repos must populate listings; got {:?}",
             state.available_resins
+        );
+    }
+
+    #[test]
+    fn layer_cursor_parented_to_slice_inherits_anchor_transform() {
+        // ADR-0011 / issue 10 contract: LayerCursor spawns as a child of
+        // LoadedSliceStack so it inherits the mesh-anchor Transform
+        // (180° X-rotation + translate-to-(envelope.depth, max_z)).
+        // Cursor coords stay in NATIVE CTB space; the world-space flip
+        // is implicit via the parent. This test constructs the parent +
+        // child manually (bypassing ctb::parse_ctb) and runs Bevy's
+        // Transform propagation, then asserts the cursor's GlobalTransform
+        // matches the expected world position.
+        use bevy::transform::TransformPlugin;
+
+        let mut app = App::new();
+        app.add_plugins(TransformPlugin);
+
+        let envelope = PrinterEnvelope {
+            width_mm: 100.0,
+            depth_mm: 80.0,
+            max_z_mm: 200.0,
+        };
+        let parent_t = ctb_anchor_transform(&envelope);
+        let parent_id = app
+            .world_mut()
+            .spawn((parent_t, LoadedSliceStack {
+                path: PathBuf::from("/synthetic"),
+            }))
+            .id();
+        // Cursor at native (50, 40, 30) — middle of the bed at native
+        // layer z=30. After the parent anchor maps native (x, y, z) to
+        // world (x, depth-y, max_z-z), this should land at world
+        // (50, 40, 170).
+        let cursor_id = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(50.0, 40.0, 30.0),
+                LayerCursor,
+                ChildOf(parent_id),
+            ))
+            .id();
+
+        // Run one frame so transform propagation populates GlobalTransform.
+        app.update();
+
+        let world = app.world_mut();
+        let cursor_global = world
+            .get::<GlobalTransform>(cursor_id)
+            .expect("cursor entity must have GlobalTransform after propagation");
+        let world_pos = cursor_global.translation();
+        assert!(
+            (world_pos.x - 50.0).abs() < 1e-3,
+            "world x = native x = 50, got {}",
+            world_pos.x,
+        );
+        assert!(
+            (world_pos.y - 40.0).abs() < 1e-3,
+            "world y = depth - native_y = 80 - 40 = 40, got {}",
+            world_pos.y,
+        );
+        assert!(
+            (world_pos.z - 170.0).abs() < 1e-3,
+            "world z = max_z - native_z = 200 - 30 = 170, got {}",
+            world_pos.z,
         );
     }
 }

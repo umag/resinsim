@@ -79,7 +79,20 @@ pub fn triangles_to_bevy_mesh(triangles: &[Triangle]) -> Mesh {
 /// diagonal = INF), or non-finite centre (INF + NEG_INF = NaN).
 /// Without this guard an empty-but-syntactically-valid STL drops the
 /// camera into NaN/INF state.
-pub fn fit_panorbit_to_bbox(cam: &mut PanOrbitCamera, bbox: &BoundingBox) {
+///
+/// `preserve_view` controls whether the orbit angle (`yaw` / `pitch`) is
+/// re-locked to the default 3/4 view (false = first-load behaviour) or
+/// preserved (true = drag-drop reload behaviour). Mirrors DragonFruit's
+/// `preserveCurrentViewDirection` flag
+/// (`DragonFruit/src/components/scene/camera/CameraIntroController.tsx:103`).
+/// When `preserve_view` is true this function only writes
+/// `target_focus` + `target_radius`; yaw / pitch are untouched so the user's
+/// current orbit angle survives the reload.
+pub fn fit_panorbit_to_bbox(
+    cam: &mut PanOrbitCamera,
+    bbox: &BoundingBox,
+    preserve_view: bool,
+) {
     let min = Vec3::from(bbox.min);
     let max = Vec3::from(bbox.max);
     let diagonal = (max - min).length();
@@ -102,6 +115,13 @@ pub fn fit_panorbit_to_bbox(cam: &mut PanOrbitCamera, bbox: &BoundingBox) {
     cam.target_focus = centre;
     cam.radius = Some(distance);
     cam.target_radius = distance;
+    if !preserve_view {
+        let (yaw_3q, pitch_3q) = crate::three_quarter_yaw_pitch();
+        cam.yaw = Some(yaw_3q);
+        cam.pitch = Some(pitch_3q);
+        cam.target_yaw = yaw_3q;
+        cam.target_pitch = pitch_3q;
+    }
 }
 
 #[cfg(test)]
@@ -252,7 +272,7 @@ mod tests {
             min: [5.0, 5.0, 5.0],
             max: [5.0, 5.0, 5.0],
         };
-        fit_panorbit_to_bbox(&mut cam, &bbox);
+        fit_panorbit_to_bbox(&mut cam, &bbox, false);
         assert_eq!(cam.focus, Vec3::ZERO);
         assert_eq!(cam.target_focus, Vec3::ZERO);
         assert_eq!(cam.radius, Some(10.0));
@@ -295,11 +315,70 @@ mod tests {
             ..default()
         };
         let empty_bbox = resinsim_core::io::stl::bounding_box(&[]);
-        fit_panorbit_to_bbox(&mut cam, &empty_bbox);
+        fit_panorbit_to_bbox(&mut cam, &empty_bbox, false);
         assert_eq!(cam.focus, Vec3::ZERO);
         assert_eq!(cam.target_focus, Vec3::ZERO);
         assert_eq!(cam.radius, Some(10.0));
         assert!((cam.target_radius - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fit_panorbit_to_bbox_first_load_writes_3q_yaw_pitch() {
+        // preserve_view = false (Startup / first-load path): yaw and pitch
+        // are re-locked to the default 3/4 view, regardless of any prior
+        // camera angle. ADR-0011.
+        let mut cam = PanOrbitCamera {
+            yaw: Some(99.0), // intentionally bogus so the re-lock is observable
+            pitch: Some(99.0),
+            target_yaw: 99.0,
+            target_pitch: 99.0,
+            ..default()
+        };
+        let bbox = BoundingBox {
+            min: [0.0, 0.0, 0.0],
+            max: [1.0, 1.0, 1.0],
+        };
+        fit_panorbit_to_bbox(&mut cam, &bbox, false);
+        let (expected_yaw, expected_pitch) = crate::three_quarter_yaw_pitch();
+        let yaw = cam
+            .yaw
+            .expect("preserve_view=false branch must seed yaw");
+        let pitch = cam
+            .pitch
+            .expect("preserve_view=false branch must seed pitch");
+        assert!((yaw - expected_yaw).abs() < 1e-5);
+        assert!((pitch - expected_pitch).abs() < 1e-5);
+        assert!((cam.target_yaw - expected_yaw).abs() < 1e-5);
+        assert!((cam.target_pitch - expected_pitch).abs() < 1e-5);
+    }
+
+    #[test]
+    fn fit_panorbit_to_bbox_reload_preserves_yaw_pitch() {
+        // preserve_view = true (drag-drop reload path): yaw / pitch /
+        // target_yaw / target_pitch survive the call; only focus and
+        // radius are updated. Mirrors DragonFruit's
+        // preserveCurrentViewDirection contract for reloads.
+        let user_yaw = 0.42;
+        let user_pitch = 0.17;
+        let mut cam = PanOrbitCamera {
+            yaw: Some(user_yaw),
+            pitch: Some(user_pitch),
+            target_yaw: user_yaw,
+            target_pitch: user_pitch,
+            ..default()
+        };
+        let bbox = BoundingBox {
+            min: [0.0, 0.0, 0.0],
+            max: [1.0, 1.0, 1.0],
+        };
+        fit_panorbit_to_bbox(&mut cam, &bbox, true);
+        // Focus moved (centre = (0.5, 0.5, 0.5)) — sanity-check.
+        assert_eq!(cam.focus, Vec3::splat(0.5));
+        // Yaw / pitch UNCHANGED — the reload-preserves-view contract.
+        assert_eq!(cam.yaw, Some(user_yaw));
+        assert_eq!(cam.pitch, Some(user_pitch));
+        assert!((cam.target_yaw - user_yaw).abs() < 1e-9);
+        assert!((cam.target_pitch - user_pitch).abs() < 1e-9);
     }
 
     #[test]
@@ -309,7 +388,7 @@ mod tests {
             min: [0.0, 0.0, 0.0],
             max: [1.0, 1.0, 1.0],
         };
-        fit_panorbit_to_bbox(&mut cam, &bbox);
+        fit_panorbit_to_bbox(&mut cam, &bbox, false);
         let expected_radius = 1.5 * 3.0_f32.sqrt();
         assert_eq!(cam.focus, Vec3::splat(0.5));
         assert_eq!(cam.target_focus, Vec3::splat(0.5));

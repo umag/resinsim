@@ -24,6 +24,43 @@ fn default_led_to_vat_coupling() -> f32 {
     0.5
 }
 
+/// Hardware build envelope of a printer (ADR-0012, extends ADR-0005 Axis 1).
+///
+/// Optional on [`PrinterProfile`] — see ADR-0012. When present, all three
+/// dimensions must be positive and finite. When absent, viz consumers must
+/// fall back to alternative envelope sources (e.g. CTB header bed_size_mm
+/// plus a sentinel max_z) and surface the missing-envelope state to the
+/// user (typically via a one-shot warn).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BuildEnvelope {
+    /// Build-volume X extent (LCD-pixel-grid axis). Unit: mm.
+    pub width_mm: f32,
+    /// Build-volume Y extent (LCD-pixel-grid axis). Unit: mm.
+    pub depth_mm: f32,
+    /// Build-volume Z extent (build axis). Unit: mm.
+    pub max_z_mm: f32,
+}
+
+impl BuildEnvelope {
+    /// Validate that all three extents are positive and finite. Called from
+    /// [`PrinterProfile::validate`] when the envelope field is `Some`.
+    pub fn validate(&self) -> Result<(), String> {
+        let checks: &[(f32, &str)] = &[
+            (self.width_mm, "width_mm"),
+            (self.depth_mm, "depth_mm"),
+            (self.max_z_mm, "max_z_mm"),
+        ];
+        for (val, field) in checks {
+            if !val.is_finite() || *val <= 0.0 {
+                return Err(format!(
+                    "build_envelope_mm.{field} must be finite and > 0 (got {val})"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// How the printer separates a cured layer from the FEP film (ADR-0007).
 ///
 /// Distinct mechanical paradigms produce distinct per-layer time profiles, so
@@ -144,6 +181,14 @@ pub struct PrinterProfile {
     /// vat sensor. Re-calibrate when one is added.
     #[serde(default = "default_led_to_vat_coupling")]
     pub(crate) led_to_vat_coupling: f32,
+
+    /// Hardware build-envelope dimensions (ADR-0012). Optional so a profile
+    /// can ship before its dimensions are confirmed (Athena II in v1).
+    /// Consumed by `resinsim-viz` to size the build plate and frame the
+    /// camera; `None` triggers a viz-side fallback to CTB header
+    /// bed_size_mm + sentinel max_z + a one-shot warn.
+    #[serde(default)]
+    pub(crate) build_envelope_mm: Option<BuildEnvelope>,
 }
 
 impl PrinterProfile {
@@ -198,6 +243,9 @@ impl PrinterProfile {
     }
     pub fn led_to_vat_coupling(&self) -> f32 {
         self.led_to_vat_coupling
+    }
+    pub fn build_envelope_mm(&self) -> Option<BuildEnvelope> {
+        self.build_envelope_mm
     }
 
     /// Validate physical invariants. Must be called after deserialization from
@@ -274,6 +322,9 @@ impl PrinterProfile {
                 self.led_to_vat_coupling
             ));
         }
+        if let Some(env) = self.build_envelope_mm.as_ref() {
+            env.validate()?;
+        }
         Ok(())
     }
 
@@ -303,6 +354,12 @@ impl PrinterProfile {
             led_delta_t_steady_c: 13.5, // plateau 40.5 − idle 27
             led_tau_sec: 4000.0,        // 3–4 h to 95 % of plateau (3τ ≈ 3–4 h)
             led_to_vat_coupling: 0.71,  // user estimate — no vat sensor; recalibrate when added
+            // Build envelope (ADR-0012). Elegoo published spec.
+            build_envelope_mm: Some(BuildEnvelope {
+                width_mm: 153.36,
+                depth_mm: 77.76,
+                max_z_mm: 165.0,
+            }),
         }
     }
 
@@ -329,6 +386,12 @@ impl PrinterProfile {
             led_delta_t_steady_c: 10.0,
             led_tau_sec: 1200.0,
             led_to_vat_coupling: 0.5,
+            // Build envelope (ADR-0012). Typical 8.9" / 4K monoLCD class.
+            build_envelope_mm: Some(BuildEnvelope {
+                width_mm: 192.0,
+                depth_mm: 120.0,
+                max_z_mm: 200.0,
+            }),
         }
     }
 }
@@ -573,6 +636,110 @@ lcd_uniformity_variation = 0.22
             toml::from_str::<PrinterProfile>(&toml_str).is_err(),
             "unknown enum variant must fail parse (not validate)"
         );
+    }
+
+    // --- BuildEnvelope (ADR-0012) tests ---
+
+    #[test]
+    fn mars5_ultra_factory_populates_build_envelope() {
+        let env = PrinterProfile::elegoo_mars5_ultra()
+            .build_envelope_mm()
+            .expect("Mars 5 Ultra factory must populate build_envelope_mm");
+        assert!((env.width_mm - 153.36).abs() < 1e-4);
+        assert!((env.depth_mm - 77.76).abs() < 1e-4);
+        assert!((env.max_z_mm - 165.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn generic_msla_4k_factory_populates_build_envelope() {
+        let env = PrinterProfile::generic_msla_4k()
+            .build_envelope_mm()
+            .expect("generic_msla_4k factory must populate build_envelope_mm");
+        assert!((env.width_mm - 192.0).abs() < 1e-4);
+        assert!((env.depth_mm - 120.0).abs() < 1e-4);
+        assert!((env.max_z_mm - 200.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn legacy_toml_without_build_envelope_defaults_to_none() {
+        // Legacy TOML profiles (athena_ii in v1) deserialise with
+        // build_envelope_mm = None via #[serde(default)]. validate() must
+        // accept None — the field is Optional per ADR-0012.
+        let p: PrinterProfile = toml::from_str(&valid_printer_toml())
+            .expect("valid printer TOML without build_envelope_mm must parse");
+        assert!(p.build_envelope_mm().is_none());
+        p.validate()
+            .expect("None build_envelope must satisfy validate() (Option per ADR-0012)");
+    }
+
+    #[test]
+    fn toml_with_explicit_build_envelope_round_trips() {
+        let toml_str = valid_printer_toml()
+            + "\n[build_envelope_mm]\nwidth_mm = 153.36\ndepth_mm = 77.76\nmax_z_mm = 165.0\n";
+        let p: PrinterProfile =
+            toml::from_str(&toml_str).expect("explicit build_envelope must parse");
+        let env = p
+            .build_envelope_mm()
+            .expect("Some build_envelope after explicit TOML");
+        assert!((env.width_mm - 153.36).abs() < 1e-4);
+        assert!((env.depth_mm - 77.76).abs() < 1e-4);
+        assert!((env.max_z_mm - 165.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn build_envelope_with_zero_extent_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.build_envelope_mm = Some(BuildEnvelope {
+            width_mm: 0.0,
+            depth_mm: 120.0,
+            max_z_mm: 200.0,
+        });
+        let err = p
+            .validate()
+            .expect_err("zero width_mm must fail validate()");
+        assert!(
+            err.contains("build_envelope_mm.width_mm"),
+            "error names the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn build_envelope_with_negative_max_z_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.build_envelope_mm = Some(BuildEnvelope {
+            width_mm: 192.0,
+            depth_mm: 120.0,
+            max_z_mm: -1.0,
+        });
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn build_envelope_with_nan_extent_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.build_envelope_mm = Some(BuildEnvelope {
+            width_mm: f32::NAN,
+            depth_mm: 120.0,
+            max_z_mm: 200.0,
+        });
+        let err = p
+            .validate()
+            .expect_err("NaN width_mm must fail validate()");
+        assert!(
+            err.contains("build_envelope_mm.width_mm"),
+            "error names the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn build_envelope_with_infinite_extent_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.build_envelope_mm = Some(BuildEnvelope {
+            width_mm: 192.0,
+            depth_mm: f32::INFINITY,
+            max_z_mm: 200.0,
+        });
+        assert!(p.validate().is_err());
     }
 
     #[test]
