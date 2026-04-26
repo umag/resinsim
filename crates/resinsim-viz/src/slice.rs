@@ -28,14 +28,19 @@ use resinsim_core::io::sliced::LayerInput;
 use resinsim_core::io::stl::BoundingBox;
 use resinsim_core::values::LayerMask;
 
-/// ECS marker for the entity holding the currently-loaded slice stack.
+/// ECS marker for the entity holding the currently-loaded slice stack,
+/// carrying the source CTB path so the Run pipeline can re-parse it.
 ///
-/// Mirror of `LoadedStlMesh` from `mesh.rs`. Used by the loader systems
-/// to find prior loads so they can be despawned before the new mesh is
-/// added, AND to enforce mutual exclusion with `LoadedStlMesh` (only
-/// one geometry source visible at a time in v1).
+/// Used by the loader systems to find prior loads (despawn-before-load),
+/// to enforce mutual exclusion with `LoadedStlMesh` (one geometry source
+/// at a time in v1), AND by `apply_run_request` (sim.rs) to obtain the
+/// path for `SimulationRunner::run_from_layer_inputs` via
+/// `ctb::parse_ctb`. Path provenance lives on the marker so the world
+/// always knows which file Run will consume — see ADR-0011.
 #[derive(Component)]
-pub struct LoadedSliceStack;
+pub struct LoadedSliceStack {
+    pub path: std::path::PathBuf,
+}
 
 /// Single-source the canonical-dims lookup for the validate / bbox
 /// helpers. Returns the first mask-bearing layer's

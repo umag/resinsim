@@ -117,8 +117,46 @@ heavyweight `DefaultPlugins` machinery — `AssetPlugin` alone is
 lightweight and synchronous. First seen in
 `crates/resinsim-viz/src/main.rs::tests::make_loader_app` (issue 02).
 
+## Caveat: egui systems need a render backend — not in this seam
+
+Issue 04 (`bevy_egui = 0.39`, `EguiPlugin::default()`) made it
+explicit: this seam covers everything *except* egui rendering.
+egui systems registered on `EguiPrimaryContextPass` need an
+`EguiContext` attached to a camera, which itself needs a render
+backend bevy_egui will not initialise on a plugin-less
+`App::new()`. Loading `EguiPlugin::default()` in a headless test
+either no-ops the panel system (when `EguiContexts::ctx_mut()`
+returns `Err(QuerySingleError)`) or panics depending on Bevy
+version.
+
+The pattern in 04 is to factor the *logic* out of the egui draw
+closure and test the logic plugin-less:
+
+- `ui::state::run_block_reason(picker, has_ctb) -> Option<String>`
+  — pure helper, four blocker combos covered.
+- `ui::plots::build_plot_data(&PrintSimulation) -> PlotData` —
+  pure projection, series-length / monotonic / force-invariant
+  tests run without ever drawing.
+- `ui::state::refresh_loaded_profiles(state, repos)` — idempotent
+  cache update, tested directly on a `PickerState`.
+
+The egui draw closures (`ui/panels.rs`) only call these helpers
+plus mechanical egui `ComboBox` / `Plot::show` / `Button` API.
+Their behaviour is covered by manual smoke (the
+`cargo run -p resinsim-viz` checklist in
+`docs/adr/0011-egui-control-panels.md` step 13).
+
+`smoke_exit_with_load_ctb_flag_runs_setup_without_panic`
+(env-gated on `RESINSIM_SLICED_FIXTURE`) and
+`new_resources_and_systems_do_not_panic_on_one_update` (default
+suite) are the regression guards for the non-egui half of the
+wiring — they do *not* load `EguiPlugin`.
+
 ## See also
 
 - `crates/resinsim-viz/src/main.rs` — first instance of this pattern
+- `crates/resinsim-viz/src/ui/{plots,state}.rs` — plugin-less
+  helpers tested through this seam (issue 04)
 - ADR-0010 — `setup_scene` seam consequence
+- ADR-0011 — egui caveat documented; CTB-only Run pivot
 - Anti-pattern `anti/bevy-subprocess-smoke-test.md` — what NOT to do

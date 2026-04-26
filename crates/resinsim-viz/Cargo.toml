@@ -11,12 +11,22 @@ path = "src/main.rs"
 resinsim-core = { path = "../resinsim-core" }
 bevy = { version = "0.18", default-features = true }
 bevy_panorbit_camera = "0.34"
+# bevy_egui 0.39 (egui 0.33) ↔ egui_plot 0.34 — verified version chain.
+# bevy_egui 0.39 deprecates `enable_multipass_for_primary_context`; use
+# `EguiPlugin::default()`. egui_plot 0.34 targets egui 0.33; 0.33 would
+# target egui 0.32 (off-by-one). See ADR-0011.
+bevy_egui = "0.39"
+egui_plot = "0.34"
 clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 # Used only by the env-var-gated heatmap smoke test to write a synthetic
-# sim JSON when RESINSIM_SIM_FIXTURE is unset. Not a runtime dep.
+# sim JSON when RESINSIM_SIM_FIXTURE is unset (issue 03). Not a runtime
+# dep.
 serde_json = "1"
+# Tempdir TOML round-trips for issue 04's pairing-violation +
+# save/load-sim tests.
+tempfile = "3"
 
 [lints]
 workspace = true

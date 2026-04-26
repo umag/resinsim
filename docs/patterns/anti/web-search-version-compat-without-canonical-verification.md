@@ -49,8 +49,33 @@ collateral drifts. That's ~10 minutes. For a larger Phase 2 issue
 where the version impacts are deeper (multiple bevy_egui-or-equivalent
 deps disagreeing), the cost compounds.
 
+## Second case study: egui_plot 0.33 vs 0.34
+
+Issue 04 (`docs/adr/0011-egui-control-panels.md`) hit the same
+trap with a different ecosystem dep:
+
+- bevy_egui 0.39 (correct for bevy 0.18) bundles egui 0.33.
+- A web-search summary of "latest egui_plot" returned 0.33.
+- egui_plot 0.33 actually targets **egui 0.32**, not 0.33. The
+  matching version for egui 0.33 is **egui_plot 0.34**.
+
+Plan review (round 3) caught the off-by-one because the reviewer
+fetched the egui_plot CHANGELOG directly instead of trusting the
+search summary. The viz crate now pins:
+
+```toml
+bevy_egui = "0.39"   # → egui 0.33
+egui_plot = "0.34"   # → egui 0.33 (egui_plot 0.33 would target egui 0.32)
+```
+
+Same trap, different dep. The fix is the same: verify the exact
+version-pair from the package's own metadata. The egui ecosystem
+in particular has misleading minor numbering — egui_plot's version
+floor lags egui's by one minor across the boundary.
+
 ## See also
 
 - Pattern `bevy-0.16-to-0.18-migration-notes.md` — the collateral
   API drifts that followed the version bump
 - ADR-0010 — Bevy 0.18 section recording the bump rationale
+- ADR-0011 — egui_plot version-chain pinning rationale

@@ -165,6 +165,27 @@ impl PrintSimulation {
         Ok(())
     }
 
+    /// Cumulative wall-clock time (seconds) at the end of each layer.
+    ///
+    /// Returned `Vec<f32>` is indexed parallel to `self.layers()`: entry
+    /// `i` is the cumulative print time once layer `i` has finished
+    /// curing + lifting. Length always equals `self.layers().len()`,
+    /// monotonic non-decreasing, all-zero on the empty aggregate.
+    ///
+    /// Narrow accessor for downstream consumers (e.g. resinsim-viz plot
+    /// panels) that need a per-layer time axis without taking on a
+    /// `Recipe + PrinterProfile` parameter pair. Delegates to
+    /// `LayerTimingCalculator::cumulative_times_sec` against the
+    /// aggregate's owned recipe + printer; encapsulation preserved
+    /// (recipe / printer fields stay private).
+    pub fn cumulative_times_sec(&self) -> Vec<f32> {
+        LayerTimingCalculator::cumulative_times_sec(
+            &self.recipe,
+            &self.printer,
+            self.layers.len() as u32,
+        )
+    }
+
     /// Compute summary statistics, including per-phase print duration.
     ///
     /// Reads `self.recipe + self.printer` (set at construction) to project
@@ -543,5 +564,39 @@ pub(crate) mod tests {
             err.contains("layer index mismatch at position 1"),
             "error must point at the first non-sequential position; got: {err}"
         );
+    }
+
+    #[test]
+    fn cumulative_times_sec_length_matches_layers() {
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        for i in 0..7 {
+            sim.add_layer(make_layer(i, 5.0, 3.0, 22.0), vec![])
+                .expect("test fixture: sequential indices satisfy the contiguity precondition");
+        }
+        assert_eq!(sim.cumulative_times_sec().len(), 7);
+    }
+
+    #[test]
+    fn cumulative_times_sec_empty_when_no_layers() {
+        let sim = PrintSimulation::new(default_recipe(), linear_printer());
+        assert!(sim.cumulative_times_sec().is_empty());
+    }
+
+    #[test]
+    fn cumulative_times_sec_is_monotonic_non_decreasing() {
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        for i in 0..50 {
+            sim.add_layer(make_layer(i, 5.0, 3.0, 22.0), vec![])
+                .expect("test fixture: sequential indices satisfy the contiguity precondition");
+        }
+        let times = sim.cumulative_times_sec();
+        for i in 1..times.len() {
+            assert!(
+                times[i] >= times[i - 1],
+                "cumulative time must be non-decreasing at index {i}: {} vs {}",
+                times[i - 1],
+                times[i]
+            );
+        }
     }
 }

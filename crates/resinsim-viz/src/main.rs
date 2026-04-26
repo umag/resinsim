@@ -1,23 +1,37 @@
+mod data_dir;
 mod heatmap;
 mod mesh;
+mod profile_repos;
+mod sim;
 mod slice;
+mod ui;
 
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use bevy::window::FileDragAndDrop;
+use bevy_egui::EguiPlugin;
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, TrackpadBehavior};
 use clap::Parser;
 use resinsim_core::io::{ctb, stl};
 use resinsim_core::repositories::load_simulation;
 use resinsim_core::simulation::PrintSimulation;
 
+use resinsim_core::values::InitialLedTemperature;
+
+use crate::data_dir::resolve_data_dir;
 use crate::heatmap::{cure_depth_domain, ramp};
 use crate::mesh::{LoadedStlMesh, fit_panorbit_to_bbox, triangles_to_bevy_mesh};
+use crate::profile_repos::ProfileRepos;
+use crate::sim::{
+    RunConfig, RunSimRequest, SimulationResult, apply_run_request, load_sim_from_path,
+};
 use crate::slice::{
     LoadedSliceStack, cumulative_z_mm, slice_stack_bounding_box, slice_stack_to_bevy_mesh,
 };
+use crate::ui::panels::{left_panel, right_panel};
+use crate::ui::state::{PickerState, refresh_listings, refresh_loaded_profiles};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -40,9 +54,48 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     load_ctb: Option<PathBuf>,
 
-    /// Load a PrintSimulation JSON at startup; required for the cure-depth
-    /// heatmap overlay. Has no effect without --load-ctb (STL pairing
-    /// deferred). Drag-drop of new sim files is not yet supported.
+    /// Resin/printer profile data directory. Resolves via the 4-stage
+    /// chain (flag → `RESINSIM_DATA_DIR` env → `$CWD/data` →
+    /// exe-sibling `data/`); see ADR-0011 / ADR-0004.
+    #[arg(long, value_name = "PATH")]
+    data_dir: Option<PathBuf>,
+
+    /// Resin profile name (filename stem of a .toml under
+    /// `<data-dir>/resins/`). Pre-selects in the left-panel picker
+    /// at startup. Validation (does the listing contain it?) runs
+    /// after data-dir resolution; an unknown name is logged and the
+    /// picker stays empty so the user can pick manually.
+    #[arg(long, value_name = "NAME")]
+    resin: Option<String>,
+
+    /// Printer profile name (filename stem of a .toml under
+    /// `<data-dir>/printers/`). Pre-selects in the left-panel
+    /// picker at startup. Same validation behaviour as `--resin`.
+    #[arg(long, value_name = "NAME")]
+    printer: Option<String>,
+
+    /// Initial LED temperature in °C (e.g. `30.0` for a printer
+    /// with a warm LED at print start). Validated via
+    /// `InitialLedTemperature::new` at startup; an out-of-domain
+    /// value logs a warn and the run uses the default cold-start.
+    /// Threads through every Run during the session.
+    #[arg(long, value_name = "CELSIUS")]
+    initial_led_temp: Option<f32>,
+
+    /// Save the simulation as JSON after each successful Run.
+    /// `<PATH>` is treated as a sidecar file path; parent dir is
+    /// created on demand. Errors log a warn and don't affect the
+    /// GUI surface — persistence is best-effort.
+    #[arg(long, value_name = "PATH")]
+    save_sim: Option<PathBuf>,
+
+    /// Load a PrintSimulation JSON at startup. Populates both the
+    /// cure-depth heatmap overlay (issue 03) and the right-panel
+    /// time-series plots (issue 04). Required for the heatmap when
+    /// paired with --load-ctb (layer counts must match unless
+    /// --allow-mismatch); for the plots, it works standalone (skip
+    /// the picker → Run flow). Drag-drop of new sim files is not
+    /// yet supported.
     #[arg(long, value_name = "PATH.json")]
     load_sim: Option<PathBuf>,
 
@@ -367,7 +420,9 @@ fn load_ctb_into_world(
         Mesh3d(mesh_handle),
         MeshMaterial3d(material_handle),
         Transform::default(),
-        LoadedSliceStack,
+        LoadedSliceStack {
+            path: path.to_path_buf(),
+        },
     ));
 
     // Cursor: only spawn when a heatmap is active (sim present + matching
@@ -704,6 +759,118 @@ fn smoke_exit_after_one_frame(mut writer: MessageWriter<AppExit>) {
     writer.write(AppExit::Success);
 }
 
+/// Startup: resolve the profile data dir, populate `ProfileRepos`,
+/// run an initial `refresh_listings`, build `RunConfig` from the
+/// CLI override flags, and apply `--load-sim` if passed. On
+/// data-dir miss, the error chain string goes into
+/// `SimulationResult.last_error` and the app keeps running with
+/// empty pickers. If `--resin` / `--printer` were passed and match
+/// a known listing, the corresponding `selected_*` fields are
+/// pre-set so the picker boots ready-to-run.
+fn setup_profile_repos(
+    args: Res<Args>,
+    mut commands: Commands,
+    mut state: ResMut<PickerState>,
+    mut sim: ResMut<SimulationResult>,
+) {
+    let resolved = resolve_data_dir(args.data_dir.as_deref());
+    match resolved {
+        Ok(dir) => {
+            let repos = ProfileRepos::new(&dir);
+            if let Err(e) = refresh_listings(&mut state, &repos) {
+                error!("failed to list profiles: {e}");
+                sim.last_error = Some(format!("profile listing failed: {e}"));
+            }
+            // Apply --resin / --printer preselects post-listing so the
+            // ComboBox doesn't dangle on a typo'd name. Unknown names
+            // log a warn + leave None.
+            if let Some(name) = args.resin.as_deref() {
+                if state.available_resins.iter().any(|r| r == name) {
+                    state.selected_resin = Some(name.to_string());
+                } else {
+                    warn!(
+                        "--resin {name:?} not found in {} — pick from {:?}",
+                        dir.join("resins").display(),
+                        state.available_resins
+                    );
+                }
+            }
+            if let Some(name) = args.printer.as_deref() {
+                if state.available_printers.iter().any(|p| p == name) {
+                    state.selected_printer = Some(name.to_string());
+                } else {
+                    warn!(
+                        "--printer {name:?} not found in {} — pick from {:?}",
+                        dir.join("printers").display(),
+                        state.available_printers
+                    );
+                }
+            }
+            commands.insert_resource(repos);
+        }
+        Err(msg) => {
+            error!("could not resolve profile data directory:\n{msg}");
+            sim.last_error = Some(msg);
+        }
+    }
+
+    // Build RunConfig from the CLI override flags, validating the
+    // initial LED temperature at startup so an out-of-domain input
+    // is caught once (not every Run). Out-of-domain values log a
+    // warn and degrade to None.
+    let initial_led_temp = match args.initial_led_temp {
+        Some(c) => match InitialLedTemperature::new(c) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                warn!("--initial-led-temp {c} rejected: {e}");
+                None
+            }
+        },
+        None => None,
+    };
+    commands.insert_resource(RunConfig {
+        initial_led_temp,
+        save_sim_path: args.save_sim.clone(),
+    });
+
+    // Apply --load-sim immediately so the right panel populates
+    // without needing to click Run. The picker stays available
+    // for follow-up reruns; clicking Run overwrites the loaded
+    // sim with a fresh one.
+    if let Some(path) = args.load_sim.as_ref() {
+        match load_sim_from_path(path) {
+            Ok(loaded) => {
+                let summary = loaded.summary();
+                info!(
+                    "loaded simulation from {}: {} layers / {} failures",
+                    path.display(),
+                    summary.total_layers,
+                    summary.critical_failures
+                );
+                sim.simulation = Some(loaded);
+                sim.last_error = None;
+            }
+            Err(e) => {
+                error!("--load-sim failed: {e}");
+                sim.last_error = Some(e);
+            }
+        }
+    }
+}
+
+/// Update: keep `state.loaded_*` in sync with `state.selected_*`
+/// when the user changes a ComboBox selection. Idempotent body —
+/// equal names short-circuit, no `is_changed` ping-pong.
+fn refresh_loaded_profiles_system(
+    mut state: ResMut<PickerState>,
+    repos: Option<Res<ProfileRepos>>,
+) {
+    let Some(repos) = repos else {
+        return;
+    };
+    refresh_loaded_profiles(&mut state, &repos);
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let smoke_exit = args.smoke_exit;
@@ -716,12 +883,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..default()
     }))
     .add_plugins(PanOrbitCameraPlugin)
+    .add_plugins(EguiPlugin::default())
     .insert_resource(args)
     .init_resource::<LoadedSimulation>()
     .init_resource::<CurrentLayer>()
     .init_resource::<LayerZPrefix>()
     .init_resource::<CureDepthDomain>()
-    .add_systems(Startup, (setup_scene, setup_initial_load).chain())
+    .init_resource::<PickerState>()
+    .init_resource::<SimulationResult>()
+    .add_message::<RunSimRequest>()
+    .add_systems(
+        Startup,
+        (setup_scene, setup_initial_load, setup_profile_repos).chain(),
+    )
     .add_systems(
         Update,
         (
@@ -729,8 +903,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             handle_layer_keys,
             update_layer_cursor,
             log_layer_change,
+            refresh_loaded_profiles_system,
+            apply_run_request,
         ),
-    );
+    )
+    .add_systems(bevy_egui::EguiPrimaryContextPass, (left_panel, right_panel));
     if smoke_exit {
         app.add_systems(Update, smoke_exit_after_one_frame);
     }
@@ -906,6 +1083,11 @@ mod tests {
             smoke_exit: false,
             load_stl: Some(PathBuf::from("foo.stl")),
             load_ctb: None,
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
             load_sim: None,
             allow_mismatch: false,
         };
@@ -931,6 +1113,11 @@ mod tests {
             smoke_exit: true,
             load_stl: None,
             load_ctb: None,
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
             load_sim: None,
             allow_mismatch: false,
         });
@@ -954,6 +1141,11 @@ mod tests {
             smoke_exit: false,
             load_stl: None,
             load_ctb: Some(PathBuf::from("foo.ctb")),
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
             load_sim: None,
             allow_mismatch: false,
         });
@@ -974,6 +1166,11 @@ mod tests {
             smoke_exit: false,
             load_stl: None,
             load_ctb: Some(PathBuf::from("cube.ctb")),
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
             load_sim: Some(PathBuf::from("cube.sim.json")),
             allow_mismatch: true,
         });
@@ -1104,6 +1301,11 @@ mod tests {
             smoke_exit: true,
             load_stl: Some(cube_fixture_path()),
             load_ctb: None,
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
             load_sim: None,
             allow_mismatch: false,
         });
@@ -1223,7 +1425,9 @@ mod tests {
         // despawned before the new (failing) CTB load, so a successful
         // reload would never leave two stacks visible.
         let mut app = make_loader_app();
-        app.world_mut().spawn(LoadedSliceStack);
+        app.world_mut().spawn(LoadedSliceStack {
+            path: PathBuf::from("/synthetic"),
+        });
         let bad_path = PathBuf::from("/definitely/does/not/exist/nope.ctb");
         let load_id = app.world_mut().register_system(
             move |mut commands: Commands,
@@ -1363,6 +1567,11 @@ mod tests {
             smoke_exit: true,
             load_stl: None,
             load_ctb: Some(PathBuf::from(fixture)),
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
             load_sim: None,
             allow_mismatch: false,
         });
@@ -1525,6 +1734,11 @@ mod tests {
             smoke_exit: true,
             load_stl: None,
             load_ctb: Some(PathBuf::from(ctb_fixture)),
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
             load_sim: Some(sim_path),
             allow_mismatch: false,
         });
@@ -1636,7 +1850,9 @@ mod tests {
         app.world_mut().spawn((
             Mesh3d(slice_handle.clone()),
             Transform::default(),
-            LoadedSliceStack,
+            LoadedSliceStack {
+                path: PathBuf::from("/synthetic"),
+            },
         ));
         // Cursor entity at z=0 — this is the entity whose Transform IS
         // expected to mutate. The slice-stack mesh asset is what must NOT.
@@ -1753,6 +1969,137 @@ mod tests {
         assert!(
             (z_after_jump - expected).abs() < 1e-6,
             "cursor z should be {expected}, got {z_after_jump}"
+        );
+    }
+
+    /// `--resin <NAME>` + `--printer <NAME>` preselect: when both
+    /// flags name an existing profile, `setup_profile_repos` must
+    /// populate `PickerState.selected_*` so the picker boots
+    /// ready-to-run.
+    #[test]
+    fn cli_args_resin_and_printer_preselect_picker() {
+        let mut app = make_loader_app();
+        app.insert_resource(Args {
+            smoke_exit: true,
+            load_stl: None,
+            load_ctb: None,
+            data_dir: Some(PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../data"
+            ))),
+            resin: Some("generic_standard".to_string()),
+            printer: Some("generic_msla_4k".to_string()),
+            initial_led_temp: None,
+            save_sim: None,
+            load_sim: None,
+            allow_mismatch: false,
+        });
+        app.init_resource::<PickerState>()
+            .init_resource::<SimulationResult>()
+            .add_systems(Startup, setup_profile_repos);
+        app.update();
+
+        let state = app
+            .world()
+            .get_resource::<PickerState>()
+            .expect("test fixture: PickerState was init_resource'd");
+        assert_eq!(
+            state.selected_resin.as_deref(),
+            Some("generic_standard"),
+            "--resin must preselect the named resin"
+        );
+        assert_eq!(
+            state.selected_printer.as_deref(),
+            Some("generic_msla_4k"),
+            "--printer must preselect the named printer"
+        );
+    }
+
+    /// Unknown `--resin` name: `setup_profile_repos` must keep
+    /// `selected_resin = None` (logs a warn) so the picker stays
+    /// open for manual selection rather than dangling on a typo.
+    #[test]
+    fn cli_args_unknown_resin_does_not_preselect() {
+        let mut app = make_loader_app();
+        app.insert_resource(Args {
+            smoke_exit: true,
+            load_stl: None,
+            load_ctb: None,
+            data_dir: Some(PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../data"
+            ))),
+            resin: Some("definitely_not_a_resin".to_string()),
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
+            load_sim: None,
+            allow_mismatch: false,
+        });
+        app.init_resource::<PickerState>()
+            .init_resource::<SimulationResult>()
+            .add_systems(Startup, setup_profile_repos);
+        app.update();
+
+        let state = app
+            .world()
+            .get_resource::<PickerState>()
+            .expect("test fixture: PickerState was init_resource'd");
+        assert!(
+            state.selected_resin.is_none(),
+            "unknown --resin name must not preselect; user picks manually"
+        );
+        // But the listing was still populated.
+        assert!(state.available_resins.contains(&"generic_standard".to_string()));
+    }
+
+    /// Step-11 regression guard: with the new resources
+    /// (`PickerState`, `SimulationResult`, `ProfileRepos`) and the
+    /// `setup_profile_repos` Startup system + the
+    /// `apply_run_request` / `refresh_loaded_profiles_system`
+    /// Update systems, the App must still construct + run one
+    /// update cycle without panic. EguiPlugin is *not* loaded here
+    /// — it requires a render backend; this test pins the
+    /// non-egui half of the wiring.
+    #[test]
+    fn new_resources_and_systems_do_not_panic_on_one_update() {
+        let mut app = make_loader_app();
+        app.insert_resource(Args {
+            smoke_exit: true,
+            load_stl: None,
+            load_ctb: None,
+            data_dir: Some(PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../data"
+            ))),
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
+            load_sim: None,
+            allow_mismatch: false,
+        });
+        app.init_resource::<PickerState>()
+            .init_resource::<SimulationResult>()
+            .add_message::<RunSimRequest>()
+            .add_systems(Startup, setup_profile_repos)
+            .add_systems(
+                Update,
+                (refresh_loaded_profiles_system, apply_run_request),
+            )
+            .add_systems(Update, smoke_exit_after_one_frame);
+        app.update();
+        // Profile listings should be populated — the data dir was
+        // resolved (via the explicit --data-dir arg) and
+        // refresh_listings ran during setup_profile_repos.
+        let state = app
+            .world()
+            .get_resource::<PickerState>()
+            .expect("test fixture: PickerState was init_resource'd");
+        assert!(
+            state.available_resins.contains(&"generic_standard".to_string()),
+            "setup_profile_repos must populate listings; got {:?}",
+            state.available_resins
         );
     }
 }
