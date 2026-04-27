@@ -1,16 +1,20 @@
 //! Pure data-shape projection of `PrintSimulation` into the f64
 //! line-series shape egui_plot consumes, plus the `render_plots`
-//! helper that draws the three time-series stacks (Print progress,
-//! Forces, Temperature) into a `egui::Ui`.
+//! and `render_layer_timeline` helpers that draw the time-axis
+//! stack (right inspector, issue 04) and the layer-axis chart
+//! (bottom panel, issue 05) respectively.
 //!
-//! Splitting `build_plot_data` (pure) from `render_plots` (egui)
-//! keeps the load-bearing math testable on a plugin-less Bevy App
-//! per `docs/patterns/bevy-app-test-seam.md`.
+//! Splitting `build_plot_data` / `build_layer_chart_data` (pure)
+//! from the egui-touching render fns keeps the load-bearing math
+//! testable on a plugin-less Bevy App per
+//! `docs/patterns/bevy-app-test-seam.md`.
 
 use bevy_egui::egui;
-use egui_plot::{GridMark, Legend, Line, Plot, PlotPoint, PlotPoints};
+use egui_plot::{GridMark, Legend, Line, Plot, PlotPoint, PlotPoints, Text, VLine};
 use resinsim_core::simulation::PrintSimulation;
 use std::ops::RangeInclusive;
+
+use crate::ui::state::BottomPanelState;
 
 /// Per-layer time-series projection, parallel-indexed with
 /// `sim.layers()`. All series have length `sim.layers().len()`.
@@ -247,6 +251,275 @@ pub fn render_plots(ui: &mut egui::Ui, data: Option<&PlotData>) {
         });
 }
 
+// ---------------------------------------------------------------------------
+// Issue 05: layer-axis line chart (bottom panel)
+// ---------------------------------------------------------------------------
+
+/// One filtered (x, y) line for the bottom-panel chart. `points` carries
+/// only finite samples — non-finite or domain-violating values (e.g.
+/// `safety_factor = ∞` on zero-force layers) are dropped at projection
+/// time, so the render path passes `points` straight to
+/// `PlotPoints::from(...)` without re-filtering. Shorter than
+/// `sim.layers().len()` when the source data has gaps.
+///
+/// `name` carries the unit suffix (e.g. "Peel force (N)") so the
+/// legend and tooltip both surface it without a separate field.
+#[derive(Debug, Clone)]
+pub struct LayerSeries {
+    pub name: &'static str,
+    pub points: Vec<[f64; 2]>,
+}
+
+/// Three filtered series ready for the bottom-panel layer chart. The
+/// `safety` series is in linear or log10 space depending on the
+/// `log_safety` argument to `build_layer_chart_data`.
+#[derive(Debug, Clone)]
+pub struct LayerChartData {
+    pub peel: LayerSeries,
+    pub cure: LayerSeries,
+    pub safety: LayerSeries,
+}
+
+/// Project a `PrintSimulation` into the three layer-axis series the
+/// bottom panel consumes. Pure, plugin-less — the issue-05 sibling of
+/// `build_plot_data`.
+///
+/// Filtering rules per series:
+///   - `peel`: includes every layer whose `peel_force_n` is finite.
+///   - `cure`: includes every layer whose `cure_depth_um` is finite.
+///   - `safety` (linear): includes every layer whose `safety_factor`
+///     is finite (drops `f32::INFINITY` from zero-force layers per
+///     `safety-factor-zero-force.md`).
+///   - `safety` (log10, when `log_safety = true`): additionally drops
+///     non-positive values — log10 is undefined there. The y carried
+///     in the points is `log10(sf)`, not `sf`.
+pub fn build_layer_chart_data(sim: &PrintSimulation, log_safety: bool) -> LayerChartData {
+    let layers = sim.layers();
+    let n = layers.len();
+    let mut peel: Vec<[f64; 2]> = Vec::with_capacity(n);
+    let mut cure: Vec<[f64; 2]> = Vec::with_capacity(n);
+    let mut safety: Vec<[f64; 2]> = Vec::with_capacity(n);
+
+    for (i, layer) in layers.iter().enumerate() {
+        let x = i as f64;
+        let p = f64::from(layer.peel_force_n);
+        if p.is_finite() {
+            peel.push([x, p]);
+        }
+        let c = f64::from(layer.cure_depth_um);
+        if c.is_finite() {
+            cure.push([x, c]);
+        }
+        let sf = f64::from(layer.safety_factor);
+        if sf.is_finite() {
+            if log_safety {
+                if sf > 0.0 {
+                    safety.push([x, sf.log10()]);
+                }
+                // sf <= 0.0 is undefined under log10 — gap.
+            } else {
+                safety.push([x, sf]);
+            }
+        }
+        // sf non-finite (e.g. INFINITY for zero-force layers) — gap.
+    }
+
+    LayerChartData {
+        peel: LayerSeries {
+            name: "Peel force (N)",
+            points: peel,
+        },
+        cure: LayerSeries {
+            name: "Cure depth (µm)",
+            points: cure,
+        },
+        safety: LayerSeries {
+            name: if log_safety {
+                "Safety factor (log10)"
+            } else {
+                "Safety factor (×)"
+            },
+            points: safety,
+        },
+    }
+}
+
+/// Snap a continuous plot x-coordinate to a discrete layer index,
+/// clamping out-of-range values to the bounds. Pure helper — the
+/// load-bearing test seam for click-to-seek per
+/// `docs/patterns/bevy-app-test-seam.md` (egui closures aren't
+/// unit-testable; the math is).
+///
+/// Returns `None` only when there are no layers (no valid index
+/// exists). For any non-empty `layer_count`:
+///   - `x ≤ -0.5` → `Some(0)`
+///   - `x ≥ layer_count - 0.5` → `Some(layer_count - 1)`
+///   - in between: `Some(round(x))`
+///
+/// Round-to-nearest is intentional: a click halfway between two layers
+/// snaps to the nearer one, matching user expectation. Distinct from
+/// arrow-key step semantics (saturating ±1 from current) — different
+/// mental models for continuous click vs discrete keypress, see
+/// ADR-0014.
+pub fn snap_plot_x_to_layer(x: f64, layer_count: u32) -> Option<u32> {
+    if layer_count == 0 {
+        return None;
+    }
+    let max_idx = (layer_count - 1) as f64;
+    let clamped = x.clamp(0.0, max_idx);
+    Some(clamped.round() as u32)
+}
+
+/// Compute a sensible top-y for the cursor-label position, derived
+/// directly from the projected enabled-series finite y values.
+///
+/// Why not `plot_ui.plot_bounds().max()[1]`? On the first paint after
+/// a Run, egui_plot's auto-bounds aren't fully resolved inside the
+/// closure until lines are added — querying `plot_bounds()` before
+/// `plot_ui.line(...)` calls returns stale defaults. Deriving from
+/// the data is deterministic and frame-1 correct.
+///
+/// Fallback: `1.0` when no series is enabled or all are empty (label
+/// renders at y = 1.0; visually fine since the plot will auto-fit
+/// around any subsequent data and the label is decorative).
+fn cursor_label_top_y(data: &LayerChartData, state: &BottomPanelState) -> f64 {
+    let mut max_y = f64::NEG_INFINITY;
+    let mut consider = |s: &LayerSeries| {
+        for p in &s.points {
+            if p[1].is_finite() && p[1] > max_y {
+                max_y = p[1];
+            }
+        }
+    };
+    if state.show_peel {
+        consider(&data.peel);
+    }
+    if state.show_cure {
+        consider(&data.cure);
+    }
+    if state.show_safety {
+        consider(&data.safety);
+    }
+    if max_y.is_finite() { max_y } else { 1.0 }
+}
+
+/// Render the layer-axis chart into `ui` and return `Some(layer)` when
+/// the user clicks inside the plot (caller writes it into
+/// `CurrentLayer.index`).
+///
+/// `current` is the in-frame layer index (used for the VLine cursor +
+/// label). `max` is `CurrentLayer.max` (i.e. `layers.len() - 1`); when
+/// `data.peel.points + cure.points + safety.points` is all empty (no
+/// run yet), the function still mounts a placeholder Plot so the
+/// layout doesn't jump on first Run.
+///
+/// On every frame, the function detects whether the visibility flags
+/// changed since the last paint via `state.prev_visibility`; on
+/// change, it asks egui_plot to re-fit Y so toggling a series doesn't
+/// leave bounds stale. (egui_plot caches plot bounds across frames
+/// keyed on Plot ID — see ADR-0014.)
+#[allow(clippy::too_many_arguments)]
+pub fn render_layer_timeline(
+    ui: &mut egui::Ui,
+    data: &LayerChartData,
+    current: u32,
+    max: u32,
+    state: &mut BottomPanelState,
+) -> Option<u32> {
+    // --- Pre-plot row: visibility + log-scale toggles ---
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut state.show_peel, "Peel force (N)");
+        ui.checkbox(&mut state.show_cure, "Cure depth (µm)");
+        ui.checkbox(&mut state.show_safety, "Safety factor");
+        // Log-scale toggle is a sub-option of Safety — only meaningful
+        // when the safety series is on. Disabling Safety also resets
+        // the log toggle so re-enabling Safety later starts in linear
+        // mode (less surprising than silently remembering log).
+        if state.show_safety {
+            ui.checkbox(&mut state.safety_log_scale, "log10");
+        } else if state.safety_log_scale {
+            state.safety_log_scale = false;
+        }
+    });
+
+    // --- Detect visibility change to force Y re-fit ---
+    let cur_vis = (
+        state.show_peel,
+        state.show_cure,
+        state.show_safety,
+        state.safety_log_scale,
+    );
+    let force_refit = state.prev_visibility != cur_vis;
+    state.prev_visibility = cur_vis;
+
+    let label_top_y = cursor_label_top_y(data, state);
+    let layer_count = max.saturating_add(1);
+
+    // --- Plot body ---
+    let response = Plot::new("plot-layer-timeline")
+        .x_axis_label("Layer")
+        .y_axis_label("Value (mixed units — see series)")
+        .legend(Legend::default())
+        .label_formatter(|name, value: &PlotPoint| {
+            // Tooltip carries unit per series via the leading `name`
+            // (egui_plot uses the series name we passed to `Line::new`).
+            format!(
+                "{name}\nlayer {}\n{:.3}",
+                value.x.round() as i64,
+                value.y
+            )
+        })
+        .show(ui, |plot_ui| {
+            if force_refit {
+                plot_ui.set_auto_bounds([true, true]);
+            }
+
+            // Series first so the cursor + label overlay them.
+            if state.show_peel {
+                plot_ui.line(Line::new(
+                    data.peel.name,
+                    PlotPoints::from(data.peel.points.clone()),
+                ));
+            }
+            if state.show_cure {
+                plot_ui.line(Line::new(
+                    data.cure.name,
+                    PlotPoints::from(data.cure.points.clone()),
+                ));
+            }
+            if state.show_safety {
+                plot_ui.line(Line::new(
+                    data.safety.name,
+                    PlotPoints::from(data.safety.points.clone()),
+                ));
+            }
+
+            // Cursor + label only meaningful when we have at least one layer.
+            if layer_count > 0 {
+                let cur_x = current as f64;
+                plot_ui.vline(VLine::new("layer-cursor", cur_x));
+                plot_ui.text(Text::new(
+                    "layer-cursor-label",
+                    PlotPoint::new(cur_x, label_top_y),
+                    egui::RichText::new(format!("Layer {}", current.saturating_add(1)))
+                        .small(),
+                ));
+            }
+
+            // Click handling: closure return value carries the snapped
+            // layer up through PlotResponse<R>::inner.
+            if plot_ui.response().clicked()
+                && let Some(p) = plot_ui.pointer_coordinate()
+            {
+                snap_plot_x_to_layer(p.x, layer_count)
+            } else {
+                None
+            }
+        });
+
+    response.inner
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,5 +712,244 @@ mod tests {
         assert!(d.total_n.is_empty());
         assert!(d.vat_c.is_empty());
         assert!(d.viscosity_mpa_s.is_empty());
+    }
+
+    // ---- Issue 05: build_layer_chart_data ----
+
+    #[test]
+    fn build_layer_chart_data_lengths_match_layers_when_all_finite() {
+        let sim = cube_sim(100);
+        let d = build_layer_chart_data(&sim, false);
+        // Cube sim produces non-zero peel + finite cure + finite SF
+        // for every layer — all three series should be parallel-indexed.
+        assert_eq!(d.peel.points.len(), 100);
+        assert_eq!(d.cure.points.len(), 100);
+        assert_eq!(d.safety.points.len(), 100);
+        // X coordinates monotonic 0..100.
+        for (i, p) in d.peel.points.iter().enumerate() {
+            assert_eq!(p[0], i as f64, "peel x must equal layer index at i={i}");
+        }
+        for (i, p) in d.cure.points.iter().enumerate() {
+            assert_eq!(p[0], i as f64);
+        }
+        for (i, p) in d.safety.points.iter().enumerate() {
+            assert_eq!(p[0], i as f64);
+        }
+    }
+
+    /// Construct a synthetic 3-layer sim with a zero-force middle
+    /// layer (safety_factor = ∞) to exercise the projection's
+    /// non-finite filter. Direct LayerResult construction bypasses
+    /// the failure_predictor; that's intentional — we're testing the
+    /// projection's filter, not the predictor.
+    fn three_layer_sim_with_inf_safety() -> PrintSimulation {
+        use resinsim_core::entities::LayerResult;
+        let repos = shipped_repos();
+        let resin = repos
+            .resin
+            .load("generic_standard")
+            .expect("test fixture: shipped resin");
+        let printer = repos
+            .printer
+            .load("generic_msla_4k")
+            .expect("test fixture: shipped printer");
+        let mut sim = PrintSimulation::new(resin.recipe().clone(), printer);
+        let mk = |idx: u32, peel: f32, sf: f32| LayerResult {
+            index: idx,
+            cure_depth_um: 100.0,
+            peel_force_n: peel,
+            suction_force_n: 0.0,
+            total_force_n: peel,
+            support_capacity_n: peel * sf.max(1.0),
+            safety_factor: sf,
+            cross_section_area_mm2: 100.0,
+            area_delta_mm2: 0.0,
+            vat_temperature_c: 22.0,
+            viscosity_mpa_s: 200.0,
+            z_deflection_um: 1.0,
+            effective_layer_height_um: 50.0,
+            worst_cure_depth_um: 100.0,
+        };
+        sim.add_layer(mk(0, 5.0, 3.0), vec![])
+            .expect("test fixture: index 0 matches empty layer count");
+        sim.add_layer(mk(1, 0.0, f32::INFINITY), vec![])
+            .expect("test fixture: index 1 matches layer count 1");
+        sim.add_layer(mk(2, 5.0, 3.0), vec![])
+            .expect("test fixture: index 2 matches layer count 2");
+        sim
+    }
+
+    #[test]
+    fn build_layer_chart_data_safety_filters_inf() {
+        let sim = three_layer_sim_with_inf_safety();
+        let d = build_layer_chart_data(&sim, false);
+        // Peel + cure unaffected — every layer has a finite reading.
+        assert_eq!(d.peel.points.len(), 3);
+        assert_eq!(d.cure.points.len(), 3);
+        // Safety drops the ∞-SF middle layer.
+        assert_eq!(d.safety.points.len(), 2);
+        let xs: Vec<f64> = d.safety.points.iter().map(|p| p[0]).collect();
+        assert_eq!(xs, vec![0.0, 2.0], "safety x must skip the ∞ layer");
+        for p in &d.safety.points {
+            assert!(p[1].is_finite(), "all surviving samples must be finite");
+        }
+    }
+
+    #[test]
+    fn build_layer_chart_data_log_safety_omits_non_positive_and_non_finite() {
+        use resinsim_core::entities::LayerResult;
+        let repos = shipped_repos();
+        let resin = repos
+            .resin
+            .load("generic_standard")
+            .expect("test fixture: shipped resin");
+        let printer = repos
+            .printer
+            .load("generic_msla_4k")
+            .expect("test fixture: shipped printer");
+        let mut sim = PrintSimulation::new(resin.recipe().clone(), printer);
+        let mk = |idx: u32, sf: f32| LayerResult {
+            index: idx,
+            cure_depth_um: 100.0,
+            peel_force_n: 5.0,
+            suction_force_n: 0.0,
+            total_force_n: 5.0,
+            support_capacity_n: 5.0 * sf.max(1.0),
+            safety_factor: sf,
+            cross_section_area_mm2: 100.0,
+            area_delta_mm2: 0.0,
+            vat_temperature_c: 22.0,
+            viscosity_mpa_s: 200.0,
+            z_deflection_um: 1.0,
+            effective_layer_height_um: 50.0,
+            worst_cure_depth_um: 100.0,
+        };
+        // Mix of: positive, zero, negative, infinite.
+        for (idx, layer) in [
+            mk(0, 10.0),
+            mk(1, 0.0),
+            mk(2, -1.0),
+            mk(3, f32::INFINITY),
+            mk(4, 100.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sim.add_layer(layer, vec![])
+                .unwrap_or_else(|e| panic!("test fixture: index {idx} sequential add: {e}"));
+        }
+
+        let d = build_layer_chart_data(&sim, true);
+        // Only positive + finite SFs survive log mode.
+        let surviving: Vec<(f64, f64)> =
+            d.safety.points.iter().map(|p| (p[0], p[1])).collect();
+        assert_eq!(surviving.len(), 2, "got {surviving:?}");
+        assert_eq!(surviving[0].0, 0.0);
+        assert!((surviving[0].1 - 1.0).abs() < 1e-9, "log10(10) ≈ 1");
+        assert_eq!(surviving[1].0, 4.0);
+        assert!((surviving[1].1 - 2.0).abs() < 1e-9, "log10(100) = 2");
+    }
+
+    #[test]
+    fn build_layer_chart_data_empty_simulation() {
+        let repos = shipped_repos();
+        let resin = repos
+            .resin
+            .load("generic_standard")
+            .expect("test fixture: shipped resin");
+        let printer = repos
+            .printer
+            .load("generic_msla_4k")
+            .expect("test fixture: shipped printer");
+        let sim = PrintSimulation::new(resin.recipe().clone(), printer);
+        let d = build_layer_chart_data(&sim, false);
+        assert!(d.peel.points.is_empty());
+        assert!(d.cure.points.is_empty());
+        assert!(d.safety.points.is_empty());
+    }
+
+    #[test]
+    fn build_layer_chart_data_safety_name_changes_with_log_mode() {
+        let sim = cube_sim(2);
+        let linear = build_layer_chart_data(&sim, false);
+        let log = build_layer_chart_data(&sim, true);
+        assert!(linear.safety.name.contains("(×)"), "linear name carries unit");
+        assert!(log.safety.name.contains("log10"), "log name carries log10");
+    }
+
+    // ---- Issue 05: snap_plot_x_to_layer ----
+
+    #[test]
+    fn snap_plot_x_to_layer_empty_count_is_none() {
+        assert_eq!(snap_plot_x_to_layer(0.0, 0), None);
+        assert_eq!(snap_plot_x_to_layer(50.0, 0), None);
+    }
+
+    #[test]
+    fn snap_plot_x_to_layer_clamps_below_zero() {
+        assert_eq!(snap_plot_x_to_layer(-10.0, 100), Some(0));
+        assert_eq!(snap_plot_x_to_layer(-0.4, 100), Some(0));
+    }
+
+    #[test]
+    fn snap_plot_x_to_layer_clamps_above_max() {
+        assert_eq!(snap_plot_x_to_layer(200.0, 100), Some(99));
+        assert_eq!(snap_plot_x_to_layer(99.5, 100), Some(99));
+    }
+
+    #[test]
+    fn snap_plot_x_to_layer_rounds_to_nearest() {
+        assert_eq!(snap_plot_x_to_layer(3.6, 100), Some(4));
+        assert_eq!(snap_plot_x_to_layer(3.4, 100), Some(3));
+        assert_eq!(snap_plot_x_to_layer(3.5, 100), Some(4)); // round half-up
+    }
+
+    #[test]
+    fn snap_plot_x_to_layer_in_range_round_trip() {
+        for i in 0..100u32 {
+            assert_eq!(snap_plot_x_to_layer(f64::from(i), 100), Some(i));
+        }
+    }
+
+    // ---- Issue 05: cursor_label_top_y (private helper) ----
+
+    #[test]
+    fn cursor_label_top_y_uses_max_of_enabled_series() {
+        use crate::ui::state::BottomPanelState;
+        let data = LayerChartData {
+            peel: LayerSeries {
+                name: "p",
+                points: vec![[0.0, 1.0], [1.0, 5.0]],
+            },
+            cure: LayerSeries {
+                name: "c",
+                points: vec![[0.0, 100.0], [1.0, 150.0]],
+            },
+            safety: LayerSeries {
+                name: "s",
+                points: vec![[0.0, 3.0]],
+            },
+        };
+        // Default: peel only.
+        let state = BottomPanelState::default();
+        assert_eq!(cursor_label_top_y(&data, &state), 5.0);
+        // Cure on (large): bumps top_y.
+        let state = BottomPanelState {
+            show_peel: true,
+            show_cure: true,
+            show_safety: false,
+            safety_log_scale: false,
+            prev_visibility: (true, true, false, false),
+        };
+        assert_eq!(cursor_label_top_y(&data, &state), 150.0);
+        // No series enabled → fallback 1.0.
+        let state = BottomPanelState {
+            show_peel: false,
+            show_cure: false,
+            show_safety: false,
+            safety_log_scale: false,
+            prev_visibility: (false, false, false, false),
+        };
+        assert_eq!(cursor_label_top_y(&data, &state), 1.0);
     }
 }

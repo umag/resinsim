@@ -1,23 +1,30 @@
-//! Left + right side-panel egui systems. Both run on the
+//! Left + right + bottom egui panel systems, all on the
 //! `EguiPrimaryContextPass` schedule (bevy_egui 0.39 multi-pass).
 //!
-//! Layout anchors locked here per ADR-0011:
-//!   - left  `SidePanel::left("controls")`   — pickers + Run button
-//!   - right `SidePanel::right("inspectors")` — summary line + plots
+//! Layout anchors locked here per ADR-0011 (left/right) + ADR-0014
+//! (bottom):
+//!   - left   `SidePanel::left("controls")`         — pickers + Run
+//!   - right  `SidePanel::right("inspectors")`      — summary + plots
+//!   - bottom `TopBottomPanel::bottom("layer-timeline")` — issue 05
+//!     layer chart with click-to-seek
 //!
 //! Logic helpers (`PickerState::to_run_request`, `run_block_reason`,
-//! `build_plot_data`) are tested plugin-less per
+//! `build_plot_data`, `build_layer_chart_data`,
+//! `snap_plot_x_to_layer`) are tested plugin-less per
 //! `docs/patterns/bevy-app-test-seam.md`. The egui draw closures are
-//! mostly mechanical.
+//! mechanical.
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::CurrentLayer;
 use crate::screenshot::{default_screenshot_path, spawn_button_screenshot, LastScreenshot};
 use crate::sim::{loaded_basename, RunSimRequest, SimulationResult};
 use crate::slice::LoadedSliceStack;
-use crate::ui::plots::{build_plot_data, render_plots};
-use crate::ui::state::{run_block_reason, PickerState};
+use crate::ui::plots::{
+    build_layer_chart_data, build_plot_data, render_layer_timeline, render_plots,
+};
+use crate::ui::state::{run_block_reason, BottomPanelState, PickerState};
 
 /// Toast lifetime for the "Captured: <basename>" label after the
 /// Capture-screenshot button is clicked. 3 s @ 60 Hz keeps the
@@ -212,5 +219,61 @@ pub fn right_panel(mut contexts: EguiContexts, sim: Res<SimulationResult>) {
                 ui.heading("Material editor");
                 ui.label("(coming in 06)");
             });
+        });
+}
+
+/// Bottom panel: layer-axis chart with click-to-seek (issue 05).
+/// Mounts after left/right side panels claim their full-vertical
+/// strips so this one consumes the remaining bottom band. The
+/// click-to-seek path writes through the same `CurrentLayer` resource
+/// the arrow keys + heatmap consumers already share — one shared
+/// scrub state, no new fan-in.
+pub fn bottom_panel(
+    mut contexts: EguiContexts,
+    sim: Res<SimulationResult>,
+    mut state: ResMut<BottomPanelState>,
+    mut current: ResMut<CurrentLayer>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+    egui::TopBottomPanel::bottom("layer-timeline")
+        .resizable(true)
+        .default_height(180.0)
+        .min_height(120.0)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("Layer timeline");
+                ui.add_space(12.0);
+                if let Some(s) = sim.simulation.as_ref() {
+                    let n = s.layers().len();
+                    if n > 0 {
+                        ui.colored_label(
+                            egui::Color32::GRAY,
+                            format!("Layer {} / {n}", current.index.saturating_add(1)),
+                        );
+                    }
+                }
+            });
+            ui.separator();
+
+            let Some(s) = sim.simulation.as_ref() else {
+                ui.label("(no run yet — Run a sim to see the layer timeline)");
+                return;
+            };
+            if s.layers().is_empty() {
+                ui.label("(simulation has no layers)");
+                return;
+            }
+
+            let data = build_layer_chart_data(s, state.safety_log_scale);
+            if let Some(idx) =
+                render_layer_timeline(ui, &data, current.index, current.max, &mut state)
+            {
+                // Click-to-seek: write into the shared CurrentLayer
+                // resource. `update_layer_cursor` + `log_layer_change`
+                // pick this up via Changed<CurrentLayer> next frame.
+                current.index = idx;
+            }
         });
 }

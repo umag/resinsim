@@ -23,6 +23,42 @@ pub struct PickerState {
     pub loaded_printer: Option<PrinterProfile>,
 }
 
+/// View-state for the issue-05 bottom-panel layer chart. View-scoped
+/// (a Run shouldn't reset the user's chart toggles), so kept separate
+/// from `PickerState` (run-input scoped).
+///
+/// Defaults match the issue body's "Y-axis: scalar (initially peel
+/// force in N)" — only `show_peel` is on at first paint so the
+/// shared-Y-axis legibility problem (peel ~10 N vs cure ~150 µm vs
+/// SF ~3) doesn't bite a fresh user.
+///
+/// `prev_visibility` records the visibility tuple from the last paint
+/// so `render_layer_timeline` can detect a change and ask egui_plot
+/// to re-fit Y bounds. egui_plot caches bounds across frames keyed
+/// on Plot ID — without explicit invalidation, toggling a series off
+/// keeps the previously-computed bounds (see ADR-0014).
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub struct BottomPanelState {
+    pub show_peel: bool,
+    pub show_cure: bool,
+    pub show_safety: bool,
+    pub safety_log_scale: bool,
+    pub prev_visibility: (bool, bool, bool, bool),
+}
+
+impl Default for BottomPanelState {
+    fn default() -> Self {
+        let vis = (true, false, false, false);
+        Self {
+            show_peel: vis.0,
+            show_cure: vis.1,
+            show_safety: vis.2,
+            safety_log_scale: vis.3,
+            prev_visibility: vis,
+        }
+    }
+}
+
 /// Populate `available_*` from the repos. Preserves a current
 /// selection when it still appears in the new listing; clears it
 /// otherwise so the ComboBox doesn't dangle on a removed name.
@@ -275,5 +311,24 @@ mod tests {
         assert!(reason.contains("resin"));
         assert!(reason.contains("printer"));
         assert!(reason.contains(", "));
+    }
+
+    /// Pin the issue-05 default state to the issue body's contract:
+    /// "Y-axis: scalar (initially peel force in N)". Only `show_peel`
+    /// is on at first paint; cure + safety + log_scale are off.
+    /// Spec contract test, not a `Default` derivation tautology.
+    #[test]
+    fn bottom_panel_state_default_matches_issue_body_spec() {
+        let s = BottomPanelState::default();
+        assert!(s.show_peel, "issue body: 'initially peel force in N'");
+        assert!(!s.show_cure, "cure must be off by default");
+        assert!(!s.show_safety, "safety must be off by default");
+        assert!(!s.safety_log_scale, "log scale off by default");
+        assert_eq!(
+            s.prev_visibility,
+            (true, false, false, false),
+            "prev_visibility must mirror initial visibility so the first \
+             frame doesn't spuriously force a re-fit"
+        );
     }
 }

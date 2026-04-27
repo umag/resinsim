@@ -51,8 +51,8 @@ use crate::sim::{
 use crate::slice::{
     cumulative_z_mm, slice_stack_bounding_box, slice_stack_to_bevy_mesh, LoadedSliceStack,
 };
-use crate::ui::panels::{left_panel, right_panel};
-use crate::ui::state::{refresh_listings, refresh_loaded_profiles, PickerState};
+use crate::ui::panels::{bottom_panel, left_panel, right_panel};
+use crate::ui::state::{BottomPanelState, PickerState, refresh_listings, refresh_loaded_profiles};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -1318,6 +1318,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .init_resource::<LayerZPrefix>()
     .init_resource::<CureDepthDomain>()
     .init_resource::<PickerState>()
+    .init_resource::<BottomPanelState>()
     .init_resource::<SimulationResult>()
     .init_resource::<screenshot::LastScreenshot>()
     .add_message::<RunSimRequest>()
@@ -1344,7 +1345,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .add_systems(
         bevy_egui::EguiPrimaryContextPass,
-        (left_panel, right_panel, debug_camera_overlay),
+        // .chain() makes the layout-order dependency explicit per
+        // ADR-0014: SidePanels claim full vertical space in
+        // declaration order, then TopBottomPanel::bottom takes the
+        // bottom strip of the remaining centre. The exclusive
+        // EguiContext borrow already serialises these systems, but
+        // the chain documents the order so a future refactor can't
+        // accidentally reorder them.
+        (left_panel, right_panel, bottom_panel, debug_camera_overlay).chain(),
     );
     // --screenshot wins over --smoke-exit: when both are set, the
     // capture system fires AppExit::Success after the PNG lands, and
@@ -2892,7 +2900,15 @@ mod tests {
             allow_mismatch: false,
             screenshot: None,
         });
+        // BottomPanelState is read by `bottom_panel` (egui-only); this
+        // smoke harness doesn't load EguiPlugin so the panel system
+        // never runs. The init_resource is still required because any
+        // future non-egui consumer of BottomPanelState would otherwise
+        // panic with "Resource not found" on this code path. See
+        // ADR-0014 for the wiring; the egui draw closure is covered
+        // only by the manual smoke checklist.
         app.init_resource::<PickerState>()
+            .init_resource::<BottomPanelState>()
             .init_resource::<SimulationResult>()
             .add_message::<RunSimRequest>()
             .add_systems(Startup, setup_profile_repos)

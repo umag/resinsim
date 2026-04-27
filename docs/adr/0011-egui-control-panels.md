@@ -287,3 +287,11 @@ that headless tests can't supply.
 - **`unused_crate_dependencies` lint clean.** Both `bevy_egui` and
   `egui_plot` are wired through panels.rs / plots.rs so no
   unused-dep warning surfaces if the lint is enabled later.
+
+## Extended by
+
+- **ADR-0014** (issue 05) — adds the third locked egui anchor
+  (`TopBottomPanel::bottom("layer-timeline")`) for the layer-axis
+  chart with click-to-seek. The anchor convention is now
+  left + right + bottom; further panels mount *inside* one of these
+  three slots, not as a fourth anchor.
