@@ -17,6 +17,7 @@ mod heatmap;
 mod mesh;
 mod profile_repos;
 mod scene;
+mod screenshot;
 mod sim;
 mod slice;
 mod ui;
@@ -58,21 +59,28 @@ use crate::ui::state::{PickerState, refresh_listings, refresh_loaded_profiles};
 // ---------------------------------------------------------------------------
 
 #[derive(Parser, Debug, Resource)]
-#[command(name = "resinsim-viz", about = "Resinsim physics-simulation visualizer")]
-struct Args {
-    /// Run one frame and exit (smoke-test mode)
+#[command(
+    name = "resinsim-viz",
+    about = "Resinsim physics-simulation visualizer (use --screenshot for AI \
+             capture-and-exit; use --smoke-exit for one-frame CI smoke tests)"
+)]
+pub(crate) struct Args {
+    /// Run one frame and exit (smoke-test mode). Propagates exit codes
+    /// 2/3/4 on load failure for CI branching. See --screenshot for
+    /// the AI-capture variant which propagates the same codes (plus
+    /// 6/7/8) without requiring --smoke-exit.
     #[arg(long)]
-    smoke_exit: bool,
+    pub(crate) smoke_exit: bool,
 
     /// Load an STL file at startup. Drag-drop replaces the loaded mesh at runtime.
     #[arg(long, value_name = "PATH", conflicts_with = "load_ctb")]
-    load_stl: Option<PathBuf>,
+    pub(crate) load_stl: Option<PathBuf>,
 
     /// Load a CTB sliced file at startup. Drag-drop replaces the loaded
     /// geometry at runtime. Mutually exclusive with --load-stl: only one
     /// geometry source is visible at a time in v1.
     #[arg(long, value_name = "PATH")]
-    load_ctb: Option<PathBuf>,
+    pub(crate) load_ctb: Option<PathBuf>,
 
     /// Resin/printer profile data directory. Resolves via the 4-stage
     /// chain (flag → `RESINSIM_DATA_DIR` env → `$CWD/data` →
@@ -117,7 +125,7 @@ struct Args {
     /// the picker → Run flow). Drag-drop of new sim files is not
     /// yet supported.
     #[arg(long, value_name = "PATH.json")]
-    load_sim: Option<PathBuf>,
+    pub(crate) load_sim: Option<PathBuf>,
 
     /// DANGEROUS: skip the safety check that requires --load-sim to have
     /// the same layer count as --load-ctb. Without this flag, a mismatch
@@ -125,18 +133,64 @@ struct Args {
     /// CTB with a sim that does not match it (e.g. during sim development).
     #[arg(long)]
     allow_mismatch: bool,
+
+    /// Capture a PNG of the primary window once geometry/sim loads
+    /// settle, wait 2 settle frames for PBR/transparency sort, then
+    /// exit AppExit::Success after Bevy emits Captured AND the file
+    /// lands on disk.
+    ///
+    /// Exit codes (when --screenshot is set):
+    ///   0 = success                    5 = invalid screenshot path
+    ///   2 = sim load failed            6 = CTB load failed
+    ///   3 = layer-count mismatch       7 = screenshot write failed
+    ///   4 = bad sim pairing            8 = render timeout
+    ///
+    /// When --screenshot is set, exit codes 2/3/4/6/7/8 are propagated
+    /// to the shell even WITHOUT --smoke-exit; the two flags are
+    /// independent triggers for the same exit-code-propagation behavior.
+    ///
+    /// Path must be absolute or relative to CWD; the parent directory
+    /// must exist; extension must be .png/.jpg/.jpeg. **Unlike
+    /// --save-sim, the parent dir is NOT created on demand.**
+    ///
+    /// Falls back to "capture anyway + warn" after 10 s if loads never
+    /// settle (Phase 1). MAX_RENDER_FRAMES (10 s) cap on Phase 2
+    /// post-spawn wait, exits with code 8. MAX_FILE_WAIT (1 s) cap on
+    /// Phase 3 post-Captured wait, exits with code 7. See README
+    /// "Screenshot capture (AI feedback loop)".
+    #[arg(long, value_name = "PATH.png")]
+    pub(crate) screenshot: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
-// Exit codes (used when --smoke-exit is set so CI can branch)
+// Exit codes (used when --smoke-exit OR --screenshot is set so CI / AI
+// consumers can branch on $?). Co-located here; screenshot.rs imports the
+// two screenshot-specific codes via `use crate::{EXIT_SCREENSHOT_*}`.
 // ---------------------------------------------------------------------------
 
 /// Sim file load / parse / validate failure.
-const EXIT_SIM_LOAD_FAILED: u8 = 2;
+pub(crate) const EXIT_SIM_LOAD_FAILED: u8 = 2;
 /// Layer-count mismatch between --load-ctb and --load-sim.
-const EXIT_LAYER_COUNT_MISMATCH: u8 = 3;
+pub(crate) const EXIT_LAYER_COUNT_MISMATCH: u8 = 3;
 /// Bad pairing: --load-sim without --load-ctb, or --load-sim with --load-stl.
-const EXIT_BAD_SIM_PAIRING: u8 = 4;
+pub(crate) const EXIT_BAD_SIM_PAIRING: u8 = 4;
+/// --screenshot path validation failed (empty, directory, missing parent,
+/// bad extension, or CWD unavailable). Emitted before App::new() so
+/// `eprintln!` is used in main(); LogPlugin isn't initialised yet.
+pub(crate) const EXIT_SCREENSHOT_BAD_PATH: u8 = 5;
+/// CTB file load / parse failure (--load-ctb or --screenshot only).
+pub(crate) const EXIT_CTB_LOAD_FAILED: u8 = 6;
+/// --screenshot: Captured marker fired but the file didn't appear on disk
+/// within MAX_FILE_WAIT_FRAMES. Bevy's save_to_disk observer logged an
+/// IO error mid-write. Distinct from code 8 — agent should retry after
+/// resolving the filesystem issue, not the render issue.
+pub(crate) const EXIT_SCREENSHOT_WRITE_FAILED: u8 = 7;
+/// --screenshot: spawned the Screenshot entity but Bevy never emitted
+/// Captured within MAX_RENDER_FRAMES. Likely cause: headless build, GPU
+/// hang, render thread deadlock, or heavily-loaded software rasterizer
+/// (CI). Distinct from code 7 — agent should retry on a different
+/// machine/headless config, not the filesystem.
+pub(crate) const EXIT_SCREENSHOT_RENDER_TIMEOUT: u8 = 8;
 
 /// Drag-drop is interactive — never propagate `--smoke-exit` non-zero exit
 /// codes from a drop. Smoke-exit is a Startup-time concern (CI invokes the
@@ -155,10 +209,23 @@ const DROP_IS_INTERACTIVE: bool = false;
 /// visually attached to the active layer's surface.
 pub const LAYER_CURSOR_EPSILON_MM: f32 = 0.05;
 
-fn fatal_exit(writer: &mut MessageWriter<AppExit>, code: u8) {
+/// Write a non-zero AppExit::Error with the given exit code. `pub` so
+/// the screenshot module can route ExitWriteFailed (code 7) and
+/// ExitTimeoutRenderHung (code 8) through the same exit path as the
+/// existing smoke-exit propagation.
+pub(crate) fn fatal_exit(writer: &mut MessageWriter<AppExit>, code: u8) {
     writer.write(AppExit::Error(
         NonZero::new(code).expect("exit codes EXIT_* are non-zero by construction"),
     ));
+}
+
+/// True when the app should propagate non-zero exit codes from load
+/// failures and capture failures. Either flag is sufficient — they are
+/// independent triggers. Used to gate fatal_exit calls at the existing
+/// --load-sim / pairing / CTB sites so --screenshot consumers get the
+/// same exit-code contract as --smoke-exit consumers.
+pub(crate) fn should_propagate_exit_codes(args: &Args) -> bool {
+    args.smoke_exit || args.screenshot.is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +243,20 @@ fn fatal_exit(writer: &mut MessageWriter<AppExit>, code: u8) {
 // ---------------------------------------------------------------------------
 
 #[derive(Resource, Default)]
-pub struct LoadedSimulation(pub Option<PrintSimulation>);
+pub struct LoadedSimulation {
+    /// The successfully-loaded simulation, if any. None means "no sim loaded
+    /// yet" (initial state) OR "the most recent --load-sim attempt failed
+    /// to parse".
+    pub simulation: Option<PrintSimulation>,
+    /// Outcome of the most recent --load-sim attempt at startup.
+    /// - None      = not yet attempted (initial state)
+    /// - Some(Ok)  = attempted and succeeded; `simulation` is populated
+    /// - Some(Err) = attempted and failed (parse / IO error). `simulation`
+    ///               is None. The string holds the underlying error so the
+    ///               --screenshot capture system can use it as a "settled"
+    ///               signal for the loads_settled predicate (issue 12).
+    pub last_attempt: Option<Result<(), String>>,
+}
 
 #[derive(Resource, Default)]
 pub struct CurrentLayer {
@@ -585,7 +665,7 @@ fn load_ctb_into_world(
     spawn_build_plate(commands, meshes, materials, prior_plate, envelope);
 
     // Decide whether to bake a heatmap.
-    let layer_colors: Option<Vec<[f32; 4]>> = match loaded_sim.0.as_ref() {
+    let layer_colors: Option<Vec<[f32; 4]>> = match loaded_sim.simulation.as_ref() {
         None => None,
         Some(sim) => {
             if sim.layers().len() == layers.len() {
@@ -648,7 +728,7 @@ fn load_ctb_into_world(
     // domain to report. Decision: spawn cursor iff sim is present AND
     // (counts match OR allow_mismatch) — i.e. iff this is a "heatmap or
     // explicitly-tolerated overlay" load.
-    let cursor_active = loaded_sim.0.is_some()
+    let cursor_active = loaded_sim.simulation.is_some()
         && (layer_colors.is_some() || allow_mismatch)
         && !layers.is_empty();
     if cursor_active {
@@ -702,7 +782,7 @@ fn load_ctb_into_world(
         // drag-drop reload — users who first interact via drag-drop also
         // see the hint. The README is the canonical reference.
         info!("Controls: ↑/↓ arrows step layers");
-        if let Some(sim) = loaded_sim.0.as_ref() {
+        if let Some(sim) = loaded_sim.simulation.as_ref() {
             log_layer_line(sim, current_layer.index, current_layer.max, domain_res.0);
         }
     }
@@ -774,15 +854,23 @@ fn setup_initial_load(
     if let Some(sim_path) = args.load_sim.as_deref() {
         match load_simulation(sim_path) {
             Ok(sim) => {
-                loaded_sim.0 = Some(sim);
+                loaded_sim.simulation = Some(sim);
+                loaded_sim.last_attempt = Some(Ok(()));
             }
             Err(e) => {
                 error!("simulation load failed for {}: {e}", sim_path.display());
+                // Record the failure BEFORE potentially exiting so the
+                // --screenshot loads_settled predicate sees the settled
+                // state (issue 12 / code-r5 finding). The assignment must
+                // happen unconditionally — fatal_exit only writes AppExit;
+                // execution continues for the rest of this Startup tick.
+                loaded_sim.last_attempt = Some(Err(e.to_string()));
                 if args.smoke_exit {
                     fatal_exit(&mut exit_writer, EXIT_SIM_LOAD_FAILED);
                 }
                 // Continue to geometry load — without the sim the heatmap
-                // is silently skipped (LoadedSimulation stays None).
+                // is silently skipped (LoadedSimulation.simulation stays
+                // None; last_attempt records the failure).
             }
         }
     }
@@ -996,7 +1084,7 @@ fn log_layer_change(
     if !current.is_changed() {
         return;
     }
-    let Some(s) = sim.0.as_ref() else {
+    let Some(s) = sim.simulation.as_ref() else {
         return;
     };
     log_layer_line(s, current.index, current.max, domain.0);
@@ -1420,6 +1508,7 @@ mod tests {
             save_sim: None,
             load_sim: None,
             allow_mismatch: false,
+            screenshot: None,
         };
         app.insert_resource(args);
         let stored = app
@@ -1450,6 +1539,7 @@ mod tests {
             save_sim: None,
             load_sim: None,
             allow_mismatch: false,
+            screenshot: None,
         });
         let stored = app
             .world()
@@ -1478,6 +1568,7 @@ mod tests {
             save_sim: None,
             load_sim: None,
             allow_mismatch: false,
+            screenshot: None,
         });
         let stored = app
             .world()
@@ -1503,6 +1594,7 @@ mod tests {
             save_sim: None,
             load_sim: Some(PathBuf::from("cube.sim.json")),
             allow_mismatch: true,
+            screenshot: None,
         });
         let stored = app
             .world()
@@ -1510,6 +1602,66 @@ mod tests {
             .expect("Args was just inserted as a resource");
         assert_eq!(stored.load_sim.as_deref(), Some(Path::new("cube.sim.json")));
         assert!(stored.allow_mismatch);
+    }
+
+    #[test]
+    fn args_resource_reads_screenshot_only() {
+        // --screenshot alone (no --smoke-exit, no --load-*) — the
+        // capture-and-exit flag is independent of the smoke-test
+        // surface. Locks in that the resource round-trips the path.
+        let mut app = App::new();
+        app.insert_resource(Args {
+            smoke_exit: false,
+            load_stl: None,
+            load_ctb: None,
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
+            load_sim: None,
+            allow_mismatch: false,
+            screenshot: Some(PathBuf::from("/tmp/shot.png")),
+        });
+        let stored = app
+            .world()
+            .get_resource::<Args>()
+            .expect("Args was just inserted as a resource");
+        assert_eq!(
+            stored.screenshot.as_deref(),
+            Some(Path::new("/tmp/shot.png"))
+        );
+        assert!(!stored.smoke_exit);
+        assert!(stored.load_ctb.is_none());
+    }
+
+    #[test]
+    fn args_resource_reads_screenshot_with_smoke_exit() {
+        // Both flags can co-exist; --screenshot wins (capture-and-exit
+        // semantics), and --smoke-exit's exit-code-propagation gating
+        // is OR'd with --screenshot's. Resource round-trip only here;
+        // gating tested in should_propagate_exit_codes_*.
+        let mut app = App::new();
+        app.insert_resource(Args {
+            smoke_exit: true,
+            load_stl: None,
+            load_ctb: Some(PathBuf::from("foo.ctb")),
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
+            load_sim: None,
+            allow_mismatch: false,
+            screenshot: Some(PathBuf::from("foo.png")),
+        });
+        let stored = app
+            .world()
+            .get_resource::<Args>()
+            .expect("Args was just inserted as a resource");
+        assert!(stored.smoke_exit);
+        assert_eq!(stored.screenshot.as_deref(), Some(Path::new("foo.png")));
+        assert_eq!(stored.load_ctb.as_deref(), Some(Path::new("foo.ctb")));
     }
 
     #[test]
@@ -1641,6 +1793,7 @@ mod tests {
             save_sim: None,
             load_sim: None,
             allow_mismatch: false,
+            screenshot: None,
         });
         app.add_systems(Startup, setup_initial_load);
         app.add_systems(Update, smoke_exit_after_one_frame);
@@ -1943,6 +2096,7 @@ mod tests {
             save_sim: None,
             load_sim: None,
             allow_mismatch: false,
+            screenshot: None,
         });
         app.add_systems(Startup, setup_initial_load);
         app.add_systems(Update, smoke_exit_after_one_frame);
@@ -2110,6 +2264,7 @@ mod tests {
             save_sim: None,
             load_sim: Some(sim_path),
             allow_mismatch: false,
+            screenshot: None,
         });
         app.add_systems(Startup, setup_initial_load);
         app.add_systems(Update, smoke_exit_after_one_frame);
@@ -2126,13 +2281,13 @@ mod tests {
             "Startup must spawn one LayerCursor when sim+CTB load OK"
         );
         assert!(
-            app.world().resource::<LoadedSimulation>().0.is_some(),
+            app.world().resource::<LoadedSimulation>().simulation.is_some(),
             "LoadedSimulation must be populated"
         );
         let sim_layers = app
             .world()
             .resource::<LoadedSimulation>()
-            .0
+            .simulation
             .as_ref()
             .map(|s| s.layers().len())
             .expect("sim populated");
@@ -2145,6 +2300,59 @@ mod tests {
             app.world().resource::<CureDepthDomain>().0.is_some(),
             "CureDepthDomain must be populated when heatmap is active"
         );
+    }
+
+    #[test]
+    fn load_sim_writes_last_attempt_err_on_parse_failure() {
+        // Issue 12 contract (per code-r5 finding): on --load-sim parse
+        // failure, LoadedSimulation.last_attempt MUST be set to
+        // Some(Err(_)) BEFORE fatal_exit so the --screenshot
+        // loads_settled predicate sees a settled state. Without this,
+        // --screenshot --load-sim BAD.json hangs MAX_WAIT_FRAMES then
+        // captures a blank window.
+        //
+        // Drives setup_initial_load with a nonexistent sim path. No
+        // --smoke-exit (so fatal_exit is not called) — isolates the
+        // last_attempt assignment from the exit-propagation path.
+        // Asserts LoadedSimulation.simulation == None AND
+        // last_attempt == Some(Err(_)).
+        let mut app = make_loader_app();
+        app.insert_resource(Args {
+            smoke_exit: false,
+            load_stl: None,
+            load_ctb: None,
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
+            load_sim: Some(PathBuf::from(
+                "/nonexistent/dir/missing-sim-file.sim.json",
+            )),
+            allow_mismatch: false,
+            screenshot: None,
+        });
+        app.add_systems(Startup, setup_initial_load);
+        app.update();
+
+        let loaded = app.world().resource::<LoadedSimulation>();
+        assert!(
+            loaded.simulation.is_none(),
+            "simulation must be None when --load-sim parse fails"
+        );
+        match loaded.last_attempt.as_ref() {
+            Some(Err(msg)) => {
+                assert!(
+                    !msg.is_empty(),
+                    "last_attempt Err string must contain the underlying \
+                     error (file path / IO reason)"
+                );
+            }
+            other => panic!(
+                "expected last_attempt = Some(Err(_)) on parse failure, \
+                 got {other:?}"
+            ),
+        }
     }
 
     #[test]
@@ -2362,6 +2570,7 @@ mod tests {
             save_sim: None,
             load_sim: None,
             allow_mismatch: false,
+            screenshot: None,
         });
         app.init_resource::<PickerState>()
             .init_resource::<SimulationResult>()
@@ -2404,6 +2613,7 @@ mod tests {
             save_sim: None,
             load_sim: None,
             allow_mismatch: false,
+            screenshot: None,
         });
         app.init_resource::<PickerState>()
             .init_resource::<SimulationResult>()
@@ -2447,6 +2657,7 @@ mod tests {
             save_sim: None,
             load_sim: None,
             allow_mismatch: false,
+            screenshot: None,
         });
         app.init_resource::<PickerState>()
             .init_resource::<SimulationResult>()
