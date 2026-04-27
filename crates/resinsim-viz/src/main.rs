@@ -649,6 +649,15 @@ fn load_ctb_into_world(
         Ok(parsed) => parsed,
         Err(e) => {
             error!("CTB load failed for {}: {e}", path.display());
+            // Propagate exit-6 when the caller is in CI/AI consumer
+            // mode (--smoke-exit OR --screenshot — call site
+            // already routes the disjunction via the smoke_exit
+            // parameter). Drag-drop passes false unconditionally
+            // (DROP_IS_INTERACTIVE) so an interactive drop of a
+            // bad .ctb logs the error but never crashes the session.
+            if smoke_exit {
+                fatal_exit(exit_writer, EXIT_CTB_LOAD_FAILED);
+            }
             return;
         }
     };
@@ -865,7 +874,7 @@ fn setup_initial_load(
                 // happen unconditionally — fatal_exit only writes AppExit;
                 // execution continues for the rest of this Startup tick.
                 loaded_sim.last_attempt = Some(Err(e.to_string()));
-                if args.smoke_exit {
+                if should_propagate_exit_codes(&args) {
                     fatal_exit(&mut exit_writer, EXIT_SIM_LOAD_FAILED);
                 }
                 // Continue to geometry load — without the sim the heatmap
@@ -886,7 +895,7 @@ fn setup_initial_load(
              Drag-drop a .ctb file with matching layer count to enable \
              the heatmap."
         );
-        if args.smoke_exit {
+        if should_propagate_exit_codes(&args) {
             fatal_exit(&mut exit_writer, EXIT_BAD_SIM_PAIRING);
         }
     }
@@ -923,7 +932,7 @@ fn setup_initial_load(
             &mut warned_about_envelope_mismatch,
             false,
             args.allow_mismatch,
-            args.smoke_exit,
+            should_propagate_exit_codes(&args),
             &mut exit_writer,
         ),
         (None, None) => {}
@@ -1278,8 +1287,29 @@ fn refresh_loaded_profiles_system(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+    let mut args = Args::parse();
+
+    // --screenshot path validation BEFORE App::new() — eprintln (not
+    // error!) because LogPlugin isn't initialised yet. Resolved
+    // absolute path replaces the input so the system shim's
+    // fs::metadata sees the same path that validation accepted.
+    if let Some(input) = args.screenshot.as_deref() {
+        match screenshot::validate_screenshot_path(input) {
+            Ok(resolved) => {
+                args.screenshot = Some(resolved);
+            }
+            Err(err) => {
+                eprintln!(
+                    "{}",
+                    screenshot::format_path_error(input, &err)
+                );
+                std::process::exit(EXIT_SCREENSHOT_BAD_PATH as i32);
+            }
+        }
+    }
+
     let smoke_exit = args.smoke_exit;
+    let capture_active = args.screenshot.is_some();
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
@@ -1297,6 +1327,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .init_resource::<CureDepthDomain>()
     .init_resource::<PickerState>()
     .init_resource::<SimulationResult>()
+    .init_resource::<screenshot::LastScreenshot>()
     .add_message::<RunSimRequest>()
     .add_systems(
         Startup,
@@ -1323,10 +1354,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bevy_egui::EguiPrimaryContextPass,
         (left_panel, right_panel, debug_camera_overlay),
     );
-    if smoke_exit {
+    // --screenshot wins over --smoke-exit: when both are set, the
+    // capture system fires AppExit::Success after the PNG lands, and
+    // smoke_exit_after_one_frame is NOT registered (otherwise the app
+    // would exit on frame 1 before Phase 1 / settle / capture).
+    if capture_active {
+        app.add_systems(Update, screenshot::capture_screenshot_and_exit);
+    } else if smoke_exit {
         app.add_systems(Update, smoke_exit_after_one_frame);
     }
-    app.run();
+    // Bevy 0.18 returns AppExit from app.run(); without honouring it
+    // the binary always exits 0 regardless of fatal_exit calls (which
+    // queue AppExit::Error). Surface the non-zero exit codes via
+    // std::process::exit so the --smoke-exit + --screenshot exit-code
+    // contracts (codes 2/3/4/6/7/8) reach the shell. Discovered by
+    // Round D manual verification of issue 12.
+    let exit = app.run();
+    if let AppExit::Error(code) = exit {
+        std::process::exit(code.get() as i32);
+    }
     Ok(())
 }
 
@@ -1664,6 +1710,47 @@ mod tests {
         assert_eq!(stored.load_ctb.as_deref(), Some(Path::new("foo.ctb")));
     }
 
+    // ---- should_propagate_exit_codes truth table ----
+
+    fn args_with_exits(smoke: bool, screenshot: bool) -> Args {
+        Args {
+            smoke_exit: smoke,
+            load_stl: None,
+            load_ctb: None,
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
+            load_sim: None,
+            allow_mismatch: false,
+            screenshot: screenshot.then(|| PathBuf::from("/tmp/x.png")),
+        }
+    }
+
+    #[test]
+    fn should_propagate_exit_codes_smoke_exit_alone_returns_true() {
+        assert!(should_propagate_exit_codes(&args_with_exits(true, false)));
+    }
+
+    #[test]
+    fn should_propagate_exit_codes_screenshot_alone_returns_true() {
+        // Issue 12 contract: --screenshot alone propagates exit codes
+        // 2/3/4/6 even WITHOUT --smoke-exit. The two flags are
+        // independent triggers for the same propagation behaviour.
+        assert!(should_propagate_exit_codes(&args_with_exits(false, true)));
+    }
+
+    #[test]
+    fn should_propagate_exit_codes_both_returns_true() {
+        assert!(should_propagate_exit_codes(&args_with_exits(true, true)));
+    }
+
+    #[test]
+    fn should_propagate_exit_codes_neither_returns_false() {
+        assert!(!should_propagate_exit_codes(&args_with_exits(false, false)));
+    }
+
     #[test]
     fn load_stl_into_world_spawns_loaded_marker_for_cube() {
         let mut app = make_loader_app();
@@ -1857,6 +1944,72 @@ mod tests {
             count_loaded_slice(&mut app),
             0,
             "invalid CTB path leaves world empty"
+        );
+    }
+
+    #[test]
+    fn load_ctb_into_world_emits_exit_6_when_smoke_exit_and_ctb_unreadable() {
+        // Issue 12 contract: when smoke_exit / should_propagate is true
+        // and the .ctb file fails to parse (here: nonexistent path),
+        // load_ctb_into_world must call fatal_exit(EXIT_CTB_LOAD_FAILED=6).
+        // Asserts the AppExit::Error(6) is written to the message buffer.
+        let mut app = make_loader_app();
+        app.add_message::<AppExit>();
+        let bad_path = PathBuf::from("/definitely/does/not/exist/nope.ctb");
+        let load_id = app.world_mut().register_system(
+            move |mut commands: Commands,
+                  mut meshes: ResMut<Assets<Mesh>>,
+                  mut materials: ResMut<Assets<StandardMaterial>>,
+                  prior_stl: Query<Entity, With<LoadedStlMesh>>,
+                  prior_slice: Query<Entity, With<LoadedSliceStack>>,
+                  prior_cursor: Query<Entity, With<LayerCursor>>,
+                  prior_plate: Query<Entity, With<BuildPlate>>,
+                  mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
+                  loaded_sim: Res<LoadedSimulation>,
+                  mut current: ResMut<CurrentLayer>,
+                  mut z_prefix: ResMut<LayerZPrefix>,
+                  mut domain: ResMut<CureDepthDomain>,
+                  active_profile: Res<ActivePrinterProfile>,
+                  mut envelope: ResMut<PrinterEnvelope>,
+                  mut warned: Local<bool>,
+                  mut exit_writer: MessageWriter<AppExit>| {
+                load_ctb_into_world(
+                    &bad_path,
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    &prior_stl,
+                    &prior_slice,
+                    &prior_cursor,
+                    &prior_plate,
+                    &mut camera,
+                    &loaded_sim,
+                    &mut current,
+                    &mut z_prefix,
+                    &mut domain,
+                    &active_profile,
+                    &mut envelope,
+                    &mut warned,
+                    false,
+                    false,
+                    true, // smoke_exit (i.e. should_propagate) = true
+                    &mut exit_writer,
+                );
+            },
+        );
+        app.world_mut()
+            .run_system(load_id)
+            .expect("system runs even when load fails");
+        // Inspect the AppExit messages buffer to verify exit 6 written.
+        let messages = app.world().resource::<Messages<AppExit>>();
+        let mut cursor = messages.get_cursor();
+        let exits: Vec<&AppExit> = cursor.read(messages).collect();
+        assert!(
+            exits.iter().any(|e| matches!(
+                e,
+                AppExit::Error(code) if code.get() == EXIT_CTB_LOAD_FAILED
+            )),
+            "expected AppExit::Error({EXIT_CTB_LOAD_FAILED}); got {exits:?}"
         );
     }
 
@@ -2353,6 +2506,79 @@ mod tests {
                  got {other:?}"
             ),
         }
+    }
+
+    #[test]
+    fn load_sim_writes_last_attempt_ok_on_successful_parse() {
+        // Symmetric to load_sim_writes_last_attempt_err_on_parse_failure
+        // (UAT harvest from issue 12). The Err arm is regression-tested;
+        // the Ok arm needs the same guard so a future refactor that
+        // drops `loaded_sim.last_attempt = Some(Ok(()))` (e.g. extracting
+        // the Ok branch into a helper that forgets the assignment)
+        // doesn't silently re-introduce loads_settled mis-classification
+        // on slow successful sim loads.
+        //
+        // Builds a minimal synthetic 1-layer sim, writes it to /tmp,
+        // points --load-sim at it, runs setup_initial_load.
+        use resinsim_core::entities::{LayerResult, PrinterProfile, ResinProfile};
+        use resinsim_core::simulation::PrintSimulation;
+        let recipe = ResinProfile::generic_standard().recipe().clone();
+        let printer = PrinterProfile::generic_msla_4k();
+        let mut sim = PrintSimulation::new(recipe, printer);
+        let lr = LayerResult {
+            index: 0,
+            cure_depth_um: 100.0,
+            peel_force_n: 0.0,
+            suction_force_n: 0.0,
+            total_force_n: 0.0,
+            support_capacity_n: 0.0,
+            safety_factor: 1.0,
+            cross_section_area_mm2: 1.0,
+            area_delta_mm2: 0.0,
+            vat_temperature_c: 22.0,
+            viscosity_mpa_s: 200.0,
+            z_deflection_um: 0.0,
+            effective_layer_height_um: 50.0,
+            worst_cure_depth_um: 100.0,
+        };
+        sim.add_layer(lr, vec![]).expect("first index");
+        let dir = std::env::temp_dir().join(format!(
+            "resinsim-viz-load-sim-ok-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create tmpdir");
+        let sim_path = dir.join("ok-sim.json");
+        let json = serde_json::to_string_pretty(&sim).expect("serialize sim");
+        std::fs::write(&sim_path, json).expect("write sim json");
+
+        let mut app = make_loader_app();
+        app.insert_resource(Args {
+            smoke_exit: false,
+            load_stl: None,
+            load_ctb: None,
+            data_dir: None,
+            resin: None,
+            printer: None,
+            initial_led_temp: None,
+            save_sim: None,
+            load_sim: Some(sim_path),
+            allow_mismatch: false,
+            screenshot: None,
+        });
+        app.add_systems(Startup, setup_initial_load);
+        app.update();
+
+        let loaded = app.world().resource::<LoadedSimulation>();
+        assert!(
+            loaded.simulation.is_some(),
+            "simulation must be Some(_) after a successful --load-sim"
+        );
+        assert!(
+            matches!(loaded.last_attempt, Some(Ok(()))),
+            "last_attempt must be Some(Ok(())) on successful parse, got {:?}",
+            loaded.last_attempt
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

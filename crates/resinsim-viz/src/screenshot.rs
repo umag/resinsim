@@ -31,9 +31,16 @@
 
 use std::path::{Path, PathBuf};
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy::render::view::screenshot::{Captured, Screenshot, save_to_disk};
 
-use crate::Args;
+use crate::slice::LoadedSliceStack;
+use crate::mesh::LoadedStlMesh;
+use crate::{
+    Args, EXIT_SCREENSHOT_RENDER_TIMEOUT, EXIT_SCREENSHOT_WRITE_FAILED, LoadedSimulation,
+    fatal_exit,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -402,6 +409,217 @@ pub fn loads_settled(
     ctb_settled && stl_settled && sim_settled
 }
 
+// ---------------------------------------------------------------------------
+// Spawn helpers + default path
+// ---------------------------------------------------------------------------
+
+/// Spawn a `Screenshot` entity for the button-click path. NO
+/// AutoCaptureMarker — the system shim's auto_captured query
+/// excludes button captures so AppExit isn't fired on click.
+pub fn spawn_button_screenshot(commands: &mut Commands, path: &Path) {
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path.to_path_buf()));
+}
+
+/// Spawn a `Screenshot` entity for the auto-capture (CLI) path.
+/// Carries `AutoCaptureMarker` so the auto_captured query in the
+/// system shim sees this capture (and only this capture) when
+/// Bevy emits Captured.
+pub fn spawn_auto_screenshot(commands: &mut Commands, path: &Path) {
+    commands
+        .spawn((Screenshot::primary_window(), AutoCaptureMarker))
+        .observe(save_to_disk(path.to_path_buf()));
+}
+
+/// Generate a default path for the button-click capture, of the form
+/// `<CWD>/resinsim-viz-<unix-secs>.png`. Falls back to `<TMPDIR>/...`
+/// if CWD lookup fails (sandboxed env). Stable filename pattern is
+/// the UAT-6 contract (issue 12).
+pub fn default_screenshot_path() -> PathBuf {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let filename = format!("resinsim-viz-{secs}.png");
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(filename),
+        Err(_) => std::env::temp_dir().join(filename),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// System shim
+// ---------------------------------------------------------------------------
+
+/// Bundles the four world-state queries the capture system reads each
+/// frame. Folding them into one `SystemParam` keeps the
+/// `capture_screenshot_and_exit` signature legible (4 queries → 1
+/// param). Per docs/patterns/system-param-bundle-for-16-param-limit.md.
+#[derive(SystemParam)]
+pub struct LoadStateParams<'w, 's> {
+    pub slice: Query<'w, 's, (), With<LoadedSliceStack>>,
+    pub stl: Query<'w, 's, (), With<LoadedStlMesh>>,
+    pub sim: Res<'w, LoadedSimulation>,
+    /// Captured + AutoCaptureMarker — distinguishes the auto-capture
+    /// from a concurrent button-click capture (which has Captured
+    /// but no AutoCaptureMarker, so AppExit doesn't fire on click).
+    pub auto_captured: Query<'w, 's, (), (With<Captured>, With<AutoCaptureMarker>)>,
+}
+
+/// `--screenshot` system shim. Runs every Update tick when --screenshot
+/// is set (registered in main.rs step 9). Routes capture_inner's
+/// CaptureDecision to Bevy commands + log output + AppExit.
+///
+/// Phase ordering matches capture_inner (see that fn's docs).
+/// The 12-arg signature is over clippy's default 7-cap; allow attribute
+/// matches the precedent on capture_inner (and 5 other systems in
+/// main.rs at lines 466/537/756/863/1130).
+#[allow(clippy::too_many_arguments)]
+pub fn capture_screenshot_and_exit(
+    args: Res<Args>,
+    loads: LoadStateParams,
+    mut commands: Commands,
+    mut writer: MessageWriter<AppExit>,
+    mut frame_count: Local<u32>,
+    mut frames_since_ready: Local<u32>,
+    mut frames_since_spawn: Local<u32>,
+    mut frames_since_captured: Local<u32>,
+    mut spawn_fired: Local<bool>,
+    mut previously_ready: Local<bool>,
+    mut captured_observed: Local<bool>,
+    mut has_exited: Local<bool>,
+) {
+    let was_spawned = *spawn_fired;
+
+    // SAFETY: fs::metadata is gated on *spawn_fired so we make zero
+    // syscalls during Phase 1 readiness wait (which can be 600
+    // frames). Enforced by code structure, not a test (round-4
+    // code M2: a metadata-spy mock is impractical without injecting
+    // a fs trait, which would muddy the production code).
+    let file_present = if was_spawned {
+        args.screenshot
+            .as_ref()
+            .map(|p| {
+                std::fs::metadata(p)
+                    .map(|m| m.len() > 0)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    let sim_loaded = loads.sim.simulation.is_some();
+    let sim_failed = loads
+        .sim
+        .last_attempt
+        .as_ref()
+        .is_some_and(|r| r.is_err());
+    let slice_present = !loads.slice.is_empty();
+    let stl_present = !loads.stl.is_empty();
+    let ready = loads_settled(&args, slice_present, stl_present, sim_loaded, sim_failed);
+    let bevy_captured = !loads.auto_captured.is_empty();
+
+    let ctb_pending = args.load_ctb.is_some() && !slice_present;
+    let stl_pending = args.load_stl.is_some() && !stl_present;
+    let sim_pending = args.load_sim.is_some() && !sim_loaded && !sim_failed;
+
+    // Locals are SystemParam wrappers; deref to the inner T to get
+    // the &mut required by capture_inner.
+    let decision = capture_inner(
+        &args,
+        ready,
+        bevy_captured,
+        file_present,
+        ctb_pending,
+        stl_pending,
+        sim_pending,
+        &mut *frame_count,
+        &mut *frames_since_ready,
+        &mut *frames_since_spawn,
+        &mut *frames_since_captured,
+        &mut *spawn_fired,
+        &mut *previously_ready,
+        &mut *captured_observed,
+        &mut *has_exited,
+    );
+
+    match decision {
+        CaptureDecision::Skip => {
+            if *frame_count == 1 {
+                info!("--screenshot scheduled (waiting for loads_settled)");
+            }
+        }
+        CaptureDecision::SpawnScreenshot(path) => {
+            spawn_auto_screenshot(&mut commands, &path);
+        }
+        CaptureDecision::ExitTimeoutLoadsPending {
+            load_ctb,
+            load_stl,
+            load_sim,
+        } => {
+            let pending: Vec<&str> = [
+                ("--load-ctb", load_ctb),
+                ("--load-stl", load_stl),
+                ("--load-sim", load_sim),
+            ]
+            .iter()
+            .filter_map(|(name, p)| p.then_some(*name))
+            .collect();
+            // Defensive empty render (round-4 ux L1): if a future
+            // contributor adds a 4th load type and forgets to thread
+            // it into pending, surface the inconsistency rather than
+            // emit "still waiting on: ;".
+            let pending_str = if pending.is_empty() {
+                "(unknown — all loads settled but ready=false)".to_string()
+            } else {
+                pending.join(", ")
+            };
+            warn!(
+                "--screenshot exceeded MAX_WAIT_FRAMES={} (10 s); \
+                 still waiting on: {}; capturing anyway. If this is a \
+                 large CTB on a slow GPU, the capture may show partial \
+                 mesh; capture without --load-ctb to confirm.",
+                MAX_WAIT_FRAMES, pending_str,
+            );
+            let path = args
+                .screenshot
+                .as_ref()
+                .expect("Phase 1 timeout only fires when --screenshot is set");
+            spawn_auto_screenshot(&mut commands, path);
+        }
+        CaptureDecision::ExitTimeoutRenderHung => {
+            error!(
+                "--screenshot exceeded MAX_RENDER_FRAMES={} (10 s) \
+                 waiting for Bevy to complete the GPU readback. \
+                 Likely causes: headless build, GPU hang, render \
+                 thread deadlock, or a heavily-loaded software \
+                 rasterizer (CI). No PNG produced.",
+                MAX_RENDER_FRAMES,
+            );
+            fatal_exit(&mut writer, EXIT_SCREENSHOT_RENDER_TIMEOUT);
+        }
+        CaptureDecision::ExitSuccess => {
+            writer.write(AppExit::Success);
+        }
+        CaptureDecision::ExitWriteFailed(path) => {
+            error!(
+                "--screenshot Captured marker fired but no file at {} \
+                 after {} frames — Bevy's save_to_disk likely failed \
+                 mid-write. Check stderr above for the specific Bevy \
+                 error. Common causes: parent directory was deleted \
+                 after validation, disk full, write permission \
+                 revoked. Re-run after resolving the underlying \
+                 filesystem issue.",
+                path.display(),
+                MAX_FILE_WAIT_FRAMES,
+            );
+            fatal_exit(&mut writer, EXIT_SCREENSHOT_WRITE_FAILED);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -733,6 +951,71 @@ mod tests {
         assert_eq!(d, CaptureDecision::ExitSuccess);
         assert!(!s.captured_observed, "we never observed Captured");
         assert!(s.has_exited);
+    }
+
+    // ---- spawn helpers: marker-disambiguation regression guards ----
+    //
+    // UAT harvest from issue 12 (manual Round B was deferred — these
+    // close the gap without bevy_egui spike work).
+
+    #[test]
+    fn spawn_button_screenshot_spawns_one_entity_without_auto_marker() {
+        // Round-2 plan-review HIGH (button-click captures must NOT
+        // trigger AppExit) hinges on AutoCaptureMarker being absent
+        // from button-spawned entities. A silent regression (someone
+        // adds the marker to spawn_button_screenshot for "consistency"
+        // or refactors both helpers into one) re-introduces the bug.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let path = std::env::temp_dir().join(format!(
+            "resinsim-viz-button-test-{}.png",
+            std::process::id()
+        ));
+        let id = app.world_mut().register_system(
+            move |mut commands: Commands| {
+                spawn_button_screenshot(&mut commands, &path);
+            },
+        );
+        app.world_mut()
+            .run_system(id)
+            .expect("system runs to completion");
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<Entity, With<Screenshot>>();
+        let total = q.iter(world).count();
+        let mut q_marker = world.query_filtered::<Entity, With<AutoCaptureMarker>>();
+        let with_marker = q_marker.iter(world).count();
+        assert_eq!(total, 1, "exactly one Screenshot entity spawned");
+        assert_eq!(with_marker, 0, "button captures must NOT carry AutoCaptureMarker");
+    }
+
+    #[test]
+    fn spawn_auto_screenshot_spawns_one_entity_with_auto_marker() {
+        // Symmetric guard for the CLI path: --screenshot's
+        // capture-and-exit semantics depend on the system shim's
+        // auto_captured query (Captured + AutoCaptureMarker)
+        // matching only auto-captures.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let path = std::env::temp_dir().join(format!(
+            "resinsim-viz-auto-test-{}.png",
+            std::process::id()
+        ));
+        let id = app.world_mut().register_system(
+            move |mut commands: Commands| {
+                spawn_auto_screenshot(&mut commands, &path);
+            },
+        );
+        app.world_mut()
+            .run_system(id)
+            .expect("system runs to completion");
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<Entity, With<Screenshot>>();
+        let total = q.iter(world).count();
+        let mut q_marker = world
+            .query_filtered::<Entity, (With<Screenshot>, With<AutoCaptureMarker>)>();
+        let with_marker = q_marker.iter(world).count();
+        assert_eq!(total, 1, "exactly one Screenshot entity spawned");
+        assert_eq!(with_marker, 1, "auto captures MUST carry AutoCaptureMarker");
     }
 
     #[test]

@@ -13,19 +13,38 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 
+use crate::screenshot::{LastScreenshot, default_screenshot_path, spawn_button_screenshot};
 use crate::sim::{RunSimRequest, SimulationResult, loaded_basename};
 use crate::slice::LoadedSliceStack;
 use crate::ui::plots::{build_plot_data, render_plots};
 use crate::ui::state::{PickerState, run_block_reason};
 
+/// Toast lifetime for the "Captured: <basename>" label after the
+/// Capture-screenshot button is clicked. 3 s @ 60 Hz keeps the
+/// signal visible across a brief glance without lingering past
+/// the next interaction.
+const CAPTURE_TOAST_DURATION: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Left side panel: profile pickers, read-only recipe labels, status
-/// line, Run button, error ribbon.
+/// line, Run button, error ribbon, and the issue-12 Capture
+/// section (button + transient toast).
+///
+/// UI conventions: tooltip on the Capture button + 3-s transient
+/// toast are NEW patterns introduced by issue 12 (no existing buttons
+/// use tooltips; status/error use persistent labels). Chosen because
+/// Capture has no preconditions to gate (unlike Run, which uses
+/// add_enabled) and the action fires repeatedly (a persistent
+/// "last capture" label would clutter; toast suits the fire-and-forget
+/// shape).
+#[allow(clippy::too_many_arguments)]
 pub fn left_panel(
     mut contexts: EguiContexts,
     mut state: ResMut<PickerState>,
     mut run_writer: MessageWriter<RunSimRequest>,
     sim: Res<SimulationResult>,
     loaded_q: Query<&LoadedSliceStack>,
+    mut commands: Commands,
+    mut last_screenshot: ResMut<LastScreenshot>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
@@ -135,6 +154,36 @@ pub fn left_panel(
             // --- Error ribbon ---
             if let Some(err) = sim.last_error.as_deref() {
                 ui.colored_label(egui::Color32::LIGHT_RED, err);
+            }
+
+            ui.add_space(12.0);
+
+            // --- Capture section (issue 12) ---
+            ui.separator();
+            ui.heading("Capture");
+            let button = ui
+                .button("Capture screenshot")
+                .on_hover_text(
+                    "Saves a PNG of the current window to the working \
+                     directory (timestamped filename).",
+                );
+            if button.clicked() {
+                let path = default_screenshot_path();
+                spawn_button_screenshot(&mut commands, &path);
+                last_screenshot.0 = Some((path, std::time::Instant::now()));
+            }
+            // Transient "Captured: <basename>" toast for CAPTURE_TOAST_DURATION.
+            if let Some((path, started)) = last_screenshot.0.as_ref() {
+                if started.elapsed() <= CAPTURE_TOAST_DURATION {
+                    let basename = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("(unknown)");
+                    ui.colored_label(
+                        egui::Color32::LIGHT_GREEN,
+                        format!("Captured: {basename}"),
+                    );
+                }
             }
         });
 }
