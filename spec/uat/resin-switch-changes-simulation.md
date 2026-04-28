@@ -5,6 +5,13 @@ date: 2026-04-21
 
 # UAT: Switching resin on the same printer changes simulation output
 
+**ADR-0015 note.** The recipe-driven simulation contract (different resin
+→ different cure-depth and time profile) holds at the `PrintSimulation`
+aggregate level. Issue 15's pipeline preserves it: producing two sim.json
+envelopes from the same printer + different resins via `resinsim sim`
+yields two distinguishable envelopes; consumers downstream see the same
+divergence the in-process pre-ADR-0015 path produced.
+
 ## UAT-1: Same printer + different resin produces different cure depth
 
 **Rationale.** The motivating observation from the ADR-0005 triage:

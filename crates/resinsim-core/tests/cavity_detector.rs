@@ -335,8 +335,7 @@ fn disjoint_cavity_specs(
         // side so that z-adjacent cavities (no solid separator) are still
         // considered "overlapping" for the purposes of requiring XY clearance.
         let overlaps = accepted.iter().any(|a| {
-            let z_adjacent_or_overlap =
-                c.z0 < a.z0 + a.depth + 1 && a.z0 < c.z0 + c.depth + 1;
+            let z_adjacent_or_overlap = c.z0 < a.z0 + a.depth + 1 && a.z0 < c.z0 + c.depth + 1;
             if !z_adjacent_or_overlap {
                 return false;
             }
@@ -352,12 +351,7 @@ fn disjoint_cavity_specs(
     accepted
 }
 
-fn build_swiss_cheese(
-    bed: u32,
-    depth: u32,
-    voxel: f32,
-    specs: &[CavitySpec],
-) -> Vec<LayerMask> {
+fn build_swiss_cheese(bed: u32, depth: u32, voxel: f32, specs: &[CavitySpec]) -> Vec<LayerMask> {
     let mut stack: Vec<LayerMask> = (0..depth).map(|_| solid_mask(bed, bed, voxel)).collect();
     for spec in specs {
         for dz in 0..spec.depth {
@@ -501,8 +495,7 @@ fn disjoint_cavity_specs_of_size(
             continue;
         }
         let overlaps = accepted.iter().any(|a| {
-            let z_adjacent_or_overlap =
-                c.z0 < a.z0 + a.depth + 1 && a.z0 < c.z0 + c.depth + 1;
+            let z_adjacent_or_overlap = c.z0 < a.z0 + a.depth + 1 && a.z0 < c.z0 + c.depth + 1;
             if !z_adjacent_or_overlap {
                 return false;
             }

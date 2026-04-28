@@ -1,32 +1,38 @@
-//! Bevy `Resource` newtype that bundles the resin + printer
-//! repositories so panel systems can query them without taking on
-//! `resinsim-core` repository types in their signatures.
+//! Bevy `Resource` newtype that wraps the pure
+//! `resinsim_core::app::ProfileRepos` so panel systems can query it
+//! without taking on `resinsim-core` repository types directly in their
+//! signatures.
 //!
 //! Constructed once at startup from a resolved data dir
-//! (`data_dir::resolve_data_dir`) and inserted into the App. Systems
-//! hold an `Option<Res<ProfileRepos>>` so a missing data dir keeps
-//! the app running with empty pickers and a visible error string in
+//! (`data_dir::resolve_data_dir`) and inserted into the App. Systems hold
+//! an `Option<Res<ProfileRepos>>` so a missing data dir keeps the app
+//! running with empty pickers and a visible error string in
 //! `SimulationResult.last_error`.
+//!
+//! ADR-0010 layering rule: this newtype lives on the viz side because
+//! `#[derive(Resource)]` is a Bevy concern. The pure data shape
+//! (`resinsim_core::app::ProfileRepos`) lives in core so the CLI can
+//! consume the same construct without taking on Bevy.
 
 use bevy::prelude::Resource;
-use resinsim_core::repositories::{PrinterProfileRepository, ResinProfileRepository};
+use resinsim_core::app::ProfileRepos as CoreProfileRepos;
 
 #[derive(Resource)]
-pub struct ProfileRepos {
-    pub resin: ResinProfileRepository,
-    pub printer: PrinterProfileRepository,
-}
+pub struct ProfileRepos(pub CoreProfileRepos);
 
 impl ProfileRepos {
-    /// Construct from a resolved data dir. `<data_dir>/resins/` and
-    /// `<data_dir>/printers/` are the conventional subdirectory layout
-    /// (matches `resinsim-inspect` and the workspace's `data/` shipping
-    /// fixtures).
+    /// Construct from a resolved data dir; delegates to
+    /// [`resinsim_core::app::ProfileRepos::new`] for the actual layout
+    /// convention (`<data_dir>/resins/`, `<data_dir>/printers/`).
     pub fn new(data_dir: &std::path::Path) -> Self {
-        Self {
-            resin: ResinProfileRepository::new(&data_dir.join("resins")),
-            printer: PrinterProfileRepository::new(&data_dir.join("printers")),
-        }
+        Self(CoreProfileRepos::new(data_dir))
+    }
+}
+
+impl std::ops::Deref for ProfileRepos {
+    type Target = CoreProfileRepos;
+    fn deref(&self) -> &CoreProfileRepos {
+        &self.0
     }
 }
 

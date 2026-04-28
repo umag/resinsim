@@ -1,9 +1,15 @@
 ---
-issue: recipe-aware-time-and-thermal
+issue: recipe-aware-time-and-thermal (re-pointed 2026-04-28 for ADR-0015)
 date: 2026-04-22
 ---
 
 # UAT: CLI temperature flags reject unphysical values at parse time
+
+**ADR-0015 note.** The `--initial-led-temp` and `--ambient` flags now live
+on `resinsim sim` (the producer), not `report health` (the consumer).
+The validation contract is unchanged — typed parse-time rejection with
+non-zero exit and no panic — but the surface that fields the flag has
+moved.
 
 ## UAT-1: `--initial-led-temp` rejects values at/below absolute zero
 
@@ -11,12 +17,12 @@ date: 2026-04-22
 `recipe-aware-time-and-thermal` found that a malformed `--initial-led-temp`
 panicked mid-simulation via `VatTemperature::new().expect()`. The
 `InitialLedTemperature` newtype + parse-time validation at
-`cmd_thermal` / `cmd_report_health` was introduced to convert that crash
-into an actionable user-facing error.
+`cmd_thermal` / `cmd_sim` (formerly `cmd_report_health`) was introduced to
+convert that crash into an actionable user-facing error.
 
 ```gherkin
 Scenario: UAT-1 --initial-led-temp rejects values at/below absolute zero
-  Given the resinsim inspect thermal subcommand
+  Given the resinsim inspect thermal OR resinsim sim subcommand
   When the user invokes it with "--initial-led-temp=-300"
   Then the process exits with a non-zero code (2)
   And stderr names the flag "initial" or "invalid" AND the phrase "absolute zero"
@@ -27,7 +33,7 @@ Scenario: UAT-1 --initial-led-temp rejects values at/below absolute zero
 
 ```gherkin
 Scenario: UAT-2 --initial-led-temp=NaN rejects without panic
-  Given the resinsim inspect thermal subcommand
+  Given the resinsim inspect thermal OR resinsim sim subcommand
   When the user invokes it with "--initial-led-temp NaN"
   Then the process exits with a non-zero code
   And the error path does NOT produce a Rust panic / stack trace
@@ -40,7 +46,7 @@ Scenario: UAT-2 --initial-led-temp=NaN rejects without panic
 
 ```gherkin
 Scenario: UAT-3 --ambient rejects unphysical values
-  Given the resinsim inspect thermal subcommand (or report health)
+  Given the resinsim inspect thermal subcommand OR resinsim sim
   When the user invokes it with "--ambient=-300" or "--ambient=NaN"
   Then the process exits with code 2
   And stderr names the flag ("invalid --ambient") AND the violated bound
@@ -58,7 +64,7 @@ Scenario: UAT-4 loud warning when resin TOML lacks measured Ea_cure
   Given a resin profile whose TOML omits "cure_kinetics_ea_kj_mol"
   When the user invokes "resinsim inspect thermal --resin <that> --printer <any>"
   Then stderr contains the strings "30 kJ/mol", "literature midpoint estimate", and "KB-153"
-  And the warning surfaces in "report health" as well (not just "inspect thermal")
+  And the warning surfaces in "resinsim sim" (the producer that loads profiles, post-ADR-0015) as well (not just "inspect thermal")
 ```
 
 ## UAT-5: measured Ea_cure suppresses the warning

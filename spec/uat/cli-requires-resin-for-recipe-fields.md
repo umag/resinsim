@@ -1,9 +1,16 @@
 ---
-issue: resin-recipe-model
+issue: resin-recipe-model (re-pointed 2026-04-28 for ADR-0015)
 date: 2026-04-21
 ---
 
 # UAT: `resinsim inspect zaxis` sources layer_height from resin recipe
+
+**ADR-0015 note.** The producer-consumer split (issue 15) does not change
+this UAT's surface: `inspect zaxis` continues to source `layer_height_um`
+from the resin recipe via `--resin <name>`. The same `--resin` semantics
+apply to the new `resinsim sim` subcommand (which hosts the profile
+loading post-ADR-0015) — the `cli-sim-producer-writes-sim-json` UAT
+covers that path.
 
 ## UAT-1: `--resin` supplies layer_height for zaxis subcommand
 

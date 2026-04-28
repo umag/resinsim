@@ -22,9 +22,7 @@ use super::world::{CavityEventSummary, UatWorld};
 
 // ---- UAT-1: fluid-permeable supports produce no suction event --------------
 
-#[given(
-    regex = r"^a LayerInput stack with raft \+ fluid-permeable column supports:$"
-)]
+#[given(regex = r"^a LayerInput stack with raft \+ fluid-permeable column supports:$")]
 fn given_raft_plus_columns(world: &mut UatWorld, step: &Step) {
     // Fold review finding #5: scenario-specific Given — no docstring
     // keyword routing. The DocString is preserved for spec readability
@@ -161,10 +159,7 @@ fn then_sealed_area_matches_interior(world: &mut UatWorld) {
         .expect("scenario invariant: prior Then captured sealed_area_mm2");
     // closed_cup_masks() uses a 5×5 grid with 3×3 interior = 9 cells at
     // voxel 0.5 mm => 9 * 0.25 = 2.25 mm².
-    assert!(
-        (area - 2.25).abs() < 1e-3,
-        "expected 2.25 mm²; got {area}",
-    );
+    assert!((area - 2.25).abs() < 1e-3, "expected 2.25 mm²; got {area}",);
 }
 
 #[then(regex = r"^suction_force_n equals 50 kPa × sealed_area_mm2 × 1e-3$")]
@@ -188,7 +183,10 @@ fn then_suction_count_zero(world: &mut UatWorld) {
         .cavity_events
         .as_ref()
         .expect("scenario invariant: Given step populated cavity_events");
-    assert!(events.is_empty(), "expected 0 suction events; got {events:#?}");
+    assert!(
+        events.is_empty(),
+        "expected 0 suction events; got {events:#?}"
+    );
 }
 
 #[then(regex = r"^exactly N SuctionCup failures appear$")]
@@ -197,7 +195,11 @@ fn then_exactly_n_failures(world: &mut UatWorld) {
         .cavity_events
         .as_ref()
         .expect("scenario invariant: Given step populated cavity_events");
-    assert_eq!(events.len(), 2, "expected 2 disjoint cavity events; got {events:#?}");
+    assert_eq!(
+        events.len(),
+        2,
+        "expected 2 disjoint cavity events; got {events:#?}"
+    );
 }
 
 #[then(regex = r"^each fires at its own cavity's closure layer$")]
@@ -210,13 +212,14 @@ fn then_each_at_closure(world: &mut UatWorld) {
     // cap layer (layer 9); the invariant is "each event has a valid
     // closure layer within the stack".
     for e in events {
-        assert!(e.layer > 0, "event at layer 0 would not be a closure: {e:?}");
+        assert!(
+            e.layer > 0,
+            "event at layer 0 would not be a closure: {e:?}"
+        );
     }
 }
 
-#[then(
-    regex = r"^CavityDetector::detect\(masks\) returns an empty Vec<CavityEvent>$"
-)]
+#[then(regex = r"^CavityDetector::detect\(masks\) returns an empty Vec<CavityEvent>$")]
 fn then_detect_returns_empty(world: &mut UatWorld) {
     let events = world
         .cavity_events

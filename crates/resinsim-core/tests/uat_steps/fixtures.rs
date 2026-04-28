@@ -54,10 +54,9 @@ thermal_tau_sec = 1200.0
 lcd_uniformity_variation = 0.22
 "#
     );
-    let p: PrinterProfile = toml::from_str(&toml_str)
-        .expect("narrowed printer TOML parses into PrinterProfile");
+    let p: PrinterProfile =
+        toml::from_str(&toml_str).expect("narrowed printer TOML parses into PrinterProfile");
     p.validate()
         .expect("narrowed printer satisfies PrinterProfile::validate()");
     p
 }
-

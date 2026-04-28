@@ -153,7 +153,11 @@ impl SimulationRunner {
             .unwrap_or(printer_voxel);
         let carrying_dims = layers
             .iter()
-            .find_map(|li| li.mask.as_ref().map(|m| (m.width_cells(), m.height_cells())))
+            .find_map(|li| {
+                li.mask
+                    .as_ref()
+                    .map(|m| (m.width_cells(), m.height_cells()))
+            })
             .unwrap_or((1, 1));
         let masks: Vec<LayerMask> = layers
             .iter()
@@ -422,11 +426,9 @@ mod tests {
         let h = 7u32;
         let voxel = 1.0_f32;
 
-        let solid_mask = LayerMask::new_all_solid(w, h, voxel)
-            .expect("7×7 @ 1mm mask constructs");
+        let solid_mask = LayerMask::new_all_solid(w, h, voxel).expect("7×7 @ 1mm mask constructs");
         let ring_mask = {
-            let mut m = LayerMask::new_all_solid(w, h, voxel)
-                .expect("7×7 @ 1mm mask constructs");
+            let mut m = LayerMask::new_all_solid(w, h, voxel).expect("7×7 @ 1mm mask constructs");
             for x in 1..w - 1 {
                 for y in 1..h - 1 {
                     m.clear(x, y).expect("interior cell in bounds");
@@ -444,27 +446,48 @@ mod tests {
         let layer_height_mm = layer_height_um / 1000.0;
         for _ in 0..base_layers {
             layers.push(
-                LayerInput::new(idx, solid_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
-                    .expect("valid LayerInput")
-                    .with_mask(solid_mask.clone()),
+                LayerInput::new(
+                    idx,
+                    solid_area,
+                    exposure_sec,
+                    lift_speed_mm_min,
+                    layer_height_um,
+                    z_mm,
+                )
+                .expect("valid LayerInput")
+                .with_mask(solid_mask.clone()),
             );
             idx += 1;
             z_mm += layer_height_mm;
         }
         for _ in 0..wall_layers {
             layers.push(
-                LayerInput::new(idx, ring_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
-                    .expect("valid LayerInput")
-                    .with_mask(ring_mask.clone()),
+                LayerInput::new(
+                    idx,
+                    ring_area,
+                    exposure_sec,
+                    lift_speed_mm_min,
+                    layer_height_um,
+                    z_mm,
+                )
+                .expect("valid LayerInput")
+                .with_mask(ring_mask.clone()),
             );
             idx += 1;
             z_mm += layer_height_mm;
         }
         for _ in 0..cap_layers {
             layers.push(
-                LayerInput::new(idx, solid_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
-                    .expect("valid LayerInput")
-                    .with_mask(solid_mask.clone()),
+                LayerInput::new(
+                    idx,
+                    solid_area,
+                    exposure_sec,
+                    lift_speed_mm_min,
+                    layer_height_um,
+                    z_mm,
+                )
+                .expect("valid LayerInput")
+                .with_mask(solid_mask.clone()),
             );
             idx += 1;
             z_mm += layer_height_mm;
@@ -482,7 +505,10 @@ mod tests {
             &layers,
             &ResinProfile::generic_standard(),
             &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 },
+            &SupportConfig {
+                tip_radius_mm: 0.2,
+                n_supports: 10,
+            },
             &default_plate(),
             test_ambient(),
             None,
@@ -526,7 +552,10 @@ mod tests {
             &layers,
             &ResinProfile::generic_standard(),
             &PrinterProfile::generic_msla_4k(),
-            &SupportConfig { tip_radius_mm: 0.2, n_supports: 10 },
+            &SupportConfig {
+                tip_radius_mm: 0.2,
+                n_supports: 10,
+            },
             &default_plate(),
             test_ambient(),
             None,

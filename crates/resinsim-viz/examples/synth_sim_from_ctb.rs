@@ -54,9 +54,8 @@ fn main() {
         sim.add_layer(lr, vec![])
             .unwrap_or_else(|e| panic!("add_layer({i}): {e:?}"));
     }
-    let json = serde_json::to_string_pretty(&sim).expect("serialize sim");
-    std::fs::write(&out_path, json)
-        .unwrap_or_else(|e| panic!("write {} failed: {e}", out_path.display()));
+    resinsim_core::repositories::save_to_path(&out_path, &sim)
+        .unwrap_or_else(|e| panic!("save_to_path({}) failed: {e}", out_path.display()));
     println!(
         "wrote {} layers ({:.1}–{:.1} µm cure_depth) to {}",
         layers.len(),

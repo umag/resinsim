@@ -17,11 +17,20 @@ pub struct UatWorld {
     /// Unused by current step defs (step 9 moved to predict_layer
     /// integration which populates `predict_layer_result`), retained
     /// for future component-level scenarios.
-    #[expect(dead_code, reason = "pre-step-9 spike mirror; kept for future scenarios")]
+    #[expect(
+        dead_code,
+        reason = "pre-step-9 spike mirror; kept for future scenarios"
+    )]
     pub capacity: Option<SupportCapacity>,
-    #[expect(dead_code, reason = "pre-step-9 spike mirror; kept for future scenarios")]
+    #[expect(
+        dead_code,
+        reason = "pre-step-9 spike mirror; kept for future scenarios"
+    )]
     pub force: Option<PeelForce>,
-    #[expect(dead_code, reason = "pre-step-9 spike mirror; kept for future scenarios")]
+    #[expect(
+        dead_code,
+        reason = "pre-step-9 spike mirror; kept for future scenarios"
+    )]
     pub computed_safety: Option<Option<SafetyFactor>>,
     /// Step-9 predict_layer output. Per-scenario (cucumber resets
     /// World between scenarios) so the capture doesn't leak across
@@ -169,9 +178,10 @@ lcd_uniformity_variation = 0.22
             lift_max = self.lift_speed_max,
             stiff = self.z_stiffness_n_per_mm,
         );
-        let p: resinsim_core::entities::PrinterProfile = toml::from_str(&toml_str)
-            .expect("PrinterBuilder TOML must parse");
-        p.validate().expect("PrinterBuilder output must satisfy validate()");
+        let p: resinsim_core::entities::PrinterProfile =
+            toml::from_str(&toml_str).expect("PrinterBuilder TOML must parse");
+        p.validate()
+            .expect("PrinterBuilder output must satisfy validate()");
         p
     }
 }
@@ -296,7 +306,8 @@ density_g_cm3 = {dens}
         );
         let r: resinsim_core::entities::ResinProfile =
             toml::from_str(&toml_str).expect("ResinBuilder TOML must parse");
-        r.validate().expect("ResinBuilder output must satisfy validate()");
+        r.validate()
+            .expect("ResinBuilder output must satisfy validate()");
         r
     }
 }
@@ -413,10 +424,10 @@ impl PredictLayerInputs {
     /// `ResinBuilder::new().build()` which share values with
     /// `PrinterProfile::generic_msla_4k()` + `ResinProfile::generic_standard()`.
     pub fn default_for_test() -> Self {
+        use resinsim_core::services::build_plate::PlateAdhesionProfile;
         use resinsim_core::services::failure_predictor::{
             LayerOverrides, SupportConfig, ThermalContext,
         };
-        use resinsim_core::services::build_plate::PlateAdhesionProfile;
         use resinsim_core::values::{AmbientTemperature, CrossSectionArea};
 
         let area = CrossSectionArea::new(100.0).expect("100 mm² is non-negative");
@@ -444,8 +455,8 @@ impl PredictLayerInputs {
     /// × 0 area = 0 peel force — which is the safety-factor-zero-force
     /// scenario's precondition. Returns Self for chaining.
     pub fn with_zero_area(mut self) -> Self {
-        self.area = resinsim_core::values::CrossSectionArea::new(0.0)
-            .expect("0 mm² is non-negative");
+        self.area =
+            resinsim_core::values::CrossSectionArea::new(0.0).expect("0 mm² is non-negative");
         self.prev_area = self.area;
         self
     }

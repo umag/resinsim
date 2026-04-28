@@ -121,16 +121,10 @@ fn then_no_printer_warning(world: &mut UatWorld) {
 
 // ---- UAT-1 (resin): Liqcreate TOML loads by name --------------------------
 
-#[given(
-    regex = r#"^a resin TOML at "<data-dir>/resins/liqcreate_premium_black\.toml"$"#
-)]
+#[given(regex = r#"^a resin TOML at "<data-dir>/resins/liqcreate_premium_black\.toml"$"#)]
 fn given_liqcreate_toml(_world: &mut UatWorld) {
     let path = workspace_data_dir().join("resins/liqcreate_premium_black.toml");
-    assert!(
-        path.exists(),
-        "fixture missing at {}",
-        path.display(),
-    );
+    assert!(path.exists(), "fixture missing at {}", path.display(),);
 }
 
 #[when(
@@ -193,7 +187,11 @@ fn then_no_resin_warning(world: &mut UatWorld) {
 )]
 fn given_three_printer_tomls(_world: &mut UatWorld) {
     let dir = workspace_data_dir().join("printers");
-    for name in ["athena_ii.toml", "elegoo_mars5_ultra.toml", "generic_msla_4k.toml"] {
+    for name in [
+        "athena_ii.toml",
+        "elegoo_mars5_ultra.toml",
+        "generic_msla_4k.toml",
+    ] {
         assert!(
             dir.join(name).exists(),
             "fixture {} missing in {}",
@@ -271,9 +269,7 @@ fn then_stdout_no_json(world: &mut UatWorld) {
 
 // ---- UAT-3: explicit scalar flag wins over profile value ------------------
 
-#[given(
-    regex = r#"^a printer TOML "athena_ii\.toml" with z_stiffness_n_per_mm = 1500\.0$"#
-)]
+#[given(regex = r#"^a printer TOML "athena_ii\.toml" with z_stiffness_n_per_mm = 1500\.0$"#)]
 fn given_athena_toml_uat3(_world: &mut UatWorld) {
     let path = workspace_data_dir().join("printers/athena_ii.toml");
     assert!(path.exists(), "athena_ii.toml fixture missing");
@@ -308,9 +304,8 @@ fn when_inspect_zaxis_uat3(world: &mut UatWorld) {
 #[then(regex = r"^the output reports stiffness_n_per_mm = 200$")]
 fn then_stiffness_200(world: &mut UatWorld) {
     let stdout = world.cli_stdout.as_deref().unwrap_or_default();
-    let stiffness =
-        f32_from_stdout_json(stdout, &["stiffness_n_per_mm", "z_stiffness_n_per_mm"])
-            .unwrap_or_else(|| panic!("stiffness_n_per_mm not in output; got: {stdout}"));
+    let stiffness = f32_from_stdout_json(stdout, &["stiffness_n_per_mm", "z_stiffness_n_per_mm"])
+        .unwrap_or_else(|| panic!("stiffness_n_per_mm not in output; got: {stdout}"));
     assert!(
         (stiffness - 200.0).abs() < 1e-3,
         "explicit --stiffness 200 must reach the output; got {stiffness} (athena profile's 1500 would have won here without the override)",
@@ -333,9 +328,7 @@ fn then_deflection_234(world: &mut UatWorld) {
     );
 }
 
-#[then(
-    regex = r"^no warning or override notice is emitted \(scriptability > chattiness\)$"
-)]
+#[then(regex = r"^no warning or override notice is emitted \(scriptability > chattiness\)$")]
 fn then_no_override_warning(world: &mut UatWorld) {
     let stderr = world.cli_stderr.as_deref().unwrap_or_default();
     // Allow informational diagnostics (e.g. KB-153 Ea-default warning)
@@ -349,9 +342,7 @@ fn then_no_override_warning(world: &mut UatWorld) {
 
 // ---- UAT-4: no profile flag skips data-dir resolution entirely ------------
 
-#[given(
-    regex = r#"^"RESINSIM_DATA_DIR=/definitely/does/not/exist" is set in the environment$"#
-)]
+#[given(regex = r#"^"RESINSIM_DATA_DIR=/definitely/does/not/exist" is set in the environment$"#)]
 fn given_bogus_env(world: &mut UatWorld) {
     world.cli_env = Some(vec![(
         "RESINSIM_DATA_DIR".to_string(),
@@ -391,18 +382,15 @@ fn then_exits_successfully(world: &mut UatWorld) {
 #[then(regex = r"^the output uses the built-in default stiffness of 460\.0 N/mm$")]
 fn then_default_stiffness(world: &mut UatWorld) {
     let stdout = world.cli_stdout.as_deref().unwrap_or_default();
-    let stiffness =
-        f32_from_stdout_json(stdout, &["stiffness_n_per_mm", "z_stiffness_n_per_mm"])
-            .unwrap_or_else(|| panic!("stiffness_n_per_mm not in output; got: {stdout}"));
+    let stiffness = f32_from_stdout_json(stdout, &["stiffness_n_per_mm", "z_stiffness_n_per_mm"])
+        .unwrap_or_else(|| panic!("stiffness_n_per_mm not in output; got: {stdout}"));
     assert!(
         (stiffness - 460.0).abs() < 1e-3,
         "built-in default stiffness must be 460.0 N/mm; got {stiffness}",
     );
 }
 
-#[then(
-    regex = r"^no error about the invalid RESINSIM_DATA_DIR is emitted .*$"
-)]
+#[then(regex = r"^no error about the invalid RESINSIM_DATA_DIR is emitted .*$")]
 fn then_no_data_dir_error(world: &mut UatWorld) {
     let stderr = world.cli_stderr.as_deref().unwrap_or_default();
     assert!(
@@ -464,9 +452,8 @@ fn then_flag_wins(world: &mut UatWorld) {
         exit, 0,
         "flag-wins must succeed even with bogus env path; stderr={stderr}",
     );
-    let stiffness =
-        f32_from_stdout_json(stdout, &["stiffness_n_per_mm", "z_stiffness_n_per_mm"])
-            .unwrap_or_else(|| panic!("stiffness_n_per_mm not in output; got: {stdout}"));
+    let stiffness = f32_from_stdout_json(stdout, &["stiffness_n_per_mm", "z_stiffness_n_per_mm"])
+        .unwrap_or_else(|| panic!("stiffness_n_per_mm not in output; got: {stdout}"));
     assert!(
         (stiffness - 1500.0).abs() < 1e-3,
         "athena_ii loaded via --data-dir flag must surface stiffness 1500; got {stiffness} (stage (b) bogus env would have hard-errored before this point)",
@@ -503,12 +490,18 @@ fn when_all_stages_miss(world: &mut UatWorld) {
     use super::cli_fixtures::invoke_resinsim_with_unset;
     // Use a cwd that has no ./data/ — $CARGO_TARGET_TMPDIR is a clean
     // dir owned by the test runner.
-    let tmpdir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("uat-all-stages-miss-cwd");
+    let tmpdir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("uat-all-stages-miss-cwd");
     let _ = std::fs::create_dir_all(&tmpdir);
     let bin = super::cli_fixtures::resinsim_bin_path();
     let out = std::process::Command::new(&bin)
-        .args(["inspect", "zaxis", "--force", "46.8", "--printer", "athena_ii"])
+        .args([
+            "inspect",
+            "zaxis",
+            "--force",
+            "46.8",
+            "--printer",
+            "athena_ii",
+        ])
         .env_remove("RESINSIM_DATA_DIR")
         .env_remove("RUST_BACKTRACE")
         .current_dir(&tmpdir)

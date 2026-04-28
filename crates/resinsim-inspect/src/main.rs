@@ -21,54 +21,87 @@ enum Commands {
         #[command(subcommand)]
         report_type: ReportType,
     },
-}
-
-#[derive(Subcommand)]
-enum ReportType {
-    /// Full print risk assessment from an STL file — force, safety factor,
-    /// thermals, deflection extrema, plus total print time with bottom /
-    /// transition / normal phase breakdown.
+    /// Produce a sim.json simulation envelope from a sliced input.
     ///
-    /// Resolves --printer and --resin by loading TOML from the data
-    /// directory (see ADR-0004 for the 4-stage resolution chain: --data-dir
-    /// flag > RESINSIM_DATA_DIR env > $CWD/data > <binary>/data).
-    Health {
-        /// Path to STL file
-        #[arg(long)]
-        stl: Option<String>,
-        /// Path to sliced file (CTB, auto-detected)
-        #[arg(long)]
-        file: Option<String>,
+    /// `sim.json` is the canonical interchange between the simulation
+    /// producer and downstream consumers (LLM tooling, resinsim-viz,
+    /// `resinsim report health --in`). The schema is governed by
+    /// docs/adr/0015-sim-json-canonical-interchange.md and the canonical
+    /// definition is `schemas/sim-json/v1.ts` (zod 4); the on-disk shape
+    /// is `{ schema_version, simulation }`.
+    ///
+    /// Pipeline example:
+    ///   resinsim sim --file model.ctb --resin generic_standard \
+    ///       --printer generic_msla_4k --out model.sim.json
+    ///   resinsim report health --in model.sim.json
+    ///
+    /// See also: `resinsim report health --in <PATH>` consumes the sim.json
+    /// produced here; `resinsim-viz --load-sim <PATH>` renders the same
+    /// envelope on the GUI.
+    Sim {
+        /// Path to STL file. Exactly one of --stl or --file must be
+        /// provided; clap rejects both-missing and both-present.
+        #[arg(long, conflicts_with = "file", required_unless_present = "file")]
+        stl: Option<std::path::PathBuf>,
+        /// Path to sliced file (CTB, auto-detected). Exactly one of
+        /// --stl or --file must be provided.
+        #[arg(long, conflicts_with = "stl", required_unless_present = "stl")]
+        file: Option<std::path::PathBuf>,
         /// Resin name (file stem of a .toml under <data-dir>/resins/).
         ///
-        /// The binary resolves the data-dir via the 4-stage chain documented
-        /// in docs/adr/0004-cli-profile-loading.md: --data-dir flag →
-        /// $RESINSIM_DATA_DIR → $CWD/data → <binary-parent>/data. Unknown
-        /// names hard-error with the list of available profiles.
+        /// Resolved via the ADR-0004 4-stage data-dir chain. Unknown
+        /// names hard-error with the available-profiles list.
         #[arg(long, default_value = "generic_standard")]
         resin: String,
         /// Printer name (file stem of a .toml under <data-dir>/printers/).
-        /// See --resin for the data-dir resolution chain.
         #[arg(long, default_value = "generic_msla_4k")]
         printer: String,
         /// Profile data directory (stage (a) of the ADR-0004 resolution chain).
         #[arg(long)]
         data_dir: Option<std::path::PathBuf>,
-        /// Support tip radius in mm
+        /// Support tip radius in mm (defaults to v1: 0.2).
         #[arg(long, default_value_t = 0.2)]
         tip_radius: f32,
-        /// Number of supports
+        /// Number of supports (defaults to v1: 20).
         #[arg(long, default_value_t = 20)]
         n_supports: u32,
-        /// Ambient temperature in °C
+        /// Ambient temperature in °C (defaults to v1: 22.0).
         #[arg(long, default_value_t = 22.0)]
         ambient: f32,
-        /// Initial LED case temperature in °C at print start (ADR-0007 / KB-152).
-        /// When omitted, falls back to --ambient — the legacy single-stage
-        /// behaviour. Supply the idle-standby reading from the printer (e.g.
-        /// Mars 5 Ultra ≈ 27 °C) to exercise the two-stage LED → vat model.
+        /// Initial LED case temperature in °C at print start (ADR-0007 /
+        /// KB-152). When omitted, falls back to --ambient (legacy single-stage
+        /// behaviour).
         #[arg(long)]
         initial_led_temp: Option<f32>,
+        /// Output path for the sim.json envelope. Default: `<input-stem>.sim.json`
+        /// in the input's parent directory. Existing files are overwritten
+        /// silently (POSIX default; ADR-0015).
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReportType {
+    /// Full print risk assessment from a sim.json envelope — force, safety
+    /// factor, thermals, deflection extrema, plus total print time with
+    /// bottom / transition / normal phase breakdown.
+    ///
+    /// As of ADR-0015 this subcommand consumes a `sim.json` envelope produced
+    /// by `resinsim sim` rather than building the simulation inline. The
+    /// envelope is the canonical interchange format. The legacy
+    /// --stl/--file/--resin/--printer/--data-dir/--tip-radius/--n-supports/
+    /// --ambient/--initial-led-temp args have been removed; produce a
+    /// sim.json first via `resinsim sim` and pass `--in <PATH>`.
+    ///
+    /// Pipeline example:
+    ///   resinsim sim --file model.ctb --resin generic_standard \
+    ///       --printer generic_msla_4k --out model.sim.json
+    ///   resinsim report health --in model.sim.json
+    Health {
+        /// Path to a `sim.json` envelope produced by `resinsim sim`.
+        #[arg(long)]
+        r#in: std::path::PathBuf,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -376,30 +409,31 @@ fn main() {
             } => cmd_inspect_layers(&file, from, to, stats, json),
         },
         Commands::Report { report_type } => match report_type {
-            ReportType::Health {
-                stl,
-                file,
-                resin,
-                printer,
-                data_dir,
-                tip_radius,
-                n_supports,
-                ambient,
-                initial_led_temp,
-                json,
-            } => cmd_report_health(
-                stl.as_deref(),
-                file.as_deref(),
-                &resin,
-                &printer,
-                data_dir.as_deref(),
-                tip_radius,
-                n_supports,
-                ambient,
-                initial_led_temp,
-                json,
-            ),
+            ReportType::Health { r#in, json } => cmd_report_health(&r#in, json),
         },
+        Commands::Sim {
+            stl,
+            file,
+            resin,
+            printer,
+            data_dir,
+            tip_radius,
+            n_supports,
+            ambient,
+            initial_led_temp,
+            out,
+        } => cmd_sim(
+            stl.as_deref(),
+            file.as_deref(),
+            &resin,
+            &printer,
+            data_dir.as_deref(),
+            tip_radius,
+            n_supports,
+            ambient,
+            initial_led_temp,
+            out.as_deref(),
+        ),
     }
 }
 
@@ -633,7 +667,7 @@ fn cmd_thermal(
     data_dir: Option<&std::path::Path>,
     json: bool,
 ) {
-    use resinsim_core::entities::{DEFAULT_CURE_KINETICS_EA_KJ_MOL, ResinProfile};
+    use resinsim_core::entities::{ResinProfile, DEFAULT_CURE_KINETICS_EA_KJ_MOL};
     use resinsim_core::services::{CureCalculator, LayerTimingCalculator, ThermalCalculator};
     use resinsim_core::values::{
         AmbientTemperature, Energy, InitialLedTemperature, ThermalTimeConstant,
@@ -706,7 +740,8 @@ fn cmd_thermal(
     // Parse-time validation of --initial-led-temp via the InitialLedTemperature
     // value constructor. Rejects NaN / below absolute zero / infinite before
     // any simulation work begins (ADR-0007 follow-on).
-    let initial_led_temp_typed = match initial_led_temp.map(InitialLedTemperature::new).transpose() {
+    let initial_led_temp_typed = match initial_led_temp.map(InitialLedTemperature::new).transpose()
+    {
         Ok(v) => v,
         Err(e) => {
             eprintln!("invalid --initial-led-temp: {e}");
@@ -774,9 +809,8 @@ fn cmd_thermal(
         let ec_ref = Energy::new(resin_prof.critical_energy_mj_cm2())
             .expect("validated ResinProfile has positive critical_energy_mj_cm2");
         let ref_temp_c = resin_prof.reference_temp_c();
-        let initial_led_c_for_display = initial_led_temp_typed
-            .map(|t| t.value())
-            .unwrap_or(ambient);
+        let initial_led_c_for_display =
+            initial_led_temp_typed.map(|t| t.value()).unwrap_or(ambient);
 
         let samples: Vec<ThermalSample> = sample_layers
             .iter()
@@ -1124,9 +1158,82 @@ fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
 // CLI handler — 9 args after --data-dir (ADR-0004). Profile resolution is
 // unconditional here because both --printer and --resin have clap defaults.
 #[allow(clippy::too_many_arguments)]
-fn cmd_report_health(
-    path: Option<&str>,
-    file_path: Option<&str>,
+fn cmd_report_health(in_path: &std::path::Path, json: bool) {
+    use resinsim_core::app::{ReportContext, ReportGenerator};
+    use resinsim_core::repositories::load_envelope;
+
+    let envelope = match load_envelope(in_path) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Reconstruct the report header from the envelope's provenance metadata
+    // when present. Envelopes saved by `resinsim sim` always carry
+    // provenance; envelopes saved by the GUI Save-Sim path or by older
+    // producers may not — emit `None` so JSON mode renders explicit `null`
+    // (downstream machine consumers branch on null cleanly) and text mode
+    // renders the "(unknown)" placeholder. The simulation aggregate itself
+    // is the load-bearing payload; the header is supplementary metadata.
+    let ctx = match envelope.provenance.as_ref() {
+        Some(p) => ReportContext {
+            stl_path: p.input_path.clone(),
+            resin_name: Some(p.resin_name.clone()),
+            printer_name: Some(p.printer_name.clone()),
+            n_supports: Some(p.n_supports),
+            tip_radius_mm: Some(p.tip_radius_mm),
+        },
+        None => ReportContext {
+            stl_path: in_path.display().to_string(),
+            resin_name: None,
+            printer_name: None,
+            n_supports: None,
+            tip_radius_mm: None,
+        },
+    };
+
+    if json {
+        print!(
+            "{}",
+            ReportGenerator::json_format(&envelope.simulation, &ctx)
+        );
+        println!();
+    } else {
+        print!(
+            "{}",
+            ReportGenerator::text_format(&envelope.simulation, &ctx)
+        );
+    }
+}
+
+/// Default output path: `<input-stem>.sim.json` in the input's parent dir.
+/// `<input-stem>` is whichever of `--stl` / `--file` is present.
+fn default_sim_out_path(
+    stl: Option<&std::path::Path>,
+    file: Option<&std::path::Path>,
+) -> std::path::PathBuf {
+    let input = file
+        .or(stl)
+        .expect("caller guarantees at least one input is set");
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("simulation");
+    let parent = input.parent().filter(|p| !p.as_os_str().is_empty());
+    let mut out = match parent {
+        Some(p) => p.to_path_buf(),
+        None => std::path::PathBuf::from("."),
+    };
+    out.push(format!("{stem}.sim.json"));
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_sim(
+    stl: Option<&std::path::Path>,
+    file: Option<&std::path::Path>,
     resin_name: &str,
     printer_name: &str,
     data_dir: Option<&std::path::Path>,
@@ -1134,26 +1241,26 @@ fn cmd_report_health(
     n_supports: u32,
     ambient: f32,
     initial_led_temp: Option<f32>,
-    json: bool,
+    out: Option<&std::path::Path>,
 ) {
-    use resinsim_core::app::{ReportContext, ReportGenerator, SimulationRunner};
-    use resinsim_core::entities::DEFAULT_CURE_KINETICS_EA_KJ_MOL;
+    use resinsim_core::app::SimulationRunner;
+    use resinsim_core::repositories::{save_with_provenance, Provenance};
     use resinsim_core::services::build_plate::PlateAdhesionProfile;
     use resinsim_core::services::failure_predictor::SupportConfig;
     use resinsim_core::values::{AmbientTemperature, InitialLedTemperature};
-    use std::path::Path;
 
-    // Parse-time validation of --initial-led-temp via the typed constructor —
-    // rejects NaN / below absolute zero / infinite before any simulation work.
-    let initial_led_temp_typed = match initial_led_temp.map(InitialLedTemperature::new).transpose() {
+    // clap enforces exactly-one-of via required_unless_present + conflicts_with
+    // on the Sim variant's stl/file fields, so we know one is set here.
+
+    // Parse-time validation of typed scalars before any IO.
+    let initial_led_temp_typed = match initial_led_temp.map(InitialLedTemperature::new).transpose()
+    {
         Ok(v) => v,
         Err(e) => {
             eprintln!("invalid --initial-led-temp: {e}");
             std::process::exit(2);
         }
     };
-
-    // Parse-time validation of --ambient via AmbientTemperature::new.
     let ambient_typed = match AmbientTemperature::new(ambient) {
         Ok(v) => v,
         Err(e) => {
@@ -1162,52 +1269,65 @@ fn cmd_report_health(
         }
     };
 
-    let data_dir = match profile_loader::resolve_data_dir(data_dir) {
-        Ok(d) => d,
+    let resolved = match profile_loader::resolve_profiles(data_dir, resin_name, printer_name) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(1);
         }
     };
-    let resin = match profile_loader::load_resin(&data_dir, resin_name) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
-    let printer = match profile_loader::load_printer(&data_dir, printer_name) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
+
     let supports = SupportConfig {
         tip_radius_mm: tip_radius,
         n_supports,
     };
     let plate = PlateAdhesionProfile::default_textured();
 
-    let path = file_path.or(path).unwrap_or_else(|| {
-        eprintln!("Error: provide --file or --stl");
-        std::process::exit(1);
-    });
+    let input_path = file
+        .or(stl)
+        .expect("clap required_unless_present guarantees at least one input is set");
 
-    // Loud warning when the resin TOML relies on the KB-153 literature-midpoint
-    // default for cure-kinetics Ea (Ec(T) Arrhenius correction).
-    if resin.cure_kinetics_ea_kj_mol().is_none() && !json {
+    // Resolve the output path BEFORE running the simulation, so an unwritable
+    // --out (parent doesn't exist as a directory, permission denied, etc.)
+    // surfaces early — the user shouldn't spend N seconds computing only to
+    // hit a write failure at the end. The probe is best-effort: we create
+    // the parent directory if it doesn't exist; if create_dir_all itself
+    // fails (parent is a file, no permission), we exit before any compute.
+    // Note: input_path uses lossy display() for the provenance string —
+    // resinsim is dev-platform Linux/macOS today (per ADR-0015), Windows
+    // non-UTF8 paths are not in scope.
+    let out_owned;
+    let out_path: &std::path::Path = match out {
+        Some(p) => p,
+        None => {
+            out_owned = default_sim_out_path(stl, file);
+            &out_owned
+        }
+    };
+    if let Some(parent) = out_path.parent().filter(|p| !p.as_os_str().is_empty())
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
         eprintln!(
-            "WARNING: cure-kinetics Ea = {DEFAULT_CURE_KINETICS_EA_KJ_MOL} kJ/mol (literature midpoint estimate) \
-             — replace with a measured value in the resin's TOML profile before \
-             trusting cure-depth drift (KB-153)"
+            "Error: cannot prepare --out parent directory {}: {e}",
+            parent.display()
         );
+        std::process::exit(1);
     }
 
+    // Reuse the run_auto entry — it routes STL vs CTB by extension and
+    // produces the same PrintSimulation that the GUI Run button does.
+    eprintln!(
+        "Producing sim.json from {} using resin '{}' + printer '{}'...",
+        input_path.display(),
+        resolved.resin.name(),
+        resolved.printer.name()
+    );
+
+    let start = std::time::Instant::now();
     let sim = match SimulationRunner::run_auto(
-        Path::new(path),
-        &resin,
-        &printer,
+        input_path,
+        &resolved.resin,
+        &resolved.printer,
         &supports,
         &plate,
         ambient_typed,
@@ -1215,25 +1335,40 @@ fn cmd_report_health(
     ) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Error: {e}");
+            eprintln!(
+                "Error producing sim.json from {}: {e}",
+                input_path.display()
+            );
             std::process::exit(1);
         }
     };
 
-    let ctx = ReportContext {
-        stl_path: path.to_string(),
-        resin_name: resin.name().to_string(),
-        printer_name: printer.name().to_string(),
+    let provenance = Provenance {
+        input_path: input_path.display().to_string(),
+        resin_name: resolved.resin.name().to_string(),
+        printer_name: resolved.printer.name().to_string(),
         n_supports,
         tip_radius_mm: tip_radius,
     };
-
-    if json {
-        print!("{}", ReportGenerator::json_format(&sim, &ctx));
-        println!();
-    } else {
-        print!("{}", ReportGenerator::text_format(&sim, &ctx));
+    if let Err(e) = save_with_provenance(out_path, &sim, &provenance) {
+        eprintln!("Error writing sim.json to {}: {e}", out_path.display());
+        std::process::exit(1);
     }
+
+    let summary = sim.summary();
+    let elapsed = start.elapsed();
+    let elapsed_sec = elapsed.as_secs_f32();
+    let elapsed_str = if elapsed_sec >= 60.0 {
+        resinsim_core::app::format_duration_hms(elapsed_sec)
+    } else {
+        format!("{elapsed_sec:.2}s")
+    };
+    eprintln!(
+        "Wrote {} layers to {} in {}.",
+        summary.total_layers,
+        out_path.display(),
+        elapsed_str
+    );
 }
 
 fn cmd_inspect_layers(file: &str, from: Option<u32>, to: Option<u32>, stats: bool, json: bool) {
@@ -1319,5 +1454,59 @@ fn cmd_inspect_layers(file: &str, from: Option<u32>, to: Option<u32>, stats: boo
                 l.index, l.cross_section_area_mm2, l.exposure_sec, l.z_mm
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for `cmd_sim` helpers. The CLI surface is integration-
+    //! tested in `tests/profile_loader_cli.rs` and
+    //! `tests/report_health_time_cli.rs`; this module covers pure helpers
+    //! that don't need a child-process spawn.
+
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn default_sim_out_path_uses_input_parent_dir_when_present() {
+        let stl = std::path::PathBuf::from("/tmp/work/widget.stl");
+        let out = default_sim_out_path(Some(&stl), None);
+        assert_eq!(out, Path::new("/tmp/work/widget.sim.json"));
+    }
+
+    #[test]
+    fn default_sim_out_path_falls_back_to_dot_when_no_parent() {
+        // A bare filename (no parent component) should land in CWD.
+        let file = std::path::PathBuf::from("widget.ctb");
+        let out = default_sim_out_path(None, Some(&file));
+        assert_eq!(out, Path::new("./widget.sim.json"));
+    }
+
+    #[test]
+    fn default_sim_out_path_handles_input_with_no_extension() {
+        // file_stem on a no-extension input returns the whole filename.
+        let file = std::path::PathBuf::from("/tmp/cube_no_ext");
+        let out = default_sim_out_path(None, Some(&file));
+        assert_eq!(out, Path::new("/tmp/cube_no_ext.sim.json"));
+    }
+
+    #[test]
+    fn default_sim_out_path_preserves_multi_segment_stem() {
+        // file_stem on "a.b.stl" returns "a.b" (the last `.` segment is
+        // the extension). We verify the canonical multi-dot behaviour.
+        let stl = std::path::PathBuf::from("/tmp/a.b.stl");
+        let out = default_sim_out_path(Some(&stl), None);
+        assert_eq!(out, Path::new("/tmp/a.b.sim.json"));
+    }
+
+    #[test]
+    fn default_sim_out_path_prefers_file_over_stl_when_both_present() {
+        // The function uses `file.or(stl)` so --file wins when both are
+        // somehow set (clap rejects this combination at parse time, but
+        // the helper must still be total).
+        let stl = std::path::PathBuf::from("/from-stl/a.stl");
+        let file = std::path::PathBuf::from("/from-file/b.ctb");
+        let out = default_sim_out_path(Some(&stl), Some(&file));
+        assert_eq!(out, Path::new("/from-file/b.sim.json"));
     }
 }

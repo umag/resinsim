@@ -49,7 +49,11 @@ pub struct LoadedSliceStack {
 fn first_mask_dims(layers: &[LayerInput]) -> Option<(u32, u32, f32)> {
     for layer in layers {
         if let Some(mask) = layer.mask.as_ref() {
-            return Some((mask.width_cells(), mask.height_cells(), mask.voxel_size_mm()));
+            return Some((
+                mask.width_cells(),
+                mask.height_cells(),
+                mask.voxel_size_mm(),
+            ));
         }
     }
     None
@@ -158,10 +162,7 @@ pub fn slice_stack_bounding_box(layers: &[LayerInput]) -> BoundingBox {
 /// `Assets<Mesh>::get_mut()` on this mesh handle. Honouring this
 /// contract is what satisfies the issue's "Update on layer change
 /// without re-uploading the mesh" constraint.
-pub fn slice_stack_to_bevy_mesh(
-    layers: &[LayerInput],
-    colors: Option<&[[f32; 4]]>,
-) -> Mesh {
+pub fn slice_stack_to_bevy_mesh(layers: &[LayerInput], colors: Option<&[[f32; 4]]>) -> Mesh {
     // Pass 1 — dim validation. Returns early on all-None or mismatch.
     let Some((w, h, voxel_size_mm)) = first_mask_dims(layers) else {
         return empty_mesh();
@@ -237,12 +238,7 @@ pub fn slice_stack_to_bevy_mesh(
                         &mut normals,
                         &mut indices,
                         [-1.0, 0.0, 0.0],
-                        [
-                            [x0, y1, z0],
-                            [x0, y0, z0],
-                            [x0, y0, z1],
-                            [x0, y1, z1],
-                        ],
+                        [[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]],
                     );
                     push_face_color(colors_buf.as_mut(), layer_color);
                 }
@@ -253,12 +249,7 @@ pub fn slice_stack_to_bevy_mesh(
                         &mut normals,
                         &mut indices,
                         [1.0, 0.0, 0.0],
-                        [
-                            [x1, y0, z0],
-                            [x1, y1, z0],
-                            [x1, y1, z1],
-                            [x1, y0, z1],
-                        ],
+                        [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
                     );
                     push_face_color(colors_buf.as_mut(), layer_color);
                 }
@@ -269,12 +260,7 @@ pub fn slice_stack_to_bevy_mesh(
                         &mut normals,
                         &mut indices,
                         [0.0, -1.0, 0.0],
-                        [
-                            [x0, y0, z0],
-                            [x1, y0, z0],
-                            [x1, y0, z1],
-                            [x0, y0, z1],
-                        ],
+                        [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
                     );
                     push_face_color(colors_buf.as_mut(), layer_color);
                 }
@@ -285,49 +271,32 @@ pub fn slice_stack_to_bevy_mesh(
                         &mut normals,
                         &mut indices,
                         [0.0, 1.0, 0.0],
-                        [
-                            [x1, y1, z0],
-                            [x0, y1, z0],
-                            [x0, y1, z1],
-                            [x1, y1, z1],
-                        ],
+                        [[x1, y1, z0], [x0, y1, z0], [x0, y1, z1], [x1, y1, z1]],
                     );
                     push_face_color(colors_buf.as_mut(), layer_color);
                 }
                 // -Z face: i==0 OR previous layer's mask is None OR
                 // previous layer's voxel at (cx, cy) is empty.
-                let neg_z_exposed = i == 0
-                    || z_face_void(layers, i - 1, cx, cy);
+                let neg_z_exposed = i == 0 || z_face_void(layers, i - 1, cx, cy);
                 if neg_z_exposed {
                     push_quad(
                         &mut positions,
                         &mut normals,
                         &mut indices,
                         [0.0, 0.0, -1.0],
-                        [
-                            [x0, y0, z0],
-                            [x0, y1, z0],
-                            [x1, y1, z0],
-                            [x1, y0, z0],
-                        ],
+                        [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]],
                     );
                     push_face_color(colors_buf.as_mut(), layer_color);
                 }
                 // +Z face.
-                let pos_z_exposed = i + 1 == n
-                    || z_face_void(layers, i + 1, cx, cy);
+                let pos_z_exposed = i + 1 == n || z_face_void(layers, i + 1, cx, cy);
                 if pos_z_exposed {
                     push_quad(
                         &mut positions,
                         &mut normals,
                         &mut indices,
                         [0.0, 0.0, 1.0],
-                        [
-                            [x0, y1, z1],
-                            [x0, y0, z1],
-                            [x1, y0, z1],
-                            [x1, y1, z1],
-                        ],
+                        [[x0, y1, z1], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1]],
                     );
                     push_face_color(colors_buf.as_mut(), layer_color);
                 }
@@ -335,10 +304,13 @@ pub fn slice_stack_to_bevy_mesh(
         }
     }
 
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-        .with_inserted_indices(Indices::U32(indices));
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices));
     if let Some(buf) = colors_buf {
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, buf);
     }
@@ -370,10 +342,13 @@ fn z_face_void(layers: &[LayerInput], idx: usize, cx: u32, cy: u32) -> bool {
 }
 
 fn empty_mesh() -> Mesh {
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, Vec::<[f32; 3]>::new())
-        .with_inserted_indices(Indices::U32(Vec::new()))
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, Vec::<[f32; 3]>::new())
+    .with_inserted_indices(Indices::U32(Vec::new()))
 }
 
 /// Append one axis-aligned quad as 2 triangles (6 vertices, 6 indices)
@@ -417,9 +392,16 @@ mod tests {
     fn solid_mask_layer(layer_height_um: f32, w: u32, h: u32, voxel: f32) -> LayerInput {
         let mask = LayerMask::new_all_solid(w, h, voxel)
             .expect("LayerMask::new_all_solid accepts positive dims and positive voxel size");
-        LayerInput::new(0, (w * h) as f64 * (voxel as f64).powi(2), 1.0, 60.0, layer_height_um, 0.0)
-            .expect("LayerInput::new accepts non-negative area and positive exposure")
-            .with_mask(mask)
+        LayerInput::new(
+            0,
+            (w * h) as f64 * (voxel as f64).powi(2),
+            1.0,
+            60.0,
+            layer_height_um,
+            0.0,
+        )
+        .expect("LayerInput::new accepts non-negative area and positive exposure")
+        .with_mask(mask)
     }
 
     fn no_mask_layer(layer_height_um: f32) -> LayerInput {
@@ -480,11 +462,21 @@ mod tests {
         // Collect unique normal directions; expect exactly the canonical six axis-aligned units.
         let mut unique: Vec<[i32; 3]> = normals
             .iter()
-            .map(|n| [n[0].round() as i32, n[1].round() as i32, n[2].round() as i32])
+            .map(|n| {
+                [
+                    n[0].round() as i32,
+                    n[1].round() as i32,
+                    n[2].round() as i32,
+                ]
+            })
             .collect();
         unique.sort();
         unique.dedup();
-        assert_eq!(unique.len(), 6, "expected six unique face normals, got {unique:?}");
+        assert_eq!(
+            unique.len(),
+            6,
+            "expected six unique face normals, got {unique:?}"
+        );
         for n in &unique {
             assert_eq!(
                 n[0].abs() + n[1].abs() + n[2].abs(),
@@ -540,9 +532,7 @@ mod tests {
     #[test]
     fn bounding_box_matches_grid_dims_and_cumulative_z() {
         // 4×3 mask, 0.5mm voxel, 100µm layers × 5 layers.
-        let layers: Vec<LayerInput> = (0..5)
-            .map(|_| empty_mask_layer(100.0, 4, 3, 0.5))
-            .collect();
+        let layers: Vec<LayerInput> = (0..5).map(|_| empty_mask_layer(100.0, 4, 3, 0.5)).collect();
         let bbox = slice_stack_bounding_box(&layers);
         assert!(
             (bbox.min[0] - 0.0).abs() < 1e-6,
@@ -585,7 +575,11 @@ mod tests {
 
     #[test]
     fn all_none_masks_yields_empty_mesh() {
-        let layers = vec![no_mask_layer(100.0), no_mask_layer(100.0), no_mask_layer(100.0)];
+        let layers = vec![
+            no_mask_layer(100.0),
+            no_mask_layer(100.0),
+            no_mask_layer(100.0),
+        ];
         let mesh = slice_stack_to_bevy_mesh(&layers, None);
         assert_eq!(positions_of(&mesh).len(), 0);
     }
@@ -679,10 +673,11 @@ mod tests {
     }
 
     fn colors_of(mesh: &Mesh) -> Option<Vec<[f32; 4]>> {
-        mesh.attribute(Mesh::ATTRIBUTE_COLOR).map(|attr| match attr {
-            VertexAttributeValues::Float32x4(v) => v.clone(),
-            other => panic!("expected Float32x4 colors, got {other:?}"),
-        })
+        mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+            .map(|attr| match attr {
+                VertexAttributeValues::Float32x4(v) => v.clone(),
+                other => panic!("expected Float32x4 colors, got {other:?}"),
+            })
     }
 
     #[test]

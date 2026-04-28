@@ -12,7 +12,7 @@ pub use cure_depth::{CureDepth, Energy, PenetrationDepth};
 pub use float_range::FloatRange;
 pub use force::{PeelForce, SafetyFactor, SupportCapacity};
 pub use int_range::IntRange;
-pub use layer_mask::{DEFAULT_VOXEL_SIZE_MM, LayerGeometry, LayerMask, MaskError};
+pub use layer_mask::{LayerGeometry, LayerMask, MaskError, DEFAULT_VOXEL_SIZE_MM};
 pub use layer_phase::LayerPhase;
 pub use thermal::{
     AmbientTemperature, InitialLedTemperature, ScreenHeatFlux, ThermalTimeConstant, VatTemperature,

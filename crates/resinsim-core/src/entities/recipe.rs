@@ -269,7 +269,20 @@ mod tests {
 
     #[test]
     fn new_rejects_nan_layer_height() {
-        let r = Recipe::new(f32::NAN, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, None);
+        let r = Recipe::new(
+            f32::NAN,
+            6,
+            3,
+            2.5,
+            25.0,
+            0.5,
+            1.0,
+            0.0,
+            60.0,
+            7.5,
+            5.0,
+            None,
+        );
         assert!(r.is_err());
     }
 
@@ -287,7 +300,20 @@ mod tests {
 
     #[test]
     fn new_rejects_nan_wait_before_cure() {
-        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, f32::NAN, 1.0, 0.0, 60.0, 7.5, 5.0, None);
+        let r = Recipe::new(
+            50.0,
+            6,
+            3,
+            2.5,
+            25.0,
+            f32::NAN,
+            1.0,
+            0.0,
+            60.0,
+            7.5,
+            5.0,
+            None,
+        );
         assert!(r.is_err());
     }
 
@@ -317,8 +343,21 @@ mod tests {
 
     #[test]
     fn retract_speed_explicit_overrides_lift_speed() {
-        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, Some(150.0))
-            .expect("explicit retract_speed 150 mm/min is valid");
+        let r = Recipe::new(
+            50.0,
+            6,
+            3,
+            2.5,
+            25.0,
+            0.5,
+            1.0,
+            0.0,
+            60.0,
+            7.5,
+            5.0,
+            Some(150.0),
+        )
+        .expect("explicit retract_speed 150 mm/min is valid");
         assert_eq!(r.retract_speed_mm_min(), 150.0);
         assert_eq!(r.lift_speed_mm_min(), 60.0);
         assert!(r.has_explicit_retract_speed());
@@ -326,19 +365,58 @@ mod tests {
 
     #[test]
     fn new_rejects_zero_retract_speed() {
-        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, Some(0.0));
+        let r = Recipe::new(
+            50.0,
+            6,
+            3,
+            2.5,
+            25.0,
+            0.5,
+            1.0,
+            0.0,
+            60.0,
+            7.5,
+            5.0,
+            Some(0.0),
+        );
         assert!(r.is_err());
     }
 
     #[test]
     fn new_rejects_negative_retract_speed() {
-        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, Some(-5.0));
+        let r = Recipe::new(
+            50.0,
+            6,
+            3,
+            2.5,
+            25.0,
+            0.5,
+            1.0,
+            0.0,
+            60.0,
+            7.5,
+            5.0,
+            Some(-5.0),
+        );
         assert!(r.is_err());
     }
 
     #[test]
     fn new_rejects_nan_retract_speed() {
-        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, Some(f32::NAN));
+        let r = Recipe::new(
+            50.0,
+            6,
+            3,
+            2.5,
+            25.0,
+            0.5,
+            1.0,
+            0.0,
+            60.0,
+            7.5,
+            5.0,
+            Some(f32::NAN),
+        );
         assert!(r.is_err());
     }
 
@@ -412,7 +490,8 @@ lift_distance_mm = 5.0
     fn parse_toml_with_explicit_retract_speed() {
         let toml_str = valid_recipe_toml() + "retract_speed_mm_min = 180.0\n";
         let r: Recipe = toml::from_str(&toml_str).expect("explicit retract_speed must parse");
-        r.validate().expect("explicit valid retract_speed must validate");
+        r.validate()
+            .expect("explicit valid retract_speed must validate");
         assert_eq!(r.retract_speed_mm_min(), 180.0);
         assert!(r.has_explicit_retract_speed());
     }

@@ -145,18 +145,17 @@ fn then_validate_err_both_fields(world: &mut UatWorld) {
         .validate_result
         .as_ref()
         .expect("scenario invariant: When step set validate_result");
-    let err = res.as_ref().err().unwrap_or_else(|| {
-        panic!("validate() must be Err when min_safe > degradation; was Ok")
-    });
+    let err = res
+        .as_ref()
+        .err()
+        .unwrap_or_else(|| panic!("validate() must be Err when min_safe > degradation; was Ok"));
     assert!(
         err.contains("min_safe_temp_c") && err.contains("degradation_temp_c"),
         "err must cite BOTH fields by name; got: {err}",
     );
 }
 
-#[then(
-    regex = r"^the profile is NOT silently accepted with misaligned thermal thresholds$"
-)]
+#[then(regex = r"^the profile is NOT silently accepted with misaligned thermal thresholds$")]
 fn then_not_silently_accepted(world: &mut UatWorld) {
     let res = world
         .validate_result

@@ -50,10 +50,7 @@ impl LayerPhase {
     /// - The next `recipe.bottom_layer_count()` layers (capped at the end
     ///   of the sequence) are `BurnIn`.
     /// - Remainder is `Normal`.
-    pub fn classify_sequence(
-        areas: &[CrossSectionArea],
-        recipe: &Recipe,
-    ) -> Vec<LayerPhase> {
+    pub fn classify_sequence(areas: &[CrossSectionArea], recipe: &Recipe) -> Vec<LayerPhase> {
         let raft_end = Self::detect_raft_end(areas) as usize;
         let burnin_end = raft_end + recipe.bottom_layer_count() as usize;
         let burnin_end = burnin_end.min(areas.len());
@@ -102,7 +99,8 @@ mod tests {
     use super::*;
 
     fn area(mm2: f64) -> CrossSectionArea {
-        CrossSectionArea::new(mm2).expect("test fixture: finite non-negative mm² is in CrossSectionArea domain")
+        CrossSectionArea::new(mm2)
+            .expect("test fixture: finite non-negative mm² is in CrossSectionArea domain")
     }
 
     fn generic_recipe() -> Recipe {
@@ -144,10 +142,7 @@ mod tests {
             } else {
                 LayerPhase::Normal
             };
-            assert_eq!(
-                p, expected,
-                "layer {i} constant-area classification"
-            );
+            assert_eq!(p, expected, "layer {i} constant-area classification");
         }
     }
 

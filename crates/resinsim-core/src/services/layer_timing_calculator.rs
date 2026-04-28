@@ -135,8 +135,8 @@ mod tests {
     #[test]
     fn exposure_transition_phase_interpolates() {
         let r = Recipe::generic_standard(); // transition_layers=3, bottom=25, normal=2.5
-        // step = (2.5 - 25) / 4 = -5.625. After bottom (layer 6): 25 + step*1 = 19.375.
-        // Transition layers: 6, 7, 8 → 19.375, 13.75, 8.125
+                                            // step = (2.5 - 25) / 4 = -5.625. After bottom (layer 6): 25 + step*1 = 19.375.
+                                            // Transition layers: 6, 7, 8 → 19.375, 13.75, 8.125
         let e6 = LayerTimingCalculator::exposure_at_layer(&r, 6);
         let e7 = LayerTimingCalculator::exposure_at_layer(&r, 7);
         let e8 = LayerTimingCalculator::exposure_at_layer(&r, 8);
@@ -180,8 +180,21 @@ mod tests {
         // Explicit retract_speed = 180 mm/min (3× lift); same distance 5 mm.
         // t_lift = 5/60*60 = 5.0, t_retract = 5/180*60 = 1.667.
         // normal: 2.5 + 0.5 + 5.0 + 1.0 + 1.667 + 0.0 = 10.667
-        let r = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, Some(180.0))
-            .expect("explicit retract 180 mm/min is valid");
+        let r = Recipe::new(
+            50.0,
+            6,
+            3,
+            2.5,
+            25.0,
+            0.5,
+            1.0,
+            0.0,
+            60.0,
+            7.5,
+            5.0,
+            Some(180.0),
+        )
+        .expect("explicit retract 180 mm/min is valid");
         let p = linear_printer();
         let t = LayerTimingCalculator::layer_time_sec(&r, &p, 1000);
         assert!(
@@ -226,9 +239,21 @@ mod tests {
     fn tilt_ignores_retract_speed() {
         // Changing retract_speed must NOT affect Tilt layer time.
         let r_none = Recipe::generic_standard();
-        let r_fast =
-            Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 60.0, 7.5, 5.0, Some(500.0))
-                .expect("retract 500 mm/min is valid");
+        let r_fast = Recipe::new(
+            50.0,
+            6,
+            3,
+            2.5,
+            25.0,
+            0.5,
+            1.0,
+            0.0,
+            60.0,
+            7.5,
+            5.0,
+            Some(500.0),
+        )
+        .expect("retract 500 mm/min is valid");
         let p = tilt_printer();
         let t_none = LayerTimingCalculator::layer_time_sec(&r_none, &p, 1000);
         let t_fast = LayerTimingCalculator::layer_time_sec(&r_fast, &p, 1000);
@@ -241,9 +266,8 @@ mod tests {
     #[test]
     fn tilt_ignores_lift_distance_and_lift_speed() {
         let r_slow = Recipe::generic_standard(); // lift_speed=60, lift_distance=5
-        let r_fast =
-            Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 200.0, 7.5, 50.0, None)
-                .expect("larger lift_distance and lift_speed is valid");
+        let r_fast = Recipe::new(50.0, 6, 3, 2.5, 25.0, 0.5, 1.0, 0.0, 200.0, 7.5, 50.0, None)
+            .expect("larger lift_distance and lift_speed is valid");
         let p = tilt_printer();
         assert_eq!(
             LayerTimingCalculator::layer_time_sec(&r_slow, &p, 1000),

@@ -5,6 +5,13 @@ date: 2026-04-17
 
 # UAT: Thermal degradation detection
 
+**ADR-0015 note.** Thermal degradation events surface in the
+`PrintSimulation.failures` collection. The producer/consumer split (issue 15)
+preserves this: `resinsim sim` produces an envelope including any
+`ThermalDegradation` failure events, and `resinsim report health --in`
+renders them with their original severity and message. Pipeline change
+does NOT alter the detection contract.
+
 ## UAT-1: Thermal degradation detection survives DDD refactor
 
 **Rationale.** T1-F1 deleted `VatTemperature::is_degradation_risk` and moved the

@@ -31,8 +31,7 @@ fn when_vat_exceeds_threshold(world: &mut UatWorld) {
         .resin
         .as_ref()
         .expect("scenario invariant: Given step set resin");
-    let hot_vat =
-        VatTemperature::new(55.0).expect("55 °C is in VatTemperature domain");
+    let hot_vat = VatTemperature::new(55.0).expect("55 °C is in VatTemperature domain");
     world.thermal_degradation_flagged = Some(resin.is_degradation_risk(hot_vat));
     world.last_vat_temp_c = Some(55.0);
 }

@@ -128,7 +128,10 @@ fn then_parse_ok(world: &mut UatWorld) {
         .parse_result
         .as_ref()
         .expect("scenario invariant: When step set parse_result");
-    assert!(res.is_ok(), "parse must return Ok after migration patch; got {res:?}");
+    assert!(
+        res.is_ok(),
+        "parse must return Ok after migration patch; got {res:?}"
+    );
 }
 
 #[then(regex = r"^profile\.validate\(\) returns Ok$")]
@@ -137,7 +140,8 @@ fn then_validate_ok(world: &mut UatWorld) {
         .resin
         .as_ref()
         .expect("scenario invariant: parse produced a resin");
-    r.validate().expect("migration-patched TOML must satisfy validate()");
+    r.validate()
+        .expect("migration-patched TOML must satisfy validate()");
 }
 
 #[then(regex = r"^profile\.ref_lift_speed_mm_min\(\) == 60\.0$")]

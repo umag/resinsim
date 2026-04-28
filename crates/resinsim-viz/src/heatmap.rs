@@ -279,8 +279,7 @@ mod tests {
     #[test]
     fn cure_depth_domain_skips_nan_and_inf() {
         // NaN and Inf are filtered; only 80 and 120 contribute.
-        let sim =
-            sim_from_cure_depths(&[80.0, f32::NAN, 120.0, f32::INFINITY, f32::NEG_INFINITY]);
+        let sim = sim_from_cure_depths(&[80.0, f32::NAN, 120.0, f32::INFINITY, f32::NEG_INFINITY]);
         let (lo, hi) = cure_depth_domain(&sim);
         assert!((lo - 80.0).abs() < 1e-3);
         assert!((hi - 120.0).abs() < 1e-3);

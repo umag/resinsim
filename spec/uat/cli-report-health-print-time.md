@@ -1,5 +1,5 @@
 ---
-issue: print-time-on-reportgenerator
+issue: print-time-on-reportgenerator (refactored 2026-04-28 for ADR-0015)
 date: 2026-04-24
 ---
 
@@ -15,16 +15,22 @@ release mechanism branch; ADR-0005 recipe-sourced exposure phases,
 wait fields, lift_cycle_sec). The print-time-on-reportgenerator change surfaces that
 computation as a first-class `SimSummary` projection (total_time_sec +
 bottom/transition/normal split) and delivers it through both human and JSON
-output paths. Under the v4 design landed by this lifecycle, `PrintSimulation`
-aggregate OWNS its `Recipe` + `PrinterProfile` so `summary()` is arg-less and
-the aggregate matches its docstring contract.
+output paths.
 
-## UAT-1: `report health` human output shows Total time plus per-phase breakdown
+**Pipeline change (ADR-0015, issue 15).** `report health` no longer builds
+the simulation in-process from CTB + profile args. The producer/consumer
+split makes the simulation an explicit step: `resinsim sim` produces
+`PATH.sim.json`; `resinsim report health --in PATH.sim.json` consumes it.
+The print-time projection contract is unchanged — total_time_sec and the
+phase split still appear in stdout/JSON — but UATs drive the two-step
+pipeline.
+
+## UAT-1: `report health --in <sim.json>` human output shows Total time plus per-phase breakdown
 
 ```gherkin
 Scenario: UAT-1 report health human output contains print-time section
-  Given the resinsim report health subcommand
-  When the user invokes it with an STL + --printer elegoo_mars5_ultra + --resin elegoo_ceramic_grey_v2 + --n-supports 0
+  Given the resinsim sim subcommand has produced cube.sim.json from an STL with --printer elegoo_mars5_ultra + --resin elegoo_ceramic_grey_v2 + --n-supports 0
+  When the user invokes resinsim report health --in cube.sim.json
   Then stdout contains the line "Total time:"
   And stdout contains the line "bottom:"
   And stdout contains the line "transition:"
@@ -32,12 +38,12 @@ Scenario: UAT-1 report health human output contains print-time section
   And the process exits with code 0
 ```
 
-## UAT-2: `report health --json` emits per-phase time fields summing to total
+## UAT-2: `report health --in <sim.json> --json` emits per-phase time fields summing to total
 
 ```gherkin
 Scenario: UAT-2 JSON output carries total_time_sec and per-phase fields
-  Given the resinsim report health subcommand
-  When the user invokes it with --json, an STL, --printer, --resin, and --n-supports 0
+  Given a sim.json envelope produced by `resinsim sim` against shipped profiles
+  When the user invokes resinsim report health --in <PATH.sim.json> --json
   Then the JSON summary object has a numeric total_time_sec > 0
   And the JSON summary has numeric bottom_time_sec, transition_time_sec, normal_time_sec
   And bottom_time_sec + transition_time_sec + normal_time_sec equals total_time_sec within 0.1% tolerance
@@ -55,9 +61,23 @@ not a flake.
 
 ```gherkin
 Scenario: UAT-3 Tilt total_time_sec < Linear total_time_sec on factory defaults
-  Given the resinsim report health subcommand with --json
-  And the same STL and the same resin profile
-  When invoked once with --printer elegoo_mars5_ultra
-  And once with --printer generic_msla_4k
+  Given two sim.json envelopes from `resinsim sim` against the same STL and resin profile
+  And the first produced with --printer elegoo_mars5_ultra (Tilt)
+  And the second produced with --printer generic_msla_4k (Linear)
+  When the user invokes resinsim report health --in <each>.sim.json --json
   Then the Tilt total_time_sec is strictly less than the Linear total_time_sec
 ```
+
+### Empirical observation (Lilith Torso, 4492 layers, ADR-0015 e2e check)
+
+| Printer (release mechanism)    | total_time_sec | Wall time     |
+|--------------------------------|---------------:|---------------|
+| `elegoo_mars5_ultra` (Tilt)    |          56468 | 15h 41m 08s   |
+| `generic_msla_4k`  (Linear)    |          78928 | 21h 55m 28s   |
+
+Linear is **39.7% slower** than Tilt on the same input + resin (Elegoo
+Ceramic Grey V2). This matches ADR-0007's per-layer prediction (Tilt
+≈10.5s vs Linear ≈14.0s on factory defaults) scaled to 4492 normal-phase
+layers. A future recipe / lift-kinematics change that flipped the
+direction would be a real signal — this empirical band is the
+ground-truth check.

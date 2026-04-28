@@ -63,9 +63,8 @@ fn when_resolves_profile(world: &mut UatWorld) {
 )]
 fn then_layer_height_50(world: &mut UatWorld) {
     let stdout = world.cli_stdout.as_deref().unwrap_or_default();
-    let lh = layer_height_from_stdout(stdout).unwrap_or_else(|| {
-        panic!("layer_height not found in stdout; got: {stdout}")
-    });
+    let lh = layer_height_from_stdout(stdout)
+        .unwrap_or_else(|| panic!("layer_height not found in stdout; got: {stdout}"));
     assert!(
         (lh - 50.0).abs() < 1e-3,
         "layer_height must be 50.0 from generic_standard recipe; got {lh}",
@@ -118,9 +117,8 @@ fn when_binary_runs(world: &mut UatWorld) {
 #[then(regex = r"^layer_height in the JSON output equals 30\.0$")]
 fn then_layer_height_30(world: &mut UatWorld) {
     let stdout = world.cli_stdout.as_deref().unwrap_or_default();
-    let lh = layer_height_from_stdout(stdout).unwrap_or_else(|| {
-        panic!("layer_height not found in stdout; got: {stdout}")
-    });
+    let lh = layer_height_from_stdout(stdout)
+        .unwrap_or_else(|| panic!("layer_height not found in stdout; got: {stdout}"));
     assert!(
         (lh - 30.0).abs() < 1e-3,
         "explicit --layer-height 30.0 must win; got {lh}",
@@ -161,9 +159,8 @@ fn given_no_resin_no_layer(world: &mut UatWorld) {
 #[then(regex = r"^layer_height in the JSON output equals 50\.0 \(the built-in default\)$")]
 fn then_default_50(world: &mut UatWorld) {
     let stdout = world.cli_stdout.as_deref().unwrap_or_default();
-    let lh = layer_height_from_stdout(stdout).unwrap_or_else(|| {
-        panic!("layer_height not found in stdout; got: {stdout}")
-    });
+    let lh = layer_height_from_stdout(stdout)
+        .unwrap_or_else(|| panic!("layer_height not found in stdout; got: {stdout}"));
     assert!(
         (lh - 50.0).abs() < 1e-3,
         "built-in default layer_height must be 50.0; got {lh}",

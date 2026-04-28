@@ -121,6 +121,9 @@ mod tests {
             columns,
         ];
         let risks = SuctionDetector::detect_from_masks(&stack).expect("valid");
-        assert!(risks.is_empty(), "no false-positive on raft+columns: {risks:?}");
+        assert!(
+            risks.is_empty(),
+            "no false-positive on raft+columns: {risks:?}"
+        );
     }
 }

@@ -1,5 +1,5 @@
 use crate::io::stl::{BoundingBox, Triangle};
-use crate::values::{CrossSectionArea, DEFAULT_VOXEL_SIZE_MM, LayerGeometry, LayerMask};
+use crate::values::{CrossSectionArea, LayerGeometry, LayerMask, DEFAULT_VOXEL_SIZE_MM};
 
 /// Compute cross-section areas for all layers of a mesh.
 /// Returns one CrossSectionArea per layer from z_min to z_max.
@@ -188,10 +188,7 @@ fn rasterise_mask(
             // Round inward: start rounds up, end rounds down — mirrors the
             // "cell centre inside polygon" criterion.
             let cell_start = cell_start_f.ceil().max(0.0) as u32;
-            let cell_end = cell_end_f
-                .floor()
-                .min((width_cells as f32) - 1.0)
-                .max(-1.0) as i64;
+            let cell_end = cell_end_f.floor().min((width_cells as f32) - 1.0).max(-1.0) as i64;
 
             if cell_end < 0 {
                 continue;

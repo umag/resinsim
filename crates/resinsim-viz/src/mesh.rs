@@ -56,10 +56,13 @@ pub fn triangles_to_bevy_mesh(triangles: &[Triangle]) -> Mesh {
         indices.push(base + 2);
     }
 
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-        .with_inserted_indices(Indices::U32(indices))
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices))
 }
 
 /// Drive a `PanOrbitCamera` to frame the given bounding box.
@@ -88,19 +91,13 @@ pub fn triangles_to_bevy_mesh(triangles: &[Triangle]) -> Mesh {
 /// When `preserve_view` is true this function only writes
 /// `target_focus` + `target_radius`; yaw / pitch are untouched so the user's
 /// current orbit angle survives the reload.
-pub fn fit_panorbit_to_bbox(
-    cam: &mut PanOrbitCamera,
-    bbox: &BoundingBox,
-    preserve_view: bool,
-) {
+pub fn fit_panorbit_to_bbox(cam: &mut PanOrbitCamera, bbox: &BoundingBox, preserve_view: bool) {
     let min = Vec3::from(bbox.min);
     let max = Vec3::from(bbox.max);
     let diagonal = (max - min).length();
     let centre = (min + max) * 0.5;
 
-    let degenerate = !diagonal.is_finite()
-        || diagonal < 1e-6
-        || !centre.is_finite();
+    let degenerate = !diagonal.is_finite() || diagonal < 1e-6 || !centre.is_finite();
 
     if degenerate {
         cam.focus = Vec3::ZERO;
@@ -215,8 +212,7 @@ mod tests {
     #[test]
     fn cube_fixture_yields_36_positions() {
         let path = cube_fixture_path();
-        let triangles =
-            stl::load_stl(&path).expect("data/test_cube.stl is checked into the repo");
+        let triangles = stl::load_stl(&path).expect("data/test_cube.stl is checked into the repo");
         assert_eq!(
             triangles.len(),
             12,
@@ -239,12 +235,9 @@ mod tests {
 
     #[test]
     fn malformed_stl_returns_err_not_panic() {
-        let dir = std::env::temp_dir().join(format!(
-            "resinsim-viz-malformed-stl-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir)
-            .expect("temp_dir is writable on a developer workstation");
+        let dir =
+            std::env::temp_dir().join(format!("resinsim-viz-malformed-stl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp_dir is writable on a developer workstation");
         let _guard = TempDirGuard(dir.clone());
         let path = dir.join("junk.stl");
         std::fs::write(&path, b"this is not an STL file at all")
@@ -340,9 +333,7 @@ mod tests {
         };
         fit_panorbit_to_bbox(&mut cam, &bbox, false);
         let (expected_yaw, expected_pitch) = crate::three_quarter_yaw_pitch();
-        let yaw = cam
-            .yaw
-            .expect("preserve_view=false branch must seed yaw");
+        let yaw = cam.yaw.expect("preserve_view=false branch must seed yaw");
         let pitch = cam
             .pitch
             .expect("preserve_view=false branch must seed pitch");

@@ -18,8 +18,8 @@ fn initial_led_temperature_new_rejects_nan() {
 
 #[test]
 fn initial_led_temperature_new_rejects_below_absolute_zero() {
-    let err = InitialLedTemperature::new(-300.0)
-        .expect_err("-300 °C must fail (below absolute zero)");
+    let err =
+        InitialLedTemperature::new(-300.0).expect_err("-300 °C must fail (below absolute zero)");
     assert!(
         err.contains("absolute zero"),
         "error must mention absolute zero: {err}"

@@ -5,6 +5,12 @@ date: 2026-04-21
 
 # UAT: `SuctionDetector` distinguishes sealed cavities from fluid-permeable support regions
 
+**ADR-0015 note.** Suction events are physics-level invariants that land
+on the `PrintSimulation` aggregate during simulation; they survive the
+producer/consumer split intact. The pipeline `resinsim sim → report
+health --in` preserves the detector's contract — false-positives still
+fail the same way they did pre-ADR-0015.
+
 ## Background
 
 The previous `SuctionDetector` used a 2D area-drop heuristic: any layer whose

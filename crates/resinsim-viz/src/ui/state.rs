@@ -51,16 +51,16 @@ pub fn refresh_listings(state: &mut PickerState, repos: &ProfileRepos) -> Result
 /// mutation — preventing `is_changed`/refresh ping-pong even though
 /// the system writes through `&mut`.
 pub fn refresh_loaded_profiles(state: &mut PickerState, repos: &ProfileRepos) {
-    let resin_needs = state.selected_resin.as_deref()
-        != state.loaded_resin.as_ref().map(|r| r.name());
+    let resin_needs =
+        state.selected_resin.as_deref() != state.loaded_resin.as_ref().map(|r| r.name());
     if resin_needs {
         state.loaded_resin = match &state.selected_resin {
             Some(name) => repos.resin.load(name).ok(),
             None => None,
         };
     }
-    let printer_needs = state.selected_printer.as_deref()
-        != state.loaded_printer.as_ref().map(|p| p.name());
+    let printer_needs =
+        state.selected_printer.as_deref() != state.loaded_printer.as_ref().map(|p| p.name());
     if printer_needs {
         state.loaded_printer = match &state.selected_printer {
             Some(name) => repos.printer.load(name).ok(),
@@ -126,12 +126,12 @@ mod tests {
         let mut state = PickerState::default();
         refresh_listings(&mut state, &shipped_repos())
             .expect("test fixture: shipped data/ resolves");
-        assert!(state.available_resins.contains(&"generic_standard".to_string()));
-        assert!(
-            state
-                .available_printers
-                .contains(&"generic_msla_4k".to_string())
-        );
+        assert!(state
+            .available_resins
+            .contains(&"generic_standard".to_string()));
+        assert!(state
+            .available_printers
+            .contains(&"generic_msla_4k".to_string()));
     }
 
     #[test]
@@ -233,8 +233,8 @@ mod tests {
             selected_printer: Some("b".into()),
             ..Default::default()
         };
-        let reason = run_block_reason(&state, false)
-            .expect("missing CTB only — must produce a reason");
+        let reason =
+            run_block_reason(&state, false).expect("missing CTB only — must produce a reason");
         assert!(reason.starts_with("Drag"));
         assert!(reason.contains(".ctb"));
         assert!(!reason.contains("resin"));
@@ -247,8 +247,8 @@ mod tests {
             selected_printer: Some("b".into()),
             ..Default::default()
         };
-        let reason = run_block_reason(&state, true)
-            .expect("missing resin only — must produce a reason");
+        let reason =
+            run_block_reason(&state, true).expect("missing resin only — must produce a reason");
         assert!(reason.starts_with("Pick a resin"));
         assert!(!reason.contains("printer"));
         assert!(!reason.contains(".ctb"));
@@ -260,8 +260,8 @@ mod tests {
             selected_resin: Some("a".into()),
             ..Default::default()
         };
-        let reason = run_block_reason(&state, true)
-            .expect("missing printer only — must produce a reason");
+        let reason =
+            run_block_reason(&state, true).expect("missing printer only — must produce a reason");
         assert!(reason.starts_with("Pick a printer"));
         assert!(!reason.contains("resin"));
         assert!(!reason.contains(".ctb"));
@@ -270,8 +270,7 @@ mod tests {
     #[test]
     fn run_block_reason_lists_all_missing() {
         let state = PickerState::default();
-        let reason = run_block_reason(&state, false)
-            .expect("nothing set — must produce a reason");
+        let reason = run_block_reason(&state, false).expect("nothing set — must produce a reason");
         assert!(reason.contains(".ctb"));
         assert!(reason.contains("resin"));
         assert!(reason.contains("printer"));

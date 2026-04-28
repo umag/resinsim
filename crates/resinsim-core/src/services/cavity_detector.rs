@@ -229,7 +229,9 @@ impl CavityDetector {
             prev_labels = labels;
             for (id_local, comp) in components.iter().enumerate() {
                 let canonical_id = next_id + id_local as u32;
-                let touches = comp.iter().any(|&(x, y)| is_on_lateral_edge(x, y, width, height));
+                let touches = comp
+                    .iter()
+                    .any(|&(x, y)| is_on_lateral_edge(x, y, width, height));
                 pockets.insert(
                     canonical_id,
                     PocketInfo {
@@ -249,8 +251,7 @@ impl CavityDetector {
 
         // Layers 1..N
         for (k, mask_k) in masks.iter().enumerate().skip(1) {
-            let (local_labels, components) =
-                connected_components_of_void(mask_k, width, height);
+            let (local_labels, components) = connected_components_of_void(mask_k, width, height);
             let mut new_labels: Vec<Option<PocketId>> = vec![None; cell_count];
             let mut alive_this_layer: HashSet<PocketId> = HashSet::new();
 
@@ -263,8 +264,9 @@ impl CavityDetector {
                         inherited.insert(id);
                     }
                 }
-                let touches_edge =
-                    comp.iter().any(|&(x, y)| is_on_lateral_edge(x, y, width, height));
+                let touches_edge = comp
+                    .iter()
+                    .any(|&(x, y)| is_on_lateral_edge(x, y, width, height));
 
                 let canonical = if inherited.is_empty() {
                     let id = next_id;
@@ -328,9 +330,7 @@ impl CavityDetector {
                 .copied()
                 .collect();
             for id in closed {
-                let info = pockets
-                    .remove(&id)
-                    .expect("id came from pockets.keys()");
+                let info = pockets.remove(&id).expect("id came from pockets.keys()");
                 if info.touches_lateral_exterior {
                     continue;
                 }
@@ -453,7 +453,10 @@ mod tests {
 
     #[test]
     fn detect_rejects_empty_input() {
-        assert!(matches!(CavityDetector::detect(&[]), Err(CavityError::NoMasks)));
+        assert!(matches!(
+            CavityDetector::detect(&[]),
+            Err(CavityError::NoMasks)
+        ));
     }
 
     #[test]
@@ -552,7 +555,10 @@ mod tests {
         }
         stack.push(solid_mask(5, 5)); // cap
         let events = CavityDetector::detect(&stack).expect("valid input");
-        assert!(events.is_empty(), "lateral-edge-touching void must not emit");
+        assert!(
+            events.is_empty(),
+            "lateral-edge-touching void must not emit"
+        );
     }
 
     #[test]
@@ -633,7 +639,10 @@ mod tests {
         let _ = floor.solid_area_mm2();
         let stack = vec![floor, wall.clone(), wall, cap];
         let events = CavityDetector::detect(&stack).expect("valid");
-        assert!(events.is_empty(), "sub-threshold cavity should not emit: {events:?}");
+        assert!(
+            events.is_empty(),
+            "sub-threshold cavity should not emit: {events:?}"
+        );
     }
 
     #[test]

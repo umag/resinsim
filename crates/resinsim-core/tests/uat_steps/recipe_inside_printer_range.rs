@@ -11,7 +11,9 @@ use resinsim_core::app::simulation_runner::SimulationRunner;
 use resinsim_core::entities::ResinProfile;
 use resinsim_core::services::pairing_validator;
 
-use super::fixtures::{cube_areas, default_plate, printer_with_ranges, test_ambient, test_supports};
+use super::fixtures::{
+    cube_areas, default_plate, printer_with_ranges, test_ambient, test_supports,
+};
 use super::world::UatWorld;
 
 // ---- UAT-1: happy-path pairing ---------------------------------------------
@@ -114,18 +116,22 @@ fn then_pairing_ok(world: &mut UatWorld) {
         .pairing_result
         .as_ref()
         .expect("scenario invariant: When step ran pairing_validator");
-    assert!(res.is_ok(), "pairing must be Ok for in-range recipe: {res:?}");
+    assert!(
+        res.is_ok(),
+        "pairing must be Ok for in-range recipe: {res:?}"
+    );
 }
 
-#[then(
-    regex = r"^SimulationRunner proceeds through slice_areas → predict_layer for every layer$"
-)]
+#[then(regex = r"^SimulationRunner proceeds through slice_areas → predict_layer for every layer$")]
 fn then_simulation_proceeds(world: &mut UatWorld) {
     let sim = world
         .sim_primary
         .as_ref()
         .expect("scenario invariant: simulation produced a PrintSimulation");
-    assert!(!sim.layers().is_empty(), "simulation must yield non-empty layers");
+    assert!(
+        !sim.layers().is_empty(),
+        "simulation must yield non-empty layers"
+    );
 }
 
 #[then(regex = r"^the returned PrintSimulation has the expected layer count$")]
@@ -154,9 +160,7 @@ fn then_no_pairing_err(world: &mut UatWorld) {
 
 // ---- UAT-2: boundary values accepted --------------------------------------
 
-#[given(
-    regex = r#"^a printer "P" with layer_height_range_um min 20\.0 max 100\.0$"#
-)]
+#[given(regex = r#"^a printer "P" with layer_height_range_um min 20\.0 max 100\.0$"#)]
 fn given_boundary_printer(world: &mut UatWorld) {
     world.printer = Some(printer_with_ranges(20.0, 100.0, 1.0, 60.0));
 }
@@ -192,8 +196,7 @@ lift_speed_mm_min = 60.0
 lift_cycle_sec = 7.5
 lift_distance_mm = 5.0
 "#;
-    let r: ResinProfile = toml::from_str(toml_str)
-        .expect("boundary resin TOML parses");
+    let r: ResinProfile = toml::from_str(toml_str).expect("boundary resin TOML parses");
     r.validate().expect("boundary resin is valid");
     world.resin = Some(r);
 }
@@ -260,7 +263,10 @@ lift_distance_mm = 5.0
     let r: ResinProfile = toml::from_str(&toml_str).expect("max-boundary resin TOML parses");
     r.validate().expect("max-boundary resin is valid");
     let res = pairing_validator::validate_pairing(printer, r.recipe());
-    assert!(res.is_ok(), "max-boundary lift_speed pairing must be Ok: {res:?}");
+    assert!(
+        res.is_ok(),
+        "max-boundary lift_speed pairing must be Ok: {res:?}"
+    );
 }
 
 #[given(
@@ -280,9 +286,7 @@ fn when_pairing_validated(world: &mut UatWorld) {
     when_pairing_called(world);
 }
 
-#[then(
-    regex = r#"^"R2" with recipe\.layer_height_um = 50\.1 returns Err naming the field$"#
-)]
+#[then(regex = r#"^"R2" with recipe\.layer_height_um = 50\.1 returns Err naming the field$"#)]
 fn then_slightly_off_returns_err(world: &mut UatWorld) {
     // Fold review finding #7: don't hardcode 50.1 — compute an out-of-
     // range layer_height programmatically from the printer's pinned

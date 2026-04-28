@@ -77,11 +77,9 @@ fn build_sim(n: u32, with_failures_at: &[u32]) -> PrintSimulation {
 /// Per-test directory under workspace `target/test-tmp/`. Cleaned at start.
 fn property_dir() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let dir = Path::new(manifest_dir)
-        .join("../../target/test-tmp/sim-repo-property");
+    let dir = Path::new(manifest_dir).join("../../target/test-tmp/sim-repo-property");
     std::fs::remove_dir_all(&dir).ok();
-    std::fs::create_dir_all(&dir)
-        .expect("test setup: must be able to create property test dir");
+    std::fs::create_dir_all(&dir).expect("test setup: must be able to create property test dir");
     dir
 }
 
@@ -134,8 +132,7 @@ proptest! {
 #[test]
 fn run_from_areas_aggregate_round_trips() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let dir = Path::new(manifest_dir)
-        .join("../../target/test-tmp/sim-repo-runner-roundtrip");
+    let dir = Path::new(manifest_dir).join("../../target/test-tmp/sim-repo-runner-roundtrip");
     std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).expect("test setup: must be able to create dir");
     let repo = SimulationRepository::new(&dir);
@@ -143,10 +140,7 @@ fn run_from_areas_aggregate_round_trips() {
     let resin = ResinProfile::generic_standard();
     let printer = PrinterProfile::generic_msla_4k();
     let areas: Vec<CrossSectionArea> = (0..10)
-        .map(|_| {
-            CrossSectionArea::new(100.0)
-                .expect("100 mm² is a valid CrossSectionArea")
-        })
+        .map(|_| CrossSectionArea::new(100.0).expect("100 mm² is a valid CrossSectionArea"))
         .collect();
 
     let saved = SimulationRunner::run_from_areas(

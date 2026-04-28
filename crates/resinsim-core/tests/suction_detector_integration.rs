@@ -59,27 +59,48 @@ fn raft_plus_columns_layer_inputs(
     let mut z_mm = 0.0_f32;
     for _ in 0..23 {
         layers.push(
-            LayerInput::new(idx, raft_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
-                .expect("valid")
-                .with_mask(raft_mask.clone()),
+            LayerInput::new(
+                idx,
+                raft_area,
+                exposure_sec,
+                lift_speed_mm_min,
+                layer_height_um,
+                z_mm,
+            )
+            .expect("valid")
+            .with_mask(raft_mask.clone()),
         );
         idx += 1;
         z_mm += layer_height_mm;
     }
     for _ in 0..8 {
         layers.push(
-            LayerInput::new(idx, column_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
-                .expect("valid")
-                .with_mask(column_mask.clone()),
+            LayerInput::new(
+                idx,
+                column_area,
+                exposure_sec,
+                lift_speed_mm_min,
+                layer_height_um,
+                z_mm,
+            )
+            .expect("valid")
+            .with_mask(column_mask.clone()),
         );
         idx += 1;
         z_mm += layer_height_mm;
     }
     for _ in 0..10 {
         layers.push(
-            LayerInput::new(idx, model_area, exposure_sec, lift_speed_mm_min, layer_height_um, z_mm)
-                .expect("valid")
-                .with_mask(model_mask.clone()),
+            LayerInput::new(
+                idx,
+                model_area,
+                exposure_sec,
+                lift_speed_mm_min,
+                layer_height_um,
+                z_mm,
+            )
+            .expect("valid")
+            .with_mask(model_mask.clone()),
         );
         idx += 1;
         z_mm += layer_height_mm;

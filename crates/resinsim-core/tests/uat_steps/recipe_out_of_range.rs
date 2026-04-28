@@ -17,7 +17,9 @@ use cucumber::{given, then, when};
 use resinsim_core::app::simulation_runner::SimulationRunner;
 use resinsim_core::entities::ResinProfile;
 
-use super::fixtures::{cube_areas, default_plate, printer_with_ranges, test_ambient, test_supports};
+use super::fixtures::{
+    cube_areas, default_plate, printer_with_ranges, test_ambient, test_supports,
+};
 use super::world::UatWorld;
 
 // ---- UAT-1: single-range narrowing + natural-prose Given/And ----
@@ -85,10 +87,7 @@ fn then_err_names_field(world: &mut UatWorld, field: String) {
         .last_sim_err
         .as_ref()
         .expect("scenario invariant: When step set last_sim_err");
-    assert!(
-        err.contains(&field),
-        "err must name field '{field}': {err}",
-    );
+    assert!(err.contains(&field), "err must name field '{field}': {err}",);
 }
 
 // ---- UAT-2: DataTable ranges + DataTable recipe + DocString assertion ----

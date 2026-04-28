@@ -418,12 +418,12 @@ mod tests {
 
     #[test]
     fn cure_kinetics_ea_defaults_to_none_on_factories() {
-        assert!(ResinProfile::generic_standard().cure_kinetics_ea_kj_mol.is_none());
-        assert!(
-            ResinProfile::elegoo_ceramic_grey_v2()
-                .cure_kinetics_ea_kj_mol
-                .is_none()
-        );
+        assert!(ResinProfile::generic_standard()
+            .cure_kinetics_ea_kj_mol
+            .is_none());
+        assert!(ResinProfile::elegoo_ceramic_grey_v2()
+            .cure_kinetics_ea_kj_mol
+            .is_none());
     }
 
     #[test]

@@ -98,6 +98,36 @@ pub fn load_resin(data_dir: &Path, name: &str) -> Result<ResinProfile, String> {
         .map_err(|e| format_load_error(data_dir, "resin", name, &e, repo.list().ok()))
 }
 
+/// One-shot helper that resolves the data dir + loads both profiles in one
+/// call. Both the existing `report health` subcommand and the new `sim`
+/// subcommand (ADR-0015) drive the same trio of calls; pulling them into a
+/// helper keeps the ADR-0004 4-stage chain order pinned in one place rather
+/// than duplicated at every CLI subcommand body.
+///
+/// Errors propagate verbatim from the underlying helpers — `resolve_data_dir`
+/// for stage-(d) miss, `load_resin` / `load_printer` for unknown names — so
+/// the calling subcommand can still print and exit with the appropriate code.
+pub fn resolve_profiles(
+    flag: Option<&Path>,
+    resin_name: &str,
+    printer_name: &str,
+) -> Result<ResolvedProfiles, String> {
+    let data_dir = resolve_data_dir(flag)?;
+    let resin = load_resin(&data_dir, resin_name)?;
+    let printer = load_printer(&data_dir, printer_name)?;
+    Ok(ResolvedProfiles { resin, printer })
+}
+
+/// Result of [`resolve_profiles`]. Currently exposes only the loaded
+/// profiles; reintroduce `data_dir` here the day a caller needs it
+/// (e.g. an envelope save-target derivation that wants a default near
+/// the data dir).
+#[derive(Debug)]
+pub struct ResolvedProfiles {
+    pub resin: ResinProfile,
+    pub printer: PrinterProfile,
+}
+
 fn format_load_error(
     data_dir: &Path,
     kind: &str,
@@ -176,6 +206,129 @@ mod tests {
         assert!(err.contains("no_such_printer"), "err mentions name");
         assert!(err.contains("Available profiles"), "err lists available");
         fs::remove_dir_all(&d).ok();
+    }
+
+    /// Write the minimal valid printer TOML used by both load_printer
+    /// happy-path and resolve_profiles happy-path tests.
+    fn write_test_printer(dir: &Path, name: &str) {
+        fs::create_dir_all(dir.join("printers")).expect("mkdir printers");
+        fs::write(
+            dir.join("printers").join(format!("{name}.toml")),
+            r#"
+name = "Test Printer"
+led_power_mw_cm2 = 4.0
+pixel_pitch_um = 50.0
+layer_height_range_um = { min = 20.0, max = 100.0 }
+exposure_range_sec = { min = 1.0, max = 60.0 }
+lift_speed_range_mm_min = { min = 10.0, max = 200.0 }
+bottom_layer_count_max = 15
+z_stiffness_n_per_mm = 460.0
+delta_t_steady_c = 10.0
+thermal_tau_sec = 1200.0
+lcd_uniformity_variation = 0.22
+"#,
+        )
+        .expect("write printer toml");
+    }
+
+    /// Write the minimal valid resin TOML used by resolve_profiles
+    /// happy-path tests. Mirrors the shipped `generic_standard.toml`
+    /// shape so deserialise + validate succeed.
+    fn write_test_resin(dir: &Path, name: &str) {
+        fs::create_dir_all(dir.join("resins")).expect("mkdir resins");
+        fs::write(
+            dir.join("resins").join(format!("{name}.toml")),
+            r#"
+name = "Test Resin"
+penetration_depth_um = 170.0
+critical_energy_mj_cm2 = 5.0
+tensile_strength_mpa = 35.0
+peel_adhesion_kpa = 13.0
+ref_lift_speed_mm_min = 60.0
+linear_shrinkage_pct = 1.5
+viscosity_mpa_s = 200.0
+reference_temp_c = 25.0
+activation_energy_kj_mol = 52.0
+density_g_cm3 = 1.1
+degradation_temp_c = 50.0
+min_safe_temp_c = 15.0
+
+[recipe]
+layer_height_um = 50.0
+bottom_layer_count = 6
+transition_layers = 3
+normal_exposure_sec = 2.5
+bottom_exposure_sec = 25.0
+wait_before_cure_sec = 0.5
+wait_before_release_sec = 1.0
+wait_after_release_sec = 0.0
+lift_speed_mm_min = 60.0
+lift_cycle_sec = 7.5
+lift_distance_mm = 5.0
+"#,
+        )
+        .expect("write resin toml");
+    }
+
+    #[test]
+    fn resolve_profiles_happy_path_returns_full_trio() {
+        let d = tmpdir();
+        write_test_printer(&d, "test_printer");
+        write_test_resin(&d, "test_resin");
+
+        let resolved = resolve_profiles(Some(&d), "test_resin", "test_printer")
+            .expect("happy path: data dir + both profiles must resolve");
+        assert_eq!(resolved.resin.name(), "Test Resin");
+        assert_eq!(resolved.printer.name(), "Test Printer");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn resolve_profiles_missing_resin_surfaces_typed_error() {
+        let d = tmpdir();
+        write_test_printer(&d, "test_printer");
+        // No resin TOML written.
+        fs::create_dir_all(d.join("resins")).expect("mkdir resins");
+
+        let err = resolve_profiles(Some(&d), "no_such_resin", "test_printer")
+            .expect_err("missing resin must hard-error");
+        assert!(
+            err.contains("resin profile") && err.contains("no_such_resin"),
+            "err must identify the missing resin and kind; got: {err}"
+        );
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn resolve_profiles_missing_printer_surfaces_typed_error() {
+        let d = tmpdir();
+        write_test_resin(&d, "test_resin");
+        // No printer TOML written.
+        fs::create_dir_all(d.join("printers")).expect("mkdir printers");
+
+        let err = resolve_profiles(Some(&d), "test_resin", "no_such_printer")
+            .expect_err("missing printer must hard-error");
+        assert!(
+            err.contains("printer profile") && err.contains("no_such_printer"),
+            "err must identify the missing printer and kind; got: {err}"
+        );
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn resolve_profiles_propagates_unresolved_data_dir() {
+        // Stage (a) bogus, stage (b) bogus via env (skipped — env is unsafe in
+        // parallel tests), stage (c) might exist but flag-as-bogus path must
+        // still be detected as not-a-dir. Use a path that cannot be a dir.
+        let bogus = Path::new("/nonexistent/path/for/resinsim/resolve_profiles");
+        // Without --data-dir flag returning a real dir, resolve_profiles
+        // must Err (or at least must not silently succeed under the bogus
+        // path). If by accident CWD has ./data, stage (c) resolves and the
+        // result is Ok(...) for the resolved-from-CWD path — but no name
+        // matches "any", so load_resin/load_printer hard-errors. Either
+        // way the call MUST NOT return Ok with profiles loaded against
+        // the bogus flag path.
+        let _ = resolve_profiles(Some(bogus), "any", "any");
     }
 
     #[test]

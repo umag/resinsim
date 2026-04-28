@@ -68,11 +68,7 @@ impl LayerMask {
     /// Returns `Err(MaskError::InvalidDimensions)` if width or height is 0.
     /// Returns `Err(MaskError::InvalidVoxelSize)` if voxel_size_mm is not
     /// positive finite.
-    pub fn new(
-        width_cells: u32,
-        height_cells: u32,
-        voxel_size_mm: f32,
-    ) -> Result<Self, MaskError> {
+    pub fn new(width_cells: u32, height_cells: u32, voxel_size_mm: f32) -> Result<Self, MaskError> {
         if width_cells == 0 || height_cells == 0 {
             return Err(MaskError::InvalidDimensions {
                 width: width_cells,
@@ -277,16 +273,15 @@ mod tests {
 
     #[test]
     fn new_default_is_all_void() {
-        let mask = LayerMask::new(10, 10, 0.5)
-            .expect("valid 10×10 @ 0.5mm mask must construct");
+        let mask = LayerMask::new(10, 10, 0.5).expect("valid 10×10 @ 0.5mm mask must construct");
         assert_eq!(mask.solid_cell_count(), 0);
         assert_eq!(mask.solid_area_mm2(), 0.0);
     }
 
     #[test]
     fn new_all_solid_fills_grid() {
-        let mask = LayerMask::new_all_solid(4, 3, 1.0)
-            .expect("valid 4×3 @ 1.0mm mask must construct");
+        let mask =
+            LayerMask::new_all_solid(4, 3, 1.0).expect("valid 4×3 @ 1.0mm mask must construct");
         assert_eq!(mask.solid_cell_count(), 12);
         assert_eq!(mask.solid_area_mm2(), 12.0);
         for x in 0..4 {
@@ -298,10 +293,8 @@ mod tests {
 
     #[test]
     fn set_and_is_solid_roundtrip() {
-        let mut mask = LayerMask::new(5, 5, 0.5)
-            .expect("valid 5×5 @ 0.5mm mask must construct");
-        mask.set(2, 3)
-            .expect("set(2,3) within 5×5 is in bounds");
+        let mut mask = LayerMask::new(5, 5, 0.5).expect("valid 5×5 @ 0.5mm mask must construct");
+        mask.set(2, 3).expect("set(2,3) within 5×5 is in bounds");
         assert!(mask.is_solid(2, 3));
         assert!(!mask.is_solid(2, 4));
         assert!(!mask.is_solid(0, 0));
@@ -311,8 +304,7 @@ mod tests {
 
     #[test]
     fn set_out_of_bounds_returns_err() {
-        let mut mask = LayerMask::new(5, 5, 0.5)
-            .expect("valid 5×5 @ 0.5mm mask must construct");
+        let mut mask = LayerMask::new(5, 5, 0.5).expect("valid 5×5 @ 0.5mm mask must construct");
         assert!(matches!(
             mask.set(10, 3),
             Err(MaskError::OutOfBounds { x: 10, .. })
@@ -325,8 +317,7 @@ mod tests {
 
     #[test]
     fn is_solid_out_of_bounds_returns_false() {
-        let mask = LayerMask::new(5, 5, 0.5)
-            .expect("valid 5×5 @ 0.5mm mask must construct");
+        let mask = LayerMask::new(5, 5, 0.5).expect("valid 5×5 @ 0.5mm mask must construct");
         assert!(!mask.is_solid(100, 100));
         assert!(!mask.is_solid(0, 100));
         assert!(!mask.is_solid(100, 0));
@@ -334,8 +325,8 @@ mod tests {
 
     #[test]
     fn clear_flips_solid_back_to_void() {
-        let mut mask = LayerMask::new_all_solid(3, 3, 0.5)
-            .expect("valid 3×3 @ 0.5mm mask must construct");
+        let mut mask =
+            LayerMask::new_all_solid(3, 3, 0.5).expect("valid 3×3 @ 0.5mm mask must construct");
         mask.clear(1, 1)
             .expect("clear(1,1) within 3×3 is in bounds");
         assert!(!mask.is_solid(1, 1));
@@ -344,8 +335,7 @@ mod tests {
 
     #[test]
     fn iter_solid_returns_all_solid_cells() {
-        let mut mask = LayerMask::new(4, 4, 1.0)
-            .expect("valid 4×4 @ 1.0mm mask must construct");
+        let mut mask = LayerMask::new(4, 4, 1.0).expect("valid 4×4 @ 1.0mm mask must construct");
         mask.set(0, 0).expect("in bounds");
         mask.set(1, 2).expect("in bounds");
         mask.set(3, 3).expect("in bounds");
@@ -359,40 +349,39 @@ mod tests {
 
     #[test]
     fn width_mm_height_mm_derive_from_cells_and_voxel_size() {
-        let mask = LayerMask::new(300, 150, 0.5)
-            .expect("valid 300×150 @ 0.5mm mask must construct");
+        let mask =
+            LayerMask::new(300, 150, 0.5).expect("valid 300×150 @ 0.5mm mask must construct");
         assert_eq!(mask.width_mm(), 150.0);
         assert_eq!(mask.height_mm(), 75.0);
     }
 
     #[test]
     fn has_void_on_lateral_edge_true_when_edge_unset() {
-        let mask = LayerMask::new(5, 5, 0.5)
-            .expect("valid 5×5 @ 0.5mm mask must construct");
+        let mask = LayerMask::new(5, 5, 0.5).expect("valid 5×5 @ 0.5mm mask must construct");
         // Default all-void → every edge cell is void
         assert!(mask.has_void_on_lateral_edge());
     }
 
     #[test]
     fn has_void_on_lateral_edge_false_when_edges_solid() {
-        let mask = LayerMask::new_all_solid(5, 5, 0.5)
-            .expect("valid 5×5 @ 0.5mm mask must construct");
+        let mask =
+            LayerMask::new_all_solid(5, 5, 0.5).expect("valid 5×5 @ 0.5mm mask must construct");
         // Fully solid → no void cells anywhere, including edges
         assert!(!mask.has_void_on_lateral_edge());
     }
 
     #[test]
     fn has_void_on_lateral_edge_detects_single_void_cell() {
-        let mut mask = LayerMask::new_all_solid(5, 5, 0.5)
-            .expect("valid 5×5 @ 0.5mm mask must construct");
+        let mut mask =
+            LayerMask::new_all_solid(5, 5, 0.5).expect("valid 5×5 @ 0.5mm mask must construct");
         mask.clear(0, 2).expect("clear(0,2) in bounds");
         assert!(mask.has_void_on_lateral_edge());
     }
 
     #[test]
     fn has_void_on_lateral_edge_ignores_interior_voids() {
-        let mut mask = LayerMask::new_all_solid(5, 5, 0.5)
-            .expect("valid 5×5 @ 0.5mm mask must construct");
+        let mut mask =
+            LayerMask::new_all_solid(5, 5, 0.5).expect("valid 5×5 @ 0.5mm mask must construct");
         // Void in the middle (2,2) — not on any lateral edge
         mask.clear(2, 2).expect("clear(2,2) in bounds");
         assert!(!mask.has_void_on_lateral_edge());
@@ -400,27 +389,21 @@ mod tests {
 
     #[test]
     fn equality_requires_matching_dimensions_voxel_size_and_bits() {
-        let a = LayerMask::new(3, 3, 0.5)
-            .expect("valid 3×3 @ 0.5mm mask must construct");
-        let b = LayerMask::new(3, 3, 0.5)
-            .expect("valid 3×3 @ 0.5mm mask must construct");
+        let a = LayerMask::new(3, 3, 0.5).expect("valid 3×3 @ 0.5mm mask must construct");
+        let b = LayerMask::new(3, 3, 0.5).expect("valid 3×3 @ 0.5mm mask must construct");
         assert_eq!(a, b);
 
-        let c = LayerMask::new(3, 3, 1.0)
-            .expect("valid 3×3 @ 1.0mm mask must construct");
+        let c = LayerMask::new(3, 3, 1.0).expect("valid 3×3 @ 1.0mm mask must construct");
         assert_ne!(a, c);
 
-        let d = LayerMask::new(4, 3, 0.5)
-            .expect("valid 4×3 @ 0.5mm mask must construct");
+        let d = LayerMask::new(4, 3, 0.5).expect("valid 4×3 @ 0.5mm mask must construct");
         assert_ne!(a, d);
     }
 
     #[test]
     fn layer_geometry_pairs_area_and_mask() {
-        let area = CrossSectionArea::new(10.0)
-            .expect("area 10 mm² is in CrossSectionArea domain");
-        let mask = LayerMask::new(5, 5, 1.0)
-            .expect("valid 5×5 @ 1.0mm mask must construct");
+        let area = CrossSectionArea::new(10.0).expect("area 10 mm² is in CrossSectionArea domain");
+        let mask = LayerMask::new(5, 5, 1.0).expect("valid 5×5 @ 1.0mm mask must construct");
         let geom = LayerGeometry::new(area, mask.clone());
         assert_eq!(geom.area, area);
         assert_eq!(geom.mask, mask);

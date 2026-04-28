@@ -137,7 +137,8 @@ mod tests {
     }
 
     fn vat(c: f32) -> VatTemperature {
-        VatTemperature::new(c).expect("test fixture: finite °C above absolute zero is a valid VatTemperature")
+        VatTemperature::new(c)
+            .expect("test fixture: finite °C above absolute zero is a valid VatTemperature")
     }
 
     // --- KB-103 test vectors ---

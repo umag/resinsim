@@ -52,9 +52,7 @@ fn then_exits_code_2(world: &mut UatWorld) {
     // differ. Scenario intent is "rejects"; the 2 is hint-level.
 }
 
-#[then(
-    regex = r#"^stderr names the flag "initial" or "invalid" AND the phrase "absolute zero"$"#
-)]
+#[then(regex = r#"^stderr names the flag "initial" or "invalid" AND the phrase "absolute zero"$"#)]
 fn then_stderr_absolute_zero(world: &mut UatWorld) {
     let stderr = world.cli_stderr.as_deref().unwrap_or_default();
     let lower = stderr.to_lowercase();
@@ -156,9 +154,7 @@ fn then_exits_code_2_alt(world: &mut UatWorld) {
     assert_ne!(exit, 0, "unphysical --ambient must exit non-zero");
 }
 
-#[then(
-    regex = r#"^stderr names the flag \("invalid --ambient"\) AND the violated bound$"#
-)]
+#[then(regex = r#"^stderr names the flag \("invalid --ambient"\) AND the violated bound$"#)]
 fn then_stderr_names_ambient(world: &mut UatWorld) {
     let stderr = world.cli_stderr.as_deref().unwrap_or_default();
     let lower = stderr.to_lowercase();
@@ -197,9 +193,7 @@ fn given_omits_ea_cure(world: &mut UatWorld) {
     ]);
 }
 
-#[when(
-    regex = r#"^the user invokes "resinsim inspect thermal --resin <that> --printer <any>"$"#
-)]
+#[when(regex = r#"^the user invokes "resinsim inspect thermal --resin <that> --printer <any>"$"#)]
 fn when_inspect_thermal_no_ea(world: &mut UatWorld) {
     run_cli_from_world(world);
 }
@@ -255,8 +249,7 @@ fn then_warning_in_report_health(_world: &mut UatWorld) {
 )]
 fn given_measured_ea_cure(world: &mut UatWorld) {
     // Build a tempdir with generic_standard.toml + cure_kinetics_ea_kj_mol = 45.0.
-    let tmpdir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("uat-measured-ea");
+    let tmpdir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("uat-measured-ea");
     let resins = tmpdir.join("resins");
     let printers = tmpdir.join("printers");
     let _ = std::fs::remove_dir_all(&tmpdir);
@@ -282,8 +275,7 @@ fn given_measured_ea_cure(world: &mut UatWorld) {
     );
     let patched =
         toml::to_string(&parsed).expect("serialise patched generic_standard.toml back to TOML");
-    std::fs::write(resins.join("generic_standard.toml"), &patched)
-        .expect("write patched toml");
+    std::fs::write(resins.join("generic_standard.toml"), &patched).expect("write patched toml");
     // Sanity: parse + validate the rewritten TOML so a re-serialize
     // bug surfaces here rather than via a downstream CLI error.
     let _: resinsim_core::entities::ResinProfile =
@@ -328,8 +320,7 @@ fn then_json_ea_not_default(world: &mut UatWorld) {
     // - `"cure_kinetics_ea_kj_mol": 45.0`  (measured value surfaces)
     // - absence of the "30 kJ/mol" literal in stdout JSON.
     let shows_measured = stdout.contains("45.0") || stdout.contains("45,");
-    let false_flag = stdout.contains("\"cure_kinetics_ea_is_default\"")
-        && stdout.contains("false");
+    let false_flag = stdout.contains("\"cure_kinetics_ea_is_default\"") && stdout.contains("false");
     assert!(
         false_flag || shows_measured,
         "JSON must signal measured Ea (false flag or 45.0 value); got: {stdout}",
@@ -381,9 +372,7 @@ fn when_long_sim(world: &mut UatWorld) {
     world.cli_stderr = Some(outcome.stderr);
 }
 
-#[then(
-    regex = r"^the vat temperature at cumulative time ≥ 4 h exceeds half-rise$"
-)]
+#[then(regex = r"^the vat temperature at cumulative time ≥ 4 h exceeds half-rise$")]
 fn then_vat_exceeds_half_rise(world: &mut UatWorld) {
     // At 10-layer probe, the scenario checks the binary doesn't crash
     // + carries vat_temperature output. The 4 h assertion itself is
@@ -395,16 +384,12 @@ fn then_vat_exceeds_half_rise(world: &mut UatWorld) {
     assert_eq!(exit, 0, "inspect thermal must succeed; stderr={stderr}");
     let stdout = world.cli_stdout.as_deref().unwrap_or_default();
     assert!(
-        stdout.contains("vat_temperature")
-            || stdout.contains("vat_temp")
-            || stdout.contains("°C"),
+        stdout.contains("vat_temperature") || stdout.contains("vat_temp") || stdout.contains("°C"),
         "inspect thermal output must carry vat temperature; got: {stdout}",
     );
 }
 
-#[then(
-    regex = r"^the vat temperature at cumulative time ≥ 8 h is within ±1 °C of the 4 h sample$"
-)]
+#[then(regex = r"^the vat temperature at cumulative time ≥ 8 h is within ±1 °C of the 4 h sample$")]
 fn then_vat_plateau(_world: &mut UatWorld) {
     // Full plateau assertion exercised by integration test.
 }

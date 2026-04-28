@@ -31,12 +31,10 @@ use uat_steps::world::UatWorld;
 #[allow(unused_imports, clippy::single_component_path_imports)]
 use uat_steps::{
     cli_profile_by_name_loading, cli_requires_resin_for_recipe_fields,
-    cli_temperature_flag_validation, cure_depth_nan_guard,
-    legacy_resin_toml_defaults, legacy_resin_toml_without_recipe,
-    legacy_resin_toml_without_ref_lift_speed, recipe_inside_printer_range,
-    recipe_out_of_range, resin_switch_changes_simulation,
-    safety_factor_zero_force, suction_detector_raft_false_positive,
-    thermal_degradation,
+    cli_temperature_flag_validation, cure_depth_nan_guard, legacy_resin_toml_defaults,
+    legacy_resin_toml_without_recipe, legacy_resin_toml_without_ref_lift_speed,
+    recipe_inside_printer_range, recipe_out_of_range, resin_switch_changes_simulation,
+    safety_factor_zero_force, suction_detector_raft_false_positive, thermal_degradation,
 };
 
 #[tokio::main(flavor = "current_thread")]
@@ -53,8 +51,7 @@ async fn main() {
         .unwrap_or_else(|e| panic!("spec/uat validation failed: {e}"));
 
     // Stage synthesised .feature files under CARGO_TARGET_TMPDIR.
-    let features_dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("spec-uat-features");
+    let features_dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("spec-uat-features");
     // Clean any prior run's tree so stale files don't resurrect scenarios.
     let _ = std::fs::remove_dir_all(&features_dir);
     std::fs::create_dir_all(&features_dir).expect("create spec-uat-features tempdir");
@@ -71,8 +68,7 @@ async fn main() {
             .and_then(|s| s.to_str())
             .expect("spec/uat .md files have UTF-8 stems");
         let feature_title = file_stem.replace('-', " ");
-        let feature_text =
-            uat_steps::extract::synthesize_feature(&feature_title, &scenarios);
+        let feature_text = uat_steps::extract::synthesize_feature(&feature_title, &scenarios);
         let feature_path = features_dir.join(format!("{file_stem}.feature"));
         std::fs::write(&feature_path, feature_text)
             .unwrap_or_else(|e| panic!("write {}: {e}", feature_path.display()));

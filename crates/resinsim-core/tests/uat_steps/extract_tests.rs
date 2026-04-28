@@ -12,7 +12,7 @@
 //! arbitrary UTF-8, on arbitrary byte sequences (via lossy decode), and on
 //! structured whitespace / line-ending perturbation.
 
-use super::extract::{ExtractedScenario, extract};
+use super::extract::{extract, ExtractedScenario};
 use proptest::prelude::*;
 
 // ---- 1. single fence with preceding heading --------------------------------
@@ -134,7 +134,8 @@ Given yes
     assert_eq!(out.len(), 1);
     assert!(out[0].gherkin.contains("Given yes"));
     assert!(
-        !out[0].gherkin.contains("fn not_a_scenario") && !out[0].gherkin.contains("no language tag"),
+        !out[0].gherkin.contains("fn not_a_scenario")
+            && !out[0].gherkin.contains("no language tag"),
         "non-gherkin fence content leaked",
     );
 }
@@ -238,8 +239,7 @@ fn spec_uat_dir_extracts_expected_scenarios_across_all_files() {
     // (H2 or H3) before each fence; compound UAT-Ns have H3 sub-headings
     // introduced in step 3 so titles don't collide across sibling fences
     // under a shared H2.
-    let mut seen: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
+    let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for (file, title) in &all_titles {
         if let Some(first_file) = seen.get(title) {
             panic!(

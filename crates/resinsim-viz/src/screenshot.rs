@@ -33,13 +33,13 @@ use std::path::{Path, PathBuf};
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{Captured, Screenshot, save_to_disk};
+use bevy::render::view::screenshot::{save_to_disk, Captured, Screenshot};
 
-use crate::slice::LoadedSliceStack;
 use crate::mesh::LoadedStlMesh;
+use crate::slice::LoadedSliceStack;
 use crate::{
-    Args, EXIT_SCREENSHOT_RENDER_TIMEOUT, EXIT_SCREENSHOT_WRITE_FAILED, LoadedSimulation,
-    fatal_exit,
+    fatal_exit, Args, LoadedSimulation, EXIT_SCREENSHOT_RENDER_TIMEOUT,
+    EXIT_SCREENSHOT_WRITE_FAILED,
 };
 
 // ---------------------------------------------------------------------------
@@ -500,22 +500,14 @@ pub fn capture_screenshot_and_exit(
     let file_present = if was_spawned {
         args.screenshot
             .as_ref()
-            .map(|p| {
-                std::fs::metadata(p)
-                    .map(|m| m.len() > 0)
-                    .unwrap_or(false)
-            })
+            .map(|p| std::fs::metadata(p).map(|m| m.len() > 0).unwrap_or(false))
             .unwrap_or(false)
     } else {
         false
     };
 
     let sim_loaded = loads.sim.simulation.is_some();
-    let sim_failed = loads
-        .sim
-        .last_attempt
-        .as_ref()
-        .is_some_and(|r| r.is_err());
+    let sim_failed = loads.sim.last_attempt.as_ref().is_some_and(|r| r.is_err());
     let slice_present = !loads.slice.is_empty();
     let stl_present = !loads.stl.is_empty();
     let ready = loads_settled(&args, slice_present, stl_present, sim_loaded, sim_failed);
@@ -624,11 +616,7 @@ pub fn capture_screenshot_and_exit(
 mod tests {
     use super::*;
 
-    fn args_with_loads(
-        ctb: bool,
-        stl: bool,
-        sim: bool,
-    ) -> Args {
+    fn args_with_loads(ctb: bool, stl: bool, sim: bool) -> Args {
         // Args { all default to None } with the specified --load-* paths
         // toggled. Path values are arbitrary placeholders — loads_settled
         // only inspects is_none(), not the path content.
@@ -764,7 +752,10 @@ mod tests {
     fn capture_inner_skip_when_screenshot_none() {
         let mut s = State::default();
         let args = args_with_loads(false, false, false); // no --screenshot
-        assert_eq!(drive(&mut s, &args, true, false, false), CaptureDecision::Skip);
+        assert_eq!(
+            drive(&mut s, &args, true, false, false),
+            CaptureDecision::Skip
+        );
     }
 
     #[test]
@@ -773,7 +764,10 @@ mod tests {
         let args = args_with_screenshot("/tmp/x.png");
         // Frame 1: ready=true, frames_since_ready becomes 1, below
         // SETTLE_FRAMES_AFTER_READY (=2) → Skip.
-        assert_eq!(drive(&mut s, &args, true, false, false), CaptureDecision::Skip);
+        assert_eq!(
+            drive(&mut s, &args, true, false, false),
+            CaptureDecision::Skip
+        );
         assert_eq!(s.frames_since_ready, 1);
     }
 
@@ -794,7 +788,10 @@ mod tests {
         // Drive into Phase 2: spawn_fired=true, no Captured yet.
         s.spawn_fired = true;
         for _ in 0..5 {
-            assert_eq!(drive(&mut s, &args, true, false, false), CaptureDecision::Skip);
+            assert_eq!(
+                drive(&mut s, &args, true, false, false),
+                CaptureDecision::Skip
+            );
         }
         assert_eq!(s.frames_since_spawn, 5);
     }
@@ -852,7 +849,7 @@ mod tests {
         let args = args_with_screenshot("/tmp/x.png");
         s.spawn_fired = true;
         let _ = drive(&mut s, &args, true, true, false); // Captured, no file yet
-        // Subsequent frames within file-wait window: Skip.
+                                                         // Subsequent frames within file-wait window: Skip.
         for _ in 0..(MAX_FILE_WAIT_FRAMES - 5) {
             assert_eq!(
                 drive(&mut s, &args, true, false, false),
@@ -897,8 +894,11 @@ mod tests {
         let args = args_with_screenshot("/tmp/x.png");
         s.spawn_fired = true;
         let _ = drive(&mut s, &args, true, true, true); // ExitSuccess
-        // Immediate next call: Skip via has_exited guard.
-        assert_eq!(drive(&mut s, &args, true, true, true), CaptureDecision::Skip);
+                                                        // Immediate next call: Skip via has_exited guard.
+        assert_eq!(
+            drive(&mut s, &args, true, true, true),
+            CaptureDecision::Skip
+        );
     }
 
     #[test]
@@ -911,7 +911,10 @@ mod tests {
         let _ = drive(&mut s, &args, true, false, false); // frame 1 ready: counter=1
         assert_eq!(s.frames_since_ready, 1);
         let _ = drive(&mut s, &args, false, false, false); // frame 2 NOT ready
-        assert_eq!(s.frames_since_ready, 0, "oscillation must reset settle counter");
+        assert_eq!(
+            s.frames_since_ready, 0,
+            "oscillation must reset settle counter"
+        );
     }
 
     #[test]
@@ -971,11 +974,11 @@ mod tests {
             "resinsim-viz-button-test-{}.png",
             std::process::id()
         ));
-        let id = app.world_mut().register_system(
-            move |mut commands: Commands| {
+        let id = app
+            .world_mut()
+            .register_system(move |mut commands: Commands| {
                 spawn_button_screenshot(&mut commands, &path);
-            },
-        );
+            });
         app.world_mut()
             .run_system(id)
             .expect("system runs to completion");
@@ -985,7 +988,10 @@ mod tests {
         let mut q_marker = world.query_filtered::<Entity, With<AutoCaptureMarker>>();
         let with_marker = q_marker.iter(world).count();
         assert_eq!(total, 1, "exactly one Screenshot entity spawned");
-        assert_eq!(with_marker, 0, "button captures must NOT carry AutoCaptureMarker");
+        assert_eq!(
+            with_marker, 0,
+            "button captures must NOT carry AutoCaptureMarker"
+        );
     }
 
     #[test]
@@ -996,23 +1002,21 @@ mod tests {
         // matching only auto-captures.
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        let path = std::env::temp_dir().join(format!(
-            "resinsim-viz-auto-test-{}.png",
-            std::process::id()
-        ));
-        let id = app.world_mut().register_system(
-            move |mut commands: Commands| {
+        let path =
+            std::env::temp_dir().join(format!("resinsim-viz-auto-test-{}.png", std::process::id()));
+        let id = app
+            .world_mut()
+            .register_system(move |mut commands: Commands| {
                 spawn_auto_screenshot(&mut commands, &path);
-            },
-        );
+            });
         app.world_mut()
             .run_system(id)
             .expect("system runs to completion");
         let world = app.world_mut();
         let mut q = world.query_filtered::<Entity, With<Screenshot>>();
         let total = q.iter(world).count();
-        let mut q_marker = world
-            .query_filtered::<Entity, (With<Screenshot>, With<AutoCaptureMarker>)>();
+        let mut q_marker =
+            world.query_filtered::<Entity, (With<Screenshot>, With<AutoCaptureMarker>)>();
         let with_marker = q_marker.iter(world).count();
         assert_eq!(total, 1, "exactly one Screenshot entity spawned");
         assert_eq!(with_marker, 1, "auto captures MUST carry AutoCaptureMarker");

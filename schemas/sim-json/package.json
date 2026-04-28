@@ -1,0 +1,19 @@
+{
+  "name": "@resinsim/sim-json-schema",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Canonical zod 4 schema for resinsim's sim.json interchange format. See docs/adr/0015-sim-json-canonical-interchange.md.",
+  "main": "v1.ts",
+  "types": "v1.ts",
+  "scripts": {
+    "regenerate-schema": "tsx scripts/regenerate-schema.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "zod": "4.0.0"
+  },
+  "devDependencies": {
+    "tsx": "4.19.2",
+    "typescript": "5.7.2"
+  }
+}

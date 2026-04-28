@@ -147,9 +147,7 @@ impl PrintSimulation {
     /// Returns `Err` on first failure with a message identifying the
     /// violation. See ADR-0009.
     pub fn validate(&self) -> Result<(), String> {
-        self.recipe
-            .validate()
-            .map_err(|e| format!("recipe: {e}"))?;
+        self.recipe.validate().map_err(|e| format!("recipe: {e}"))?;
         self.printer
             .validate()
             .map_err(|e| format!("printer: {e}"))?;
@@ -352,8 +350,9 @@ pub(crate) mod tests {
     #[test]
     fn non_sequential_layer_returns_err() {
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![])
-            .expect("test fixture: index 0 satisfies add_layer's contiguity precondition on an empty sim");
+        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![]).expect(
+            "test fixture: index 0 satisfies add_layer's contiguity precondition on an empty sim",
+        );
         let err = sim
             .add_layer(make_layer(5, 6.0, 2.5, 22.5), vec![])
             .expect_err("non-contiguous index 5 (expected 1) must return Err");
@@ -517,8 +516,7 @@ pub(crate) mod tests {
     #[test]
     fn validate_returns_err_when_recipe_invalid() {
         let sim = build_three_layer_sim();
-        let mut value =
-            serde_json::to_value(&sim).expect("PrintSimulation must serialize to JSON");
+        let mut value = serde_json::to_value(&sim).expect("PrintSimulation must serialize to JSON");
         value["recipe"]["layer_height_um"] = serde_json::json!(-1.0);
         let tampered: PrintSimulation =
             serde_json::from_value(value).expect("tampered JSON must still deserialize");
@@ -534,8 +532,7 @@ pub(crate) mod tests {
     #[test]
     fn validate_returns_err_when_printer_invalid() {
         let sim = build_three_layer_sim();
-        let mut value =
-            serde_json::to_value(&sim).expect("PrintSimulation must serialize to JSON");
+        let mut value = serde_json::to_value(&sim).expect("PrintSimulation must serialize to JSON");
         value["printer"]["name"] = serde_json::json!("");
         let tampered: PrintSimulation =
             serde_json::from_value(value).expect("tampered JSON must still deserialize");
@@ -551,8 +548,7 @@ pub(crate) mod tests {
     #[test]
     fn validate_returns_err_when_layer_indices_non_sequential() {
         let sim = build_three_layer_sim();
-        let mut value =
-            serde_json::to_value(&sim).expect("PrintSimulation must serialize to JSON");
+        let mut value = serde_json::to_value(&sim).expect("PrintSimulation must serialize to JSON");
         // Skip index 1 — layers now read [0, 5, 2], with position 1 violating.
         value["layers"][1]["index"] = serde_json::json!(5);
         let tampered: PrintSimulation =

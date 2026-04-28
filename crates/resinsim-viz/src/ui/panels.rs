@@ -11,13 +11,13 @@
 //! mostly mechanical.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, egui};
+use bevy_egui::{egui, EguiContexts};
 
-use crate::screenshot::{LastScreenshot, default_screenshot_path, spawn_button_screenshot};
-use crate::sim::{RunSimRequest, SimulationResult, loaded_basename};
+use crate::screenshot::{default_screenshot_path, spawn_button_screenshot, LastScreenshot};
+use crate::sim::{loaded_basename, RunSimRequest, SimulationResult};
 use crate::slice::LoadedSliceStack;
 use crate::ui::plots::{build_plot_data, render_plots};
-use crate::ui::state::{PickerState, run_block_reason};
+use crate::ui::state::{run_block_reason, PickerState};
 
 /// Toast lifetime for the "Captured: <basename>" label after the
 /// Capture-screenshot button is clicked. 3 s @ 60 Hz keeps the
@@ -61,16 +61,13 @@ pub fn left_panel(
             ui.separator();
 
             // --- Resin picker ---
-            let resin_text = state
-                .selected_resin
-                .clone()
-                .unwrap_or_else(|| {
-                    if state.available_resins.is_empty() {
-                        "(no profiles — set --data-dir)".into()
-                    } else {
-                        "(select a resin)".into()
-                    }
-                });
+            let resin_text = state.selected_resin.clone().unwrap_or_else(|| {
+                if state.available_resins.is_empty() {
+                    "(no profiles — set --data-dir)".into()
+                } else {
+                    "(select a resin)".into()
+                }
+            });
             egui::ComboBox::from_label("Resin profile")
                 .selected_text(resin_text)
                 .show_ui(ui, |ui| {
@@ -83,16 +80,13 @@ pub fn left_panel(
                 });
 
             // --- Printer picker ---
-            let printer_text = state
-                .selected_printer
-                .clone()
-                .unwrap_or_else(|| {
-                    if state.available_printers.is_empty() {
-                        "(no profiles — set --data-dir)".into()
-                    } else {
-                        "(select a printer)".into()
-                    }
-                });
+            let printer_text = state.selected_printer.clone().unwrap_or_else(|| {
+                if state.available_printers.is_empty() {
+                    "(no profiles — set --data-dir)".into()
+                } else {
+                    "(select a printer)".into()
+                }
+            });
             egui::ComboBox::from_label("Printer profile")
                 .selected_text(printer_text)
                 .show_ui(ui, |ui| {
@@ -114,10 +108,7 @@ pub fn left_panel(
                     recipe.layer_height_um(),
                     resin.name()
                 ));
-                ui.label(format!(
-                    "Exposure: {:.2} s",
-                    recipe.normal_exposure_sec()
-                ));
+                ui.label(format!("Exposure: {:.2} s", recipe.normal_exposure_sec()));
             } else {
                 ui.label("(pick a resin to see recipe defaults)");
             }
@@ -133,8 +124,8 @@ pub fn left_panel(
             ui.add_space(6.0);
 
             // --- Status line ---
-            let status = run_block_reason(&state, has_ctb)
-                .unwrap_or_else(|| "Ready to run".to_string());
+            let status =
+                run_block_reason(&state, has_ctb).unwrap_or_else(|| "Ready to run".to_string());
             ui.colored_label(egui::Color32::GRAY, status);
 
             // --- Run button ---
@@ -161,12 +152,10 @@ pub fn left_panel(
             // --- Capture section (issue 12) ---
             ui.separator();
             ui.heading("Capture");
-            let button = ui
-                .button("Capture screenshot")
-                .on_hover_text(
-                    "Saves a PNG of the current window to the working \
+            let button = ui.button("Capture screenshot").on_hover_text(
+                "Saves a PNG of the current window to the working \
                      directory (timestamped filename).",
-                );
+            );
             if button.clicked() {
                 let path = default_screenshot_path();
                 spawn_button_screenshot(&mut commands, &path);
@@ -179,10 +168,7 @@ pub fn left_panel(
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("(unknown)");
-                    ui.colored_label(
-                        egui::Color32::LIGHT_GREEN,
-                        format!("Captured: {basename}"),
-                    );
+                    ui.colored_label(egui::Color32::LIGHT_GREEN, format!("Captured: {basename}"));
                 }
             }
         });
@@ -207,9 +193,7 @@ pub fn right_panel(mut contexts: EguiContexts, sim: Res<SimulationResult>) {
                     let summary = s.summary();
                     ui.label(format!(
                         "{} layers · {} failures · total time {:.1} s",
-                        summary.total_layers,
-                        summary.critical_failures,
-                        summary.total_time_sec
+                        summary.total_layers, summary.critical_failures, summary.total_time_sec
                     ));
                 }
                 None => {

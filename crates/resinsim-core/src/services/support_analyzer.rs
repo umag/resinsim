@@ -169,14 +169,8 @@ mod tests {
             n_supports: 10,
         };
         let plate = PlateAdhesionProfile::default_textured();
-        let assessment = SupportAnalyzer::assess(
-            50,
-            area(100.0),
-            peel(0.0),
-            &resin,
-            &supports,
-            &plate,
-        );
+        let assessment =
+            SupportAnalyzer::assess(50, area(100.0), peel(0.0), &resin, &supports, &plate);
         assert!(assessment.safety_factor.is_none());
         assert!(assessment.overload.is_none());
     }
@@ -193,14 +187,8 @@ mod tests {
             n_supports: 10,
         };
         let plate = PlateAdhesionProfile::default_textured();
-        let assessment = SupportAnalyzer::assess(
-            0,
-            area(2500.0),
-            peel(32.5),
-            &resin,
-            &supports,
-            &plate,
-        );
+        let assessment =
+            SupportAnalyzer::assess(0, area(2500.0), peel(32.5), &resin, &supports, &plate);
         let sf = assessment
             .safety_factor
             .expect("non-zero force must yield Some(SafetyFactor)");
@@ -219,14 +207,8 @@ mod tests {
             n_supports: 10,
         };
         let plate = PlateAdhesionProfile::default_textured();
-        let assessment = SupportAnalyzer::assess(
-            0,
-            area(2500.0),
-            peel(500.0),
-            &resin,
-            &supports,
-            &plate,
-        );
+        let assessment =
+            SupportAnalyzer::assess(0, area(2500.0), peel(500.0), &resin, &supports, &plate);
         let event = assessment
             .overload
             .as_ref()
@@ -304,14 +286,8 @@ mod tests {
             n_supports: 10,
         };
         let plate = PlateAdhesionProfile::default_textured();
-        let assessment = SupportAnalyzer::assess(
-            0,
-            area(2500.0),
-            peel(32.5),
-            &resin,
-            &supports,
-            &plate,
-        );
+        let assessment =
+            SupportAnalyzer::assess(0, area(2500.0), peel(32.5), &resin, &supports, &plate);
         let expected = assessment.plate_capacity_n + assessment.support_capacity.value();
         assert!(
             (assessment.total_capacity.value() - expected).abs() < 1e-4,
@@ -333,14 +309,8 @@ mod tests {
             n_supports: 10,
         };
         let plate = PlateAdhesionProfile::default_textured();
-        let assessment = SupportAnalyzer::assess(
-            0,
-            area(2500.0),
-            peel(500.0),
-            &resin,
-            &supports,
-            &plate,
-        );
+        let assessment =
+            SupportAnalyzer::assess(0, area(2500.0), peel(500.0), &resin, &supports, &plate);
         let event = assessment.overload.expect("overload must fire");
         assert!(
             event.message.contains(" + supports ")
@@ -360,14 +330,8 @@ mod tests {
             n_supports: 0,
         };
         let plate = PlateAdhesionProfile::default_textured();
-        let assessment = SupportAnalyzer::assess(
-            0,
-            area(2500.0),
-            peel(500.0),
-            &resin,
-            &supports,
-            &plate,
-        );
+        let assessment =
+            SupportAnalyzer::assess(0, area(2500.0), peel(500.0), &resin, &supports, &plate);
         let event = assessment.overload.expect("overload must fire");
         assert!(
             event.message.contains("plate adhesion ") && event.message.contains("(no supports)"),
@@ -385,14 +349,8 @@ mod tests {
             n_supports: 10,
         };
         let plate = plate_zero();
-        let assessment = SupportAnalyzer::assess(
-            50,
-            area(100.0),
-            peel(500.0),
-            &resin,
-            &supports,
-            &plate,
-        );
+        let assessment =
+            SupportAnalyzer::assess(50, area(100.0), peel(500.0), &resin, &supports, &plate);
         let event = assessment.overload.expect("overload must fire");
         assert!(
             event.message.contains("supports ") && event.message.contains("(no plate adhesion)"),

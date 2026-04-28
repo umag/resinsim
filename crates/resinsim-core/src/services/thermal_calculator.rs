@@ -412,8 +412,7 @@ mod tests {
         use crate::entities::{PrinterProfile, Recipe};
         let recipe = Recipe::generic_standard();
         let printer = PrinterProfile::elegoo_mars5_ultra();
-        let vat =
-            ThermalCalculator::vat_temperature_at_layer_v2(&recipe, &printer, 23.0, None, 0);
+        let vat = ThermalCalculator::vat_temperature_at_layer_v2(&recipe, &printer, 23.0, None, 0);
         assert!((vat.value() - 23.0).abs() < 1e-4);
     }
 

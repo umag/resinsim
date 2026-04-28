@@ -62,7 +62,11 @@ struct Cursor {
 
 impl Default for Cursor {
     fn default() -> Self {
-        Self { layer: 42, auto_advance: true, last_tick_secs: 0.0 }
+        Self {
+            layer: 42,
+            auto_advance: true,
+            last_tick_secs: 0.0,
+        }
     }
 }
 
@@ -243,18 +247,14 @@ fn draw_dashboard(
                 let total_minus_one = TOTAL_LAYERS.saturating_sub(1);
                 let mut layer_i = cursor.layer as i64;
                 let resp = ui.add(
-                    egui::Slider::new(&mut layer_i, 0..=(total_minus_one as i64))
-                        .show_value(false),
+                    egui::Slider::new(&mut layer_i, 0..=(total_minus_one as i64)).show_value(false),
                 );
                 if resp.changed() {
                     cursor.layer = layer_i.max(0) as u32;
                 }
                 ui.label(
-                    egui::RichText::new(format!(
-                        "{:>04} of {:>04}",
-                        cursor.layer, total_minus_one
-                    ))
-                    .monospace(),
+                    egui::RichText::new(format!("{:>04} of {:>04}", cursor.layer, total_minus_one))
+                        .monospace(),
                 );
                 ui.separator();
                 ui.checkbox(&mut cursor.auto_advance, "auto-advance");
@@ -340,8 +340,7 @@ fn forces_pane(ui: &mut egui::Ui, series: &Series, cursor_layer: u32) {
         .link_cursor(layer_link(), [true, false])
         .show(ui, |plot_ui| {
             plot_ui.line(
-                Line::new("peel", PlotPoints::from(series.peel_force.clone()))
-                    .color(SERIES_GREEN),
+                Line::new("peel", PlotPoints::from(series.peel_force.clone())).color(SERIES_GREEN),
             );
             plot_ui.line(
                 Line::new("suction", PlotPoints::from(series.suction_force.clone()))
@@ -394,8 +393,11 @@ fn safety_factor_pane(ui: &mut egui::Ui, series: &Series, cursor_layer: u32) {
         .link_cursor(layer_link(), [true, false])
         .show(ui, |plot_ui| {
             plot_ui.line(
-                Line::new("safety_factor", PlotPoints::from(series.safety_factor.clone()))
-                    .color(SERIES_GREEN),
+                Line::new(
+                    "safety_factor",
+                    PlotPoints::from(series.safety_factor.clone()),
+                )
+                .color(SERIES_GREEN),
             );
             plot_ui.hline(
                 HLine::new("threshold", 1.0_f64)
@@ -452,12 +454,27 @@ fn stats_table(ui: &mut egui::Ui, layer: u32) {
         .show(ui, |ui| {
             row(ui, "index", &format!("{layer:>04}"), "");
             row(ui, "cure_depth", &format!("{cure_depth_um:>8.1}"), "µm");
-            row(ui, "worst_cure_depth", &format!("{worst_cure_depth_um:>8.1}"), "µm");
-            row(ui, "effective_layer", &format!("{effective_layer_um:>8.1}"), "µm");
+            row(
+                ui,
+                "worst_cure_depth",
+                &format!("{worst_cure_depth_um:>8.1}"),
+                "µm",
+            );
+            row(
+                ui,
+                "effective_layer",
+                &format!("{effective_layer_um:>8.1}"),
+                "µm",
+            );
             row(ui, "peel_force", &format!("{peel_force_n:>8.2}"), "N");
             row(ui, "suction_force", &format!("{suction_force_n:>8.2}"), "N");
             row(ui, "total_force", &format!("{total_force_n:>8.2}"), "N");
-            row(ui, "support_capacity", &format!("{support_capacity_n:>8.2}"), "N");
+            row(
+                ui,
+                "support_capacity",
+                &format!("{support_capacity_n:>8.2}"),
+                "N",
+            );
             row(ui, "safety_factor", &format!("{safety_factor:>8.2}"), "");
             row(ui, "cross_section_area", &format!("{area_mm2:>8.1}"), "mm²");
             row(ui, "area_delta", &format!("{area_delta_mm2:>+8.2}"), "mm²");

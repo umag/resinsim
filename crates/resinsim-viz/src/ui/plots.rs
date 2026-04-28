@@ -146,11 +146,7 @@ pub fn render_plots(ui: &mut egui::Ui, data: Option<&PlotData>) {
         .link_cursor(link_group, [true, false])
         .x_axis_formatter(time_fmt)
         .label_formatter(|name, value: &PlotPoint| {
-            format!(
-                "{name}\nt = {}\nz = {:.2} mm",
-                format_hms(value.x),
-                value.y
-            )
+            format!("{name}\nt = {}\nz = {:.2} mm", format_hms(value.x), value.y)
         })
         .show(ui, |plot_ui| {
             plot_ui.line(Line::new(
@@ -255,7 +251,7 @@ pub fn render_plots(ui: &mut egui::Ui, data: Option<&PlotData>) {
 mod tests {
     use super::*;
     use crate::profile_repos::ProfileRepos;
-    use crate::sim::{RunSimRequest, build_simulation_from_layers};
+    use resinsim_core::app::{build_simulation_from_layers, RunRequest};
     use resinsim_core::io::sliced::LayerInput;
     use resinsim_core::simulation::PrintSimulation;
     use resinsim_core::values::LayerMask;
@@ -290,16 +286,16 @@ mod tests {
                     layer_height_um,
                     z_mm,
                 )
-                .expect("test fixture: positive exposure + non-negative area satisfy LayerInput::new")
+                .expect(
+                    "test fixture: positive exposure + non-negative area satisfy LayerInput::new",
+                )
                 .with_mask(mask)
             })
             .collect();
-        let req = RunSimRequest {
-            resin: "generic_standard".into(),
-            printer: "generic_msla_4k".into(),
-        };
-        build_simulation_from_layers(&req, &layers, &shipped_repos(), None)
-            .expect("test fixture: shipped profiles + cube-like inputs satisfy run_from_layer_inputs")
+        let req = RunRequest::new_with_v1_defaults("generic_standard", "generic_msla_4k", None);
+        build_simulation_from_layers(&req, &layers, &shipped_repos().0).expect(
+            "test fixture: shipped profiles + cube-like inputs satisfy run_from_layer_inputs",
+        )
     }
 
     #[test]

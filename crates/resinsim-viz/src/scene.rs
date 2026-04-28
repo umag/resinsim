@@ -178,8 +178,7 @@ pub fn resolve_envelope_after_ctb_load(
             let dx = (profile_env.width_mm - ctb_bed_size_mm.0).abs();
             let dy = (profile_env.depth_mm - ctb_bed_size_mm.1).abs();
             if !*warned_about_mismatch
-                && (dx > ENVELOPE_MISMATCH_TOLERANCE_MM
-                    || dy > ENVELOPE_MISMATCH_TOLERANCE_MM)
+                && (dx > ENVELOPE_MISMATCH_TOLERANCE_MM || dy > ENVELOPE_MISMATCH_TOLERANCE_MM)
             {
                 bevy::log::warn!(
                     "active printer profile envelope ({:.2} x {:.2} mm) disagrees with CTB header bed_size_mm ({:.2} x {:.2} mm) by > {} mm; profile wins. Verify --printer matches the CTB.",
@@ -369,7 +368,10 @@ mod tests {
         // Second call must not re-warn (idempotent).
         let mut warned_was_true = warned;
         resolve_envelope_after_ctb_load(&active, (200.0, 120.0), &mut env, &mut warned_was_true);
-        assert!(warned_was_true, "subsequent calls leave the flag set; warn not re-emitted");
+        assert!(
+            warned_was_true,
+            "subsequent calls leave the flag set; warn not re-emitted"
+        );
     }
 
     #[test]

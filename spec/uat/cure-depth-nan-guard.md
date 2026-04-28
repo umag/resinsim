@@ -5,6 +5,13 @@ date: 2026-04-17
 
 # UAT: Cure depth NaN guard
 
+**ADR-0015 note.** This NaN-guard invariant lives below the
+producer/consumer split. The pipeline `resinsim sim → report health --in`
+preserves it because the guard sits at `Energy::new` / `cure_depth` —
+upstream of envelope serialisation. Sim-time rejection of NaN inputs
+keeps NaN out of any sim.json; downstream consumers therefore never see
+NaN cure-depth values they'd have to handle.
+
 ## UAT-1: Invalid critical energy is caught before cure depth calculation
 
 **Rationale.** T1-F4 root bug: `Energy::new` accepted NaN (`NaN <= 0.0` is

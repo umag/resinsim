@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://resinsim.local/schemas/sim-json/v1.schema.json",
+  "title": "SimulationEnvelopeV1",
+  "description": "Canonical sim.json envelope (schema_version=1). Source: schemas/sim-json/v1.ts (zod 4). Bumping schema_version creates a sibling v2.schema.json.",
+  "type": "object",
+  "required": ["schema_version", "simulation"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "simulation": {
+      "$ref": "#/$defs/PrintSimulationV1"
+    },
+    "provenance": {
+      "$ref": "#/$defs/ProvenanceV1"
+    }
+  },
+  "$defs": {
+    "NumericRangeV1": {
+      "type": "object",
+      "required": ["min", "max"],
+      "additionalProperties": true,
+      "properties": {
+        "min": { "type": "number" },
+        "max": { "type": "number" }
+      }
+    },
+    "BuildEnvelopeMmV1": {
+      "type": "object",
+      "required": ["width_mm", "depth_mm", "max_z_mm"],
+      "additionalProperties": true,
+      "properties": {
+        "width_mm": { "type": "number" },
+        "depth_mm": { "type": "number" },
+        "max_z_mm": { "type": "number" }
+      }
+    },
+    "RecipeV1": {
+      "type": "object",
+      "required": [
+        "layer_height_um",
+        "bottom_layer_count",
+        "transition_layers",
+        "normal_exposure_sec",
+        "bottom_exposure_sec",
+        "wait_before_cure_sec",
+        "wait_before_release_sec",
+        "wait_after_release_sec",
+        "lift_speed_mm_min",
+        "lift_cycle_sec",
+        "lift_distance_mm"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "layer_height_um": { "type": "number" },
+        "bottom_layer_count": { "type": "integer" },
+        "transition_layers": { "type": "integer" },
+        "normal_exposure_sec": { "type": "number" },
+        "bottom_exposure_sec": { "type": "number" },
+        "wait_before_cure_sec": { "type": "number" },
+        "wait_before_release_sec": { "type": "number" },
+        "wait_after_release_sec": { "type": "number" },
+        "lift_speed_mm_min": { "type": "number" },
+        "lift_cycle_sec": { "type": "number" },
+        "lift_distance_mm": { "type": "number" },
+        "retract_speed_mm_min": {
+          "type": ["number", "null"]
+        }
+      }
+    },
+    "PrinterProfileV1": {
+      "type": "object",
+      "required": [
+        "name",
+        "led_power_mw_cm2",
+        "pixel_pitch_um",
+        "layer_height_range_um",
+        "exposure_range_sec",
+        "lift_speed_range_mm_min",
+        "bottom_layer_count_max",
+        "z_stiffness_n_per_mm",
+        "delta_t_steady_c",
+        "thermal_tau_sec",
+        "lcd_uniformity_variation",
+        "voxel_size_mm",
+        "release_mechanism",
+        "led_delta_t_steady_c",
+        "led_tau_sec",
+        "led_to_vat_coupling",
+        "build_envelope_mm"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string" },
+        "led_power_mw_cm2": { "type": "number" },
+        "pixel_pitch_um": { "type": "number" },
+        "layer_height_range_um": { "$ref": "#/$defs/NumericRangeV1" },
+        "exposure_range_sec": { "$ref": "#/$defs/NumericRangeV1" },
+        "lift_speed_range_mm_min": { "$ref": "#/$defs/NumericRangeV1" },
+        "bottom_layer_count_max": { "type": "integer" },
+        "z_stiffness_n_per_mm": { "type": "number" },
+        "delta_t_steady_c": { "type": "number" },
+        "thermal_tau_sec": { "type": "number" },
+        "lcd_uniformity_variation": { "type": "number" },
+        "voxel_size_mm": { "type": "number" },
+        "release_mechanism": {
+          "type": "string",
+          "enum": ["linear", "tilt"]
+        },
+        "led_delta_t_steady_c": { "type": "number" },
+        "led_tau_sec": { "type": "number" },
+        "led_to_vat_coupling": { "type": "number" },
+        "build_envelope_mm": { "$ref": "#/$defs/BuildEnvelopeMmV1" }
+      }
+    },
+    "LayerResultV1": {
+      "type": "object",
+      "required": [
+        "index",
+        "cure_depth_um",
+        "peel_force_n",
+        "suction_force_n",
+        "total_force_n",
+        "support_capacity_n",
+        "safety_factor",
+        "cross_section_area_mm2",
+        "area_delta_mm2",
+        "vat_temperature_c",
+        "viscosity_mpa_s",
+        "z_deflection_um",
+        "effective_layer_height_um",
+        "worst_cure_depth_um"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "index": { "type": "integer" },
+        "cure_depth_um": { "type": "number" },
+        "peel_force_n": { "type": "number" },
+        "suction_force_n": { "type": "number" },
+        "total_force_n": { "type": "number" },
+        "support_capacity_n": { "type": "number" },
+        "safety_factor": {
+          "type": ["number", "null"]
+        },
+        "cross_section_area_mm2": { "type": "number" },
+        "area_delta_mm2": { "type": "number" },
+        "vat_temperature_c": { "type": "number" },
+        "viscosity_mpa_s": { "type": "number" },
+        "z_deflection_um": { "type": "number" },
+        "effective_layer_height_um": { "type": "number" },
+        "worst_cure_depth_um": { "type": "number" }
+      }
+    },
+    "FailureEventV1": {
+      "type": "object",
+      "required": ["layer", "failure_type", "severity", "message"],
+      "additionalProperties": true,
+      "properties": {
+        "layer": { "type": "integer" },
+        "failure_type": {
+          "type": "string",
+          "enum": [
+            "SupportOverload",
+            "ZDeflection",
+            "VatTemperature",
+            "InsufficientCureDepth",
+            "Suction",
+            "ThermalDegradation"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["Info", "Warning", "Critical"]
+        },
+        "message": { "type": "string" }
+      }
+    },
+    "PrintSimulationV1": {
+      "type": "object",
+      "required": ["recipe", "printer", "layers", "failures"],
+      "additionalProperties": true,
+      "properties": {
+        "recipe": { "$ref": "#/$defs/RecipeV1" },
+        "printer": { "$ref": "#/$defs/PrinterProfileV1" },
+        "layers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/LayerResultV1" }
+        },
+        "failures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/FailureEventV1" }
+        }
+      }
+    },
+    "ProvenanceV1": {
+      "type": "object",
+      "required": [
+        "input_path",
+        "resin_name",
+        "printer_name",
+        "n_supports",
+        "tip_radius_mm"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "input_path": { "type": "string" },
+        "resin_name": { "type": "string" },
+        "printer_name": { "type": "string" },
+        "n_supports": { "type": "integer" },
+        "tip_radius_mm": { "type": "number" }
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::values::{DEFAULT_VOXEL_SIZE_MM, FloatRange};
+use crate::values::{FloatRange, DEFAULT_VOXEL_SIZE_MM};
 
 fn default_voxel_size_mm() -> f32 {
     DEFAULT_VOXEL_SIZE_MM
@@ -314,8 +314,7 @@ impl PrinterProfile {
                 self.led_tau_sec
             ));
         }
-        if !self.led_to_vat_coupling.is_finite()
-            || !(0.0..=1.0).contains(&self.led_to_vat_coupling)
+        if !self.led_to_vat_coupling.is_finite() || !(0.0..=1.0).contains(&self.led_to_vat_coupling)
         {
             return Err(format!(
                 "led_to_vat_coupling must be in [0.0, 1.0] (got {})",
@@ -567,7 +566,8 @@ lcd_uniformity_variation = 0.22
         assert_eq!(p.led_delta_t_steady_c(), 10.0);
         assert_eq!(p.led_tau_sec(), 1200.0);
         assert_eq!(p.led_to_vat_coupling(), 0.5);
-        p.validate().expect("legacy defaults must satisfy validate()");
+        p.validate()
+            .expect("legacy defaults must satisfy validate()");
     }
 
     #[test]
@@ -722,9 +722,7 @@ lcd_uniformity_variation = 0.22
             depth_mm: 120.0,
             max_z_mm: 200.0,
         });
-        let err = p
-            .validate()
-            .expect_err("NaN width_mm must fail validate()");
+        let err = p.validate().expect_err("NaN width_mm must fail validate()");
         assert!(
             err.contains("build_envelope_mm.width_mm"),
             "error names the offending field: {err}"

@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::entities::Recipe;
 use crate::io::sliced::{LayerInput, SlicedFileInfo};
-use crate::values::{DEFAULT_VOXEL_SIZE_MM, LayerMask, MaskError};
+use crate::values::{LayerMask, MaskError, DEFAULT_VOXEL_SIZE_MM};
 
 /// Build a Recipe from CTB-parsed fields. Fields not present in CTB format
 /// (transition_layers, wait_*, lift_cycle_sec, lift_distance_mm) take documented
@@ -317,8 +317,8 @@ fn accumulate_lit_run(
         // Map col range → voxel col range
         let world_x_start = col_start_in_row as f32 * px_w_mm;
         let world_x_end_excl = col_end_in_row_excl as f32 * px_w_mm;
-        let vx_start = ((world_x_start / voxel_size_mm) as i64)
-            .clamp(0, voxel_width as i64 - 1) as u32;
+        let vx_start =
+            ((world_x_start / voxel_size_mm) as i64).clamp(0, voxel_width as i64 - 1) as u32;
         let vx_end = (((world_x_end_excl - f32::EPSILON) / voxel_size_mm) as i64)
             .clamp(0, voxel_width as i64 - 1) as u32;
 
@@ -698,8 +698,7 @@ mod tests {
     #[test]
     fn rle_to_mask_empty_rle_all_void() {
         // 4×4 native, 2mm bed at 0.5mm voxel → 4×4 voxels.
-        let mask = rle_to_mask(&[], 4, 4, 2.0, 2.0, 0.5)
-            .expect("valid inputs yield a mask");
+        let mask = rle_to_mask(&[], 4, 4, 2.0, 2.0, 0.5).expect("valid inputs yield a mask");
         assert_eq!(mask.solid_cell_count(), 0);
     }
 
@@ -731,8 +730,7 @@ mod tests {
             0xC0, 0x02, 0x80, 0x02, // row 2
             0xC0, 0x02, 0x80, 0x02, // row 3
         ];
-        let mask = rle_to_mask(&data, 4, 4, 4.0, 4.0, 2.0)
-            .expect("valid inputs yield a mask");
+        let mask = rle_to_mask(&data, 4, 4, 4.0, 4.0, 2.0).expect("valid inputs yield a mask");
         assert_eq!(mask.width_cells(), 2);
         assert_eq!(mask.height_cells(), 2);
         assert!(mask.is_solid(0, 0), "left column bottom");
@@ -752,8 +750,7 @@ mod tests {
             0x40, // 1 lit pixel (no length prefix)
             0x80, 0x0F, // 15 dark
         ];
-        let mask = rle_to_mask(&data, 4, 4, 4.0, 4.0, 2.0)
-            .expect("valid inputs yield a mask");
+        let mask = rle_to_mask(&data, 4, 4, 4.0, 4.0, 2.0).expect("valid inputs yield a mask");
         assert_eq!(mask.solid_cell_count(), 0);
     }
 

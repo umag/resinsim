@@ -28,31 +28,31 @@ use std::path::{Path, PathBuf};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::FileDragAndDrop;
-use bevy_egui::{EguiContexts, EguiPlugin, egui};
+use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, TrackpadBehavior};
 use clap::Parser;
 use resinsim_core::io::{ctb, stl};
-use resinsim_core::repositories::load_simulation;
+use resinsim_core::repositories::load_from_path;
 use resinsim_core::simulation::PrintSimulation;
 
 use resinsim_core::values::InitialLedTemperature;
 
 use crate::data_dir::resolve_data_dir;
 use crate::heatmap::{cure_depth_domain, ramp};
-use crate::mesh::{LoadedStlMesh, fit_panorbit_to_bbox, triangles_to_bevy_mesh};
+use crate::mesh::{fit_panorbit_to_bbox, triangles_to_bevy_mesh, LoadedStlMesh};
 use crate::profile_repos::ProfileRepos;
 use crate::scene::{
-    ActivePrinterProfile, BUILD_PLATE_THICKNESS_MM, BuildPlate, PrinterEnvelope,
-    resolve_envelope_after_ctb_load, spawn_build_plate,
+    resolve_envelope_after_ctb_load, spawn_build_plate, ActivePrinterProfile, BuildPlate,
+    PrinterEnvelope, BUILD_PLATE_THICKNESS_MM,
 };
 use crate::sim::{
-    RunConfig, RunSimRequest, SimulationResult, apply_run_request, load_sim_from_path,
+    apply_run_request, load_sim_from_path, RunConfig, RunSimRequest, SimulationResult,
 };
 use crate::slice::{
-    LoadedSliceStack, cumulative_z_mm, slice_stack_bounding_box, slice_stack_to_bevy_mesh,
+    cumulative_z_mm, slice_stack_bounding_box, slice_stack_to_bevy_mesh, LoadedSliceStack,
 };
 use crate::ui::panels::{left_panel, right_panel};
-use crate::ui::state::{PickerState, refresh_listings, refresh_loaded_profiles};
+use crate::ui::state::{refresh_listings, refresh_loaded_profiles, PickerState};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -712,8 +712,7 @@ fn load_ctb_into_world(
     let bbox = slice_stack_bounding_box(&layers);
     let z_prefix = cumulative_z_mm(&layers);
 
-    let mesh_handle =
-        meshes.add(slice_stack_to_bevy_mesh(&layers, layer_colors.as_deref()));
+    let mesh_handle = meshes.add(slice_stack_to_bevy_mesh(&layers, layer_colors.as_deref()));
     let material_handle = materials.add(StandardMaterial::from(Color::WHITE));
     // Mesh-anchor Transform (ADR-0011): 180° X-rotation + translate so
     // native layer 0 glues to plate's underside; native layer N hangs at
@@ -772,8 +771,7 @@ fn load_ctb_into_world(
             cull_mode: None,
             ..default()
         });
-        let cursor_z =
-            z_prefix_res.0[current_layer.index as usize] + LAYER_CURSOR_EPSILON_MM;
+        let cursor_z = z_prefix_res.0[current_layer.index as usize] + LAYER_CURSOR_EPSILON_MM;
         // Parented to the slice stack entity so the cursor inherits the
         // mesh-anchor Transform (180° X-rotation + envelope.depth/max_z
         // translate). Cursor coords stay in NATIVE CTB space — matches
@@ -861,7 +859,7 @@ fn setup_initial_load(
 ) {
     // Pre-load: --load-sim if any. On Err leave LoadedSimulation as None.
     if let Some(sim_path) = args.load_sim.as_deref() {
-        match load_simulation(sim_path) {
+        match load_from_path(sim_path) {
             Ok(sim) => {
                 loaded_sim.simulation = Some(sim);
                 loaded_sim.last_attempt = Some(Ok(()));
@@ -938,9 +936,9 @@ fn setup_initial_load(
         (None, None) => {}
         // clap's `conflicts_with` makes this unreachable, but the
         // exhaustive match keeps the dispatch total and grep-able.
-        (Some(_), Some(_)) => unreachable!(
-            "clap conflicts_with should reject --load-stl + --load-ctb at parse time"
-        ),
+        (Some(_), Some(_)) => {
+            unreachable!("clap conflicts_with should reject --load-stl + --load-ctb at parse time")
+        }
     }
 }
 
@@ -1043,10 +1041,7 @@ fn handle_dropped_files(
 /// Keyboard handler. Up arrow advances to next layer (higher Z, later
 /// in print time); Down arrow returns to previous layer (lower Z).
 /// Matches PrusaSlicer convention. Saturating arithmetic at boundaries.
-fn handle_layer_keys(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut current: ResMut<CurrentLayer>,
-) {
+fn handle_layer_keys(keys: Res<ButtonInput<KeyCode>>, mut current: ResMut<CurrentLayer>) {
     if current.max == 0 && current.index == 0 {
         // No layers loaded — keys are no-ops. Avoids confusing log spam
         // in an empty-world session.
@@ -1299,10 +1294,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args.screenshot = Some(resolved);
             }
             Err(err) => {
-                eprintln!(
-                    "{}",
-                    screenshot::format_path_error(input, &err)
-                );
+                eprintln!("{}", screenshot::format_path_error(input, &err));
                 std::process::exit(EXIT_SCREENSHOT_BAD_PATH as i32);
             }
         }
@@ -1396,7 +1388,11 @@ mod tests {
         let mut app = run_startup();
         let world = app.world_mut();
         let mut cam_q = world.query::<&Camera3d>();
-        assert_eq!(cam_q.iter(world).count(), 1, "expected exactly one Camera3d");
+        assert_eq!(
+            cam_q.iter(world).count(),
+            1,
+            "expected exactly one Camera3d"
+        );
         let mut orbit_q = world.query::<&PanOrbitCamera>();
         assert_eq!(
             orbit_q.iter(world).count(),
@@ -1781,7 +1777,11 @@ mod tests {
             .expect("registered system runs");
         app.update(); // flush deferred Commands
 
-        assert_eq!(count_loaded(&mut app), 1, "exactly one LoadedStlMesh after load");
+        assert_eq!(
+            count_loaded(&mut app),
+            1,
+            "exactly one LoadedStlMesh after load"
+        );
 
         // Camera radius was updated from default None to Some(1.5 * diagonal).
         let world = app.world_mut();
@@ -2127,7 +2127,11 @@ mod tests {
                 );
             },
         );
-        assert_eq!(count_loaded_slice(&mut app), 1, "synthetic LoadedSliceStack present");
+        assert_eq!(
+            count_loaded_slice(&mut app),
+            1,
+            "synthetic LoadedSliceStack present"
+        );
         app.world_mut()
             .run_system(load_id)
             .expect("system runs even when load fails");
@@ -2189,7 +2193,11 @@ mod tests {
                 );
             },
         );
-        assert_eq!(count_layer_cursor(&mut app), 1, "synthetic LayerCursor present");
+        assert_eq!(
+            count_layer_cursor(&mut app),
+            1,
+            "synthetic LayerCursor present"
+        );
         app.world_mut()
             .run_system(load_id)
             .expect("system runs even when load fails");
@@ -2394,14 +2402,11 @@ mod tests {
                 };
                 sim.add_layer(lr, vec![]).expect("sequential index");
             }
-            let dir = std::env::temp_dir().join(format!(
-                "resinsim-viz-heatmap-smoke-{}",
-                std::process::id()
-            ));
+            let dir = std::env::temp_dir()
+                .join(format!("resinsim-viz-heatmap-smoke-{}", std::process::id()));
             std::fs::create_dir_all(&dir).expect("create tmpdir");
             let path = dir.join("synthetic.sim.json");
-            let json = serde_json::to_string_pretty(&sim).expect("serialize sim");
-            std::fs::write(&path, json).expect("write sim json");
+            resinsim_core::repositories::save_to_path(&path, &sim).expect("save sim envelope");
             path
         };
 
@@ -2434,7 +2439,10 @@ mod tests {
             "Startup must spawn one LayerCursor when sim+CTB load OK"
         );
         assert!(
-            app.world().resource::<LoadedSimulation>().simulation.is_some(),
+            app.world()
+                .resource::<LoadedSimulation>()
+                .simulation
+                .is_some(),
             "LoadedSimulation must be populated"
         );
         let sim_layers = app
@@ -2479,9 +2487,7 @@ mod tests {
             printer: None,
             initial_led_temp: None,
             save_sim: None,
-            load_sim: Some(PathBuf::from(
-                "/nonexistent/dir/missing-sim-file.sim.json",
-            )),
+            load_sim: Some(PathBuf::from("/nonexistent/dir/missing-sim-file.sim.json")),
             allow_mismatch: false,
             screenshot: None,
         });
@@ -2548,8 +2554,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create tmpdir");
         let sim_path = dir.join("ok-sim.json");
-        let json = serde_json::to_string_pretty(&sim).expect("serialize sim");
-        std::fs::write(&sim_path, json).expect("write sim json");
+        resinsim_core::repositories::save_to_path(&sim_path, &sim).expect("save sim envelope");
 
         let mut app = make_loader_app();
         app.insert_resource(Args {
@@ -2855,7 +2860,9 @@ mod tests {
             "unknown --resin name must not preselect; user picks manually"
         );
         // But the listing was still populated.
-        assert!(state.available_resins.contains(&"generic_standard".to_string()));
+        assert!(state
+            .available_resins
+            .contains(&"generic_standard".to_string()));
     }
 
     /// Step-11 regression guard: with the new resources
@@ -2889,10 +2896,7 @@ mod tests {
             .init_resource::<SimulationResult>()
             .add_message::<RunSimRequest>()
             .add_systems(Startup, setup_profile_repos)
-            .add_systems(
-                Update,
-                (refresh_loaded_profiles_system, apply_run_request),
-            )
+            .add_systems(Update, (refresh_loaded_profiles_system, apply_run_request))
             .add_systems(Update, smoke_exit_after_one_frame);
         app.update();
         // Profile listings should be populated — the data dir was
@@ -2903,7 +2907,9 @@ mod tests {
             .get_resource::<PickerState>()
             .expect("test fixture: PickerState was init_resource'd");
         assert!(
-            state.available_resins.contains(&"generic_standard".to_string()),
+            state
+                .available_resins
+                .contains(&"generic_standard".to_string()),
             "setup_profile_repos must populate listings; got {:?}",
             state.available_resins
         );
@@ -2932,9 +2938,12 @@ mod tests {
         let parent_t = ctb_anchor_transform(&envelope);
         let parent_id = app
             .world_mut()
-            .spawn((parent_t, LoadedSliceStack {
-                path: PathBuf::from("/synthetic"),
-            }))
+            .spawn((
+                parent_t,
+                LoadedSliceStack {
+                    path: PathBuf::from("/synthetic"),
+                },
+            ))
             .id();
         // Cursor at native (50, 40, 30) — middle of the bed at native
         // layer z=30. After the parent anchor maps native (x, y, z) to

@@ -13,8 +13,22 @@ cargo run -p resinsim-viz -- --load-stl path/to/model.stl
 # CTB sliced file
 cargo run -p resinsim-viz -- --load-ctb path/to/model.ctb
 
-# CTB + heatmap from a sim (issue 03)
+# CTB + heatmap from a sim.json (issue 03 + ADR-0015)
 cargo run -p resinsim-viz -- --load-ctb path/to/model.ctb --load-sim path/to/model.sim.json
+```
+
+`--load-sim` consumes the canonical `sim.json` envelope produced by
+`resinsim sim` (per ADR-0015). The legacy bare-aggregate JSON shape was
+replaced by the `{ schema_version, simulation, provenance }` envelope
+in issue 15; viz consumes the new shape transparently and rejects
+unknown `schema_version` values with a typed error.
+
+To produce a `sim.json` envelope for `--load-sim`:
+
+```sh
+cargo run -p resinsim-inspect -- sim --file path/to/model.ctb \
+    --resin generic_standard --printer generic_msla_4k \
+    --out path/to/model.sim.json
 ```
 
 Drag-drop a `.stl` or `.ctb` file onto the window to replace the loaded

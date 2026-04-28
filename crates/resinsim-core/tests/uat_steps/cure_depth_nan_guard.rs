@@ -53,9 +53,7 @@ fn then_loud_diagnostic(world: &mut UatWorld) {
     );
 }
 
-#[then(
-    regex = r"^does NOT silently return a negative cure depth or a false is_sufficient result$"
-)]
+#[then(regex = r"^does NOT silently return a negative cure depth or a false is_sufficient result$")]
 fn then_no_silent_bad_result_scenario1(world: &mut UatWorld) {
     // Load-bearing tautology: Energy::new returning Err means
     // CureCalculator::cure_depth is never reached — no negative cure depth,
@@ -77,8 +75,7 @@ fn given_nan_intensity_factor(_world: &mut UatWorld) {
 
 #[when(regex = r"^the uniformity-corrected cure depth is computed$")]
 fn when_uniformity_corrected_cure_depth(world: &mut UatWorld) {
-    let energy =
-        Energy::new(10.0).expect("scenario invariant: 10 mJ/cm² is in Energy domain");
+    let energy = Energy::new(10.0).expect("scenario invariant: 10 mJ/cm² is in Energy domain");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Mirrors services/failure_predictor.rs:161 — energy.scale(corner_factor).
         let _ = energy.scale(f32::NAN);
@@ -112,9 +109,7 @@ fn then_scale_factor_panic_message(world: &mut UatWorld) {
     );
 }
 
-#[then(
-    regex = r"^does NOT silently produce a NaN cure depth that is misinterpreted as undercure$"
-)]
+#[then(regex = r"^does NOT silently produce a NaN cure depth that is misinterpreted as undercure$")]
 fn then_no_silent_nan_cure(world: &mut UatWorld) {
     // Load-bearing tautology: if Energy::scale panics, control never reaches
     // CureCalculator and no NaN cure depth is produced. Asserts the prior

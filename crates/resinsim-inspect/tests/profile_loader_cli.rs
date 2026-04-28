@@ -38,6 +38,36 @@ fn tmpdir(label: &str) -> PathBuf {
     d
 }
 
+/// Helper: run `resinsim sim --stl <stl> ... --out <sim.json>`. Returns the
+/// std::process::Output of the sim invocation. The sim.json producer side of
+/// the ADR-0015 pipeline; consumed by `report_health` via `--in`.
+///
+/// The bin path comes from `env!("CARGO_BIN_EXE_resinsim")` which cargo
+/// makes available to integration tests built within the same workspace
+/// as the bin target. If you copy this helper to another crate's tests
+/// you'll need to adjust the binary-resolution to match that crate's
+/// build context.
+fn run_sim_stl(
+    stl: &Path,
+    out: &Path,
+    data: &Path,
+    printer: &str,
+    extra: &[&str],
+) -> std::process::Output {
+    let mut cmd = Command::new(bin());
+    cmd.args(["sim", "--stl"])
+        .arg(stl)
+        .args(["--out"])
+        .arg(out)
+        .args(["--data-dir"])
+        .arg(data)
+        .args(["--printer", printer]);
+    for arg in extra {
+        cmd.arg(arg);
+    }
+    cmd.output().expect("spawn sim")
+}
+
 // --- Resolver stage tests ---
 
 #[test]
@@ -194,26 +224,33 @@ fn empty_data_dir_reports_no_available_profiles() {
 fn report_health_athena_ii_uses_toml_stiffness() {
     // The reproduction from the triage report. Pre-fix: deflection = 101.7 µm
     // (generic fallback). Post-fix: ≈ 31.2 µm (Athena II z_stiffness=1500).
+    //
+    // ADR-0015: drives the canonical-interchange pipeline (sim → report
+    // health --in). Test both halves so a regression in either producer or
+    // consumer surfaces.
     let cube = tmpdir("cube");
     let stl = cube.join("cube-60mm.stl");
     std::fs::write(&stl, cube_60mm_stl()).expect("write stl");
     let data = workspace_data_dir();
+    let sim_out = cube.join("cube.sim.json");
+    let sim = run_sim_stl(
+        &stl,
+        &sim_out,
+        &data,
+        "athena_ii",
+        &["--tip-radius", "0", "--n-supports", "0"],
+    );
+    assert!(
+        sim.status.success(),
+        "sim subcommand should succeed: stderr={}",
+        String::from_utf8_lossy(&sim.stderr)
+    );
     let out = Command::new(bin())
-        .args(["report", "health", "--stl"])
-        .arg(&stl)
-        .args(["--data-dir"])
-        .arg(&data)
-        .args([
-            "--printer",
-            "athena_ii",
-            "--tip-radius",
-            "0",
-            "--n-supports",
-            "0",
-            "--json",
-        ])
+        .args(["report", "health", "--in"])
+        .arg(&sim_out)
+        .args(["--json"])
         .output()
-        .expect("spawn");
+        .expect("spawn report health");
     assert!(
         out.status.success(),
         "report health athena_ii should succeed: stderr={}",
@@ -243,17 +280,16 @@ fn report_health_athena_ii_uses_toml_stiffness() {
 
 #[test]
 fn report_health_unknown_printer_hard_errors_with_available_list() {
+    // The unknown-printer guard moves to the SIM (producer) side after
+    // ADR-0015 — `report health` no longer touches profiles. Drive the
+    // sim subcommand against a bogus printer and assert the same
+    // available-list error shape; the consumer half is decoupled from
+    // profile resolution by design.
     let data = workspace_data_dir();
     let out = Command::new(bin())
-        .args([
-            "report",
-            "health",
-            "--stl",
-            "/tmp/no-such-file.stl",
-            "--data-dir",
-        ])
+        .args(["sim", "--stl", "/tmp/no-such-file.stl", "--data-dir"])
         .arg(&data)
-        .args(["--printer", "bogus_printer_name", "--json"])
+        .args(["--printer", "bogus_printer_name"])
         .output()
         .expect("spawn");
     assert!(!out.status.success());
@@ -343,21 +379,29 @@ fn report_health_athena_ii_text_byte_identity() {
     let stl = cube.join("cube-60mm.stl");
     std::fs::write(&stl, cube_60mm_stl()).expect("write stl");
     let data = workspace_data_dir();
-    let out = Command::new(bin())
-        .args(["report", "health", "--stl"])
-        .arg(&stl)
-        .args(["--data-dir"])
-        .arg(&data)
-        .args([
-            "--printer",
-            "athena_ii",
+    let sim_out = cube.join("cube.sim.json");
+    let sim = run_sim_stl(
+        &stl,
+        &sim_out,
+        &data,
+        "athena_ii",
+        &[
             "--resin",
             "generic_standard",
             "--tip-radius",
             "0",
             "--n-supports",
             "0",
-        ])
+        ],
+    );
+    assert!(
+        sim.status.success(),
+        "sim should succeed: stderr={}",
+        String::from_utf8_lossy(&sim.stderr)
+    );
+    let out = Command::new(bin())
+        .args(["report", "health", "--in"])
+        .arg(&sim_out)
         .output()
         .expect("spawn");
     assert!(
@@ -381,22 +425,30 @@ fn report_health_athena_ii_json_byte_identity() {
     let stl = cube.join("cube-60mm.stl");
     std::fs::write(&stl, cube_60mm_stl()).expect("write stl");
     let data = workspace_data_dir();
-    let out = Command::new(bin())
-        .args(["report", "health", "--stl"])
-        .arg(&stl)
-        .args(["--data-dir"])
-        .arg(&data)
-        .args([
-            "--printer",
-            "athena_ii",
+    let sim_out = cube.join("cube.sim.json");
+    let sim = run_sim_stl(
+        &stl,
+        &sim_out,
+        &data,
+        "athena_ii",
+        &[
             "--resin",
             "generic_standard",
             "--tip-radius",
             "0",
             "--n-supports",
             "0",
-            "--json",
-        ])
+        ],
+    );
+    assert!(
+        sim.status.success(),
+        "sim should succeed: stderr={}",
+        String::from_utf8_lossy(&sim.stderr)
+    );
+    let out = Command::new(bin())
+        .args(["report", "health", "--in"])
+        .arg(&sim_out)
+        .args(["--json"])
         .output()
         .expect("spawn");
     assert!(

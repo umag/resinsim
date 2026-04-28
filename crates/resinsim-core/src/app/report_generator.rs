@@ -28,15 +28,24 @@ use crate::entities::Severity;
 use crate::simulation::PrintSimulation;
 
 /// Header context for a print-health report. Values originate from CLI args
-/// (or, in future, a Bevy viz UI) and affect the rendered header lines but
-/// do not live on the simulation aggregate.
+/// or from the `Provenance` block of a `sim.json` envelope (per ADR-0015).
+///
+/// `stl_path` is always available — when an envelope lacks provenance, the
+/// caller passes the envelope's own path. The other fields are
+/// `Option<...>`: present when provenance was populated by `resinsim sim`,
+/// absent for envelopes saved by the GUI's Save-Sim path or by older
+/// tooling that doesn't carry provenance forward. Text mode renders absent
+/// fields as `"(unknown)"`; JSON mode emits `null` so machine consumers
+/// can branch cleanly without parsing English placeholders.
 pub struct ReportContext {
     pub stl_path: String,
-    pub resin_name: String,
-    pub printer_name: String,
-    pub n_supports: u32,
-    pub tip_radius_mm: f32,
+    pub resin_name: Option<String>,
+    pub printer_name: Option<String>,
+    pub n_supports: Option<u32>,
+    pub tip_radius_mm: Option<f32>,
 }
+
+const UNKNOWN_FIELD_PLACEHOLDER: &str = "(unknown)";
 
 /// Application service: format a completed simulation as text or JSON.
 pub struct ReportGenerator;
@@ -50,12 +59,17 @@ impl ReportGenerator {
         out.push_str(&format!("Print health report: {}\n", ctx.stl_path));
         out.push_str(&format!(
             "  Resin: {}, Printer: {}\n",
-            ctx.resin_name, ctx.printer_name
+            ctx.resin_name
+                .as_deref()
+                .unwrap_or(UNKNOWN_FIELD_PLACEHOLDER),
+            ctx.printer_name
+                .as_deref()
+                .unwrap_or(UNKNOWN_FIELD_PLACEHOLDER),
         ));
-        out.push_str(&format!(
-            "  Supports: {} x {:.1}mm radius\n",
-            ctx.n_supports, ctx.tip_radius_mm
-        ));
+        match (ctx.n_supports, ctx.tip_radius_mm) {
+            (Some(n), Some(r)) => out.push_str(&format!("  Supports: {n} x {r:.1}mm radius\n")),
+            _ => out.push_str(&format!("  Supports: {UNKNOWN_FIELD_PLACEHOLDER}\n")),
+        }
         out.push('\n');
         out.push_str(&format!("Summary ({} layers):\n", summary.total_layers));
         out.push_str(&format!(
@@ -131,6 +145,15 @@ impl ReportGenerator {
             })
             .collect();
 
+        // Provenance-backed `resin` field serialises to JSON `null` when the
+        // envelope has no provenance metadata (per ADR-0015 + this issue's
+        // round-1 review fix). Downstream JSON consumers branch on `null`
+        // rather than parsing English placeholder strings. Existing JSON
+        // shape (stl/resin/summary/failures) is preserved so the
+        // pre-ADR-0015 byte-identity goldens continue to match for the
+        // populated case; printer/n_supports/tip_radius_mm are deliberately
+        // omitted from JSON mode (they remain text-only) until a future
+        // issue widens the JSON schema for downstream tooling.
         let result = serde_json::json!({
             "stl": ctx.stl_path,
             "resin": ctx.resin_name,
@@ -193,10 +216,10 @@ mod tests {
     fn ctx() -> ReportContext {
         ReportContext {
             stl_path: "/fixtures/test.stl".to_string(),
-            resin_name: "Test Resin".to_string(),
-            printer_name: "Test Printer".to_string(),
-            n_supports: 4,
-            tip_radius_mm: 0.5,
+            resin_name: Some("Test Resin".to_string()),
+            printer_name: Some("Test Printer".to_string()),
+            n_supports: Some(4),
+            tip_radius_mm: Some(0.5),
         }
     }
 

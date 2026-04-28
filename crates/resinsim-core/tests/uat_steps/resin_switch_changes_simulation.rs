@@ -15,9 +15,7 @@ use super::world::UatWorld;
 
 // ---- UAT-1: same printer + different resin produces different cure depth --
 
-#[given(
-    regex = r#"^a printer profile "P" \(e\.g\. PrinterProfile::elegoo_mars5_ultra\(\)\)$"#
-)]
+#[given(regex = r#"^a printer profile "P" \(e\.g\. PrinterProfile::elegoo_mars5_ultra\(\)\)$"#)]
 fn given_mars5_ultra(world: &mut UatWorld) {
     world.printer = Some(PrinterProfile::elegoo_mars5_ultra());
 }
@@ -45,9 +43,7 @@ fn given_fixed_areas(_world: &mut UatWorld) {
     // steps; this Given is narrative.
 }
 
-#[when(
-    regex = r#"^SimulationRunner\.run_from_areas\(areas, R_A, P, \.\.\.\) produces "sim_A"$"#
-)]
+#[when(regex = r#"^SimulationRunner\.run_from_areas\(areas, R_A, P, \.\.\.\) produces "sim_A"$"#)]
 fn when_run_sim_a(world: &mut UatWorld) {
     let printer = world
         .printer
@@ -71,9 +67,7 @@ fn when_run_sim_a(world: &mut UatWorld) {
     world.sim_primary = Some(sim);
 }
 
-#[when(
-    regex = r#"^SimulationRunner\.run_from_areas\(areas, R_B, P, \.\.\.\) produces "sim_B"$"#
-)]
+#[when(regex = r#"^SimulationRunner\.run_from_areas\(areas, R_B, P, \.\.\.\) produces "sim_B"$"#)]
 fn when_run_sim_b(world: &mut UatWorld) {
     let printer = world
         .printer
