@@ -632,6 +632,7 @@ mod tests {
             load_sim: sim.then(|| PathBuf::from("a.sim.json")),
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         }
     }
 

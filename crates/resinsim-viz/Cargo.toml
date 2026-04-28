@@ -18,14 +18,18 @@ bevy_panorbit_camera = "0.34"
 bevy_egui = "0.39"
 egui_plot = "0.34"
 clap = { version = "4", features = ["derive"] }
+# Pass 5 layout persistence: serde the v2 PaneGrid layout to a JSON
+# file under the user's per-app config dir. `directories` resolves
+# the platform-correct path (~/Library/Application Support/... on
+# macOS); serde + serde_json handle the on-disk shape. All three are
+# small, stable, no-cfg deps.
+directories = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
-# Used only by the env-var-gated heatmap smoke test to write a synthetic
-# sim JSON when RESINSIM_SIM_FIXTURE is unset (issue 03). Not a runtime
-# dep.
-serde_json = "1"
 # Tempdir TOML round-trips for issue 04's pairing-violation +
-# save/load-sim tests.
+# save/load-sim tests, and the Pass 5 v2 layout-persistence tests.
 tempfile = "3"
 
 [lints]

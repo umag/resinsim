@@ -160,6 +160,15 @@ pub(crate) struct Args {
     /// "Screenshot capture (AI feedback loop)".
     #[arg(long, value_name = "PATH.png")]
     pub(crate) screenshot: Option<PathBuf>,
+
+    /// Use the v2 Grafana-style dashboard layout instead of the v1
+    /// left/right/bottom panel set. Off by default during the
+    /// redesign; will flip to default-on once Pass 5 ships and the
+    /// legacy panels are deleted. Requires --load-sim to populate
+    /// data; in v2 the picker / Run button are not available.
+    /// See `spec/viz-v2-design-brief.md` for the design contract.
+    #[arg(long)]
+    pub(crate) v2: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +251,22 @@ pub(crate) fn should_propagate_exit_codes(args: &Args) -> bool {
 // re-introduce Arc then.
 // ---------------------------------------------------------------------------
 
+/// Per-layer mask data parsed from the most recent CTB load, kept
+/// resident so the v2 `LayerMask2dPane` (slice E) can render the
+/// current layer's silhouette without re-parsing the file on every
+/// cursor move.
+///
+/// Memory cost is ~30 MB for a 4500-layer 150×80 mm print at 0.5 mm
+/// voxel size — well within budget for a dev workstation. Reset to
+/// empty whenever STL load fires; replaced by the new layers vector
+/// when CTB load succeeds. The vector is empty in the initial
+/// state and during STL-only sessions, in which case slice E's
+/// pane falls back to the `(no CTB loaded)` placeholder.
+#[derive(Resource, Default)]
+pub struct LoadedSliceMasks {
+    pub layers: Vec<resinsim_core::io::sliced::LayerInput>,
+}
+
 #[derive(Resource, Default)]
 pub struct LoadedSimulation {
     /// The successfully-loaded simulation, if any. None means "no sim loaded
@@ -256,6 +281,11 @@ pub struct LoadedSimulation {
     ///               --screenshot capture system can use it as a "settled"
     ///               signal for the loads_settled predicate (issue 12).
     pub last_attempt: Option<Result<(), String>>,
+    /// Source path of the most recent successful sim load. The v2
+    /// summary strip derives its run-tag from this path's filename
+    /// stem (per brief §8). `None` when no sim is loaded or the
+    /// load failed.
+    pub source_path: Option<PathBuf>,
 }
 
 #[derive(Resource, Default)]
@@ -300,15 +330,32 @@ pub struct LayerCursor;
 pub enum DropAction {
     Stl,
     Ctb,
+    /// A `*.sim.json` envelope dropped onto the window — slice D
+    /// of the v2 brief. Loaded via `load_from_path` into
+    /// `LoadedSimulation`, replacing the currently-loaded sim.
+    Sim,
     Skip,
 }
 
 pub fn route_drop(path: &Path) -> DropAction {
-    let lower: Option<String> = path
+    // `.sim.json` is a compound extension; `Path::extension` only
+    // returns the last segment ("json"), so we match against the
+    // full lower-case filename. Falls through to the `extension`
+    // dispatch for `.ctb` / `.stl` and the default `Skip`.
+    let name_lower: Option<String> = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    if let Some(name) = name_lower.as_deref() {
+        if name.ends_with(".sim.json") {
+            return DropAction::Sim;
+        }
+    }
+    let ext_lower: Option<String> = path
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
-    match lower.as_deref() {
+    match ext_lower.as_deref() {
         Some("ctb") => DropAction::Ctb,
         Some("stl") => DropAction::Stl,
         _ => DropAction::Skip,
@@ -614,6 +661,13 @@ fn despawn_geometry(
 ///   `--smoke-exit` is set. The sim is preserved (a future drop with the
 ///   correct layer count will recover). `--allow-mismatch` overrides
 ///   this and falls back to soft-warn + uncoloured mesh.
+/// Returns `Some(layers)` when the CTB was parsed successfully, so
+/// the caller can stash the per-layer masks in `LoadedSliceMasks`
+/// for slice E's `LayerMask2dPane`. `None` on load failure (the
+/// world is left empty regardless; the return value's only purpose
+/// is the masks-stash path). Choosing a return value over a new
+/// `&mut LoadedSliceMasks` parameter keeps the function under the
+/// Bevy 16-param-system limit at every test call site.
 #[allow(clippy::too_many_arguments)]
 fn load_ctb_into_world(
     path: &Path,
@@ -636,7 +690,7 @@ fn load_ctb_into_world(
     allow_mismatch: bool,
     smoke_exit: bool,
     exit_writer: &mut MessageWriter<AppExit>,
-) {
+) -> Option<Vec<resinsim_core::io::sliced::LayerInput>> {
     despawn_geometry(commands, prior_stl, prior_slice, prior_cursor);
     // Reset cursor/Z state on every reload — repopulated below if the
     // load succeeds.
@@ -658,9 +712,10 @@ fn load_ctb_into_world(
             if smoke_exit {
                 fatal_exit(exit_writer, EXIT_CTB_LOAD_FAILED);
             }
-            return;
+            return None;
         }
     };
+    let layers_for_caller = layers.clone();
     // Reconcile envelope with the freshly-parsed CTB header (priority chain
     // documented on resolve_envelope_after_ctb_load + ADR-0011 / ADR-0012).
     // Then respawn the plate so its position + XY footprint reflect the new
@@ -704,7 +759,10 @@ fn load_ctb_into_world(
                 if smoke_exit {
                     fatal_exit(exit_writer, EXIT_LAYER_COUNT_MISMATCH);
                 }
-                return; // world stays empty; sim resource preserved
+                // World stays empty; sim resource preserved. Return the
+                // parsed layers so the masks resource still updates even
+                // when the heatmap pipeline rejects the mismatch.
+                return Some(layers_for_caller);
             }
         }
     };
@@ -810,6 +868,8 @@ fn load_ctb_into_world(
     for mut cam in camera.iter_mut() {
         fit_panorbit_to_bbox(&mut cam, &world_bbox, preserve_view);
     }
+
+    Some(layers_for_caller)
 }
 
 /// Format the per-layer HUD line. Right-aligned numeric fields keep
@@ -849,6 +909,7 @@ fn setup_initial_load(
     prior: PriorGeometry,
     mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
     mut loaded_sim: ResMut<LoadedSimulation>,
+    mut loaded_masks: ResMut<LoadedSliceMasks>,
     mut current_layer: ResMut<CurrentLayer>,
     mut z_prefix: ResMut<LayerZPrefix>,
     mut domain: ResMut<CureDepthDomain>,
@@ -863,6 +924,7 @@ fn setup_initial_load(
             Ok(sim) => {
                 loaded_sim.simulation = Some(sim);
                 loaded_sim.last_attempt = Some(Ok(()));
+                loaded_sim.source_path = Some(sim_path.to_path_buf());
             }
             Err(e) => {
                 error!("simulation load failed for {}: {e}", sim_path.display());
@@ -872,7 +934,13 @@ fn setup_initial_load(
                 // happen unconditionally — fatal_exit only writes AppExit;
                 // execution continues for the rest of this Startup tick.
                 loaded_sim.last_attempt = Some(Err(e.to_string()));
-                if should_propagate_exit_codes(&args) {
+                loaded_sim.source_path = None;
+                // The exit-code propagation is the v1 contract for
+                // CI / capture-and-exit consumers. Under `--v2` the
+                // dashboard surfaces the parse error as the brief
+                // §6 ParseError block — exiting with code 2 would
+                // prevent that visual from ever rendering.
+                if !args.v2 && should_propagate_exit_codes(&args) {
                     fatal_exit(&mut exit_writer, EXIT_SIM_LOAD_FAILED);
                 }
                 // Continue to geometry load — without the sim the heatmap
@@ -886,7 +954,13 @@ fn setup_initial_load(
     // Emit error so the user notices; continue to geometry load so an
     // interactive user can drag-drop a CTB and recover (the loaded sim
     // is preserved).
-    if args.load_sim.is_some() && args.load_ctb.is_none() {
+    //
+    // The check is **skipped under --v2**: the v2 dashboard reads sim
+    // data directly and only the (optional) layer-mask 2D pane needs a
+    // CTB — and that pane gracefully degrades to a "no CTB loaded"
+    // state. The sim/CTB pairing rule is a v1 heatmap-pipeline
+    // concern, not a v2 one.
+    if !args.v2 && args.load_sim.is_some() && args.load_ctb.is_none() {
         error!(
             "--load-sim was supplied without --load-ctb; the heatmap \
              requires slice-stack geometry (STL pairing deferred). \
@@ -911,28 +985,32 @@ fn setup_initial_load(
             // Startup = first load: re-frame AND lock the 3/4 view.
             false,
         ),
-        (None, Some(path)) => load_ctb_into_world(
-            path,
-            &mut commands,
-            &mut meshes,
-            &mut materials,
-            &prior.stl,
-            &prior.slice,
-            &prior.cursor,
-            &prior.plate,
-            &mut camera,
-            &loaded_sim,
-            &mut current_layer,
-            &mut z_prefix,
-            &mut domain,
-            &active_profile,
-            &mut envelope,
-            &mut warned_about_envelope_mismatch,
-            false,
-            args.allow_mismatch,
-            should_propagate_exit_codes(&args),
-            &mut exit_writer,
-        ),
+        (None, Some(path)) => {
+            if let Some(parsed) = load_ctb_into_world(
+                path,
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                &prior.stl,
+                &prior.slice,
+                &prior.cursor,
+                &prior.plate,
+                &mut camera,
+                &loaded_sim,
+                &mut current_layer,
+                &mut z_prefix,
+                &mut domain,
+                &active_profile,
+                &mut envelope,
+                &mut warned_about_envelope_mismatch,
+                false,
+                args.allow_mismatch,
+                should_propagate_exit_codes(&args),
+                &mut exit_writer,
+            ) {
+                loaded_masks.layers = parsed;
+            }
+        }
         (None, None) => {}
         // clap's `conflicts_with` makes this unreachable, but the
         // exhaustive match keeps the dispatch total and grep-able.
@@ -964,7 +1042,8 @@ fn handle_dropped_files(
     prior: PriorGeometry,
     mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
     args: Res<Args>,
-    loaded_sim: Res<LoadedSimulation>,
+    mut loaded_sim: ResMut<LoadedSimulation>,
+    mut loaded_masks: ResMut<LoadedSliceMasks>,
     mut current_layer: ResMut<CurrentLayer>,
     mut z_prefix: ResMut<LayerZPrefix>,
     mut domain: ResMut<CureDepthDomain>,
@@ -1003,31 +1082,54 @@ fn handle_dropped_files(
             // Drag-drop = reload: preserve user's current orbit angle.
             true,
         ),
-        DropAction::Ctb => load_ctb_into_world(
-            path,
-            &mut commands,
-            &mut meshes,
-            &mut materials,
-            &prior.stl,
-            &prior.slice,
-            &prior.cursor,
-            &prior.plate,
-            &mut camera,
-            &loaded_sim,
-            &mut current_layer,
-            &mut z_prefix,
-            &mut domain,
-            &active_profile,
-            &mut envelope,
-            &mut warned_about_envelope_mismatch,
-            true,
-            args.allow_mismatch,
-            DROP_IS_INTERACTIVE,
-            &mut exit_writer,
-        ),
+        DropAction::Ctb => {
+            if let Some(parsed) = load_ctb_into_world(
+                path,
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                &prior.stl,
+                &prior.slice,
+                &prior.cursor,
+                &prior.plate,
+                &mut camera,
+                &loaded_sim,
+                &mut current_layer,
+                &mut z_prefix,
+                &mut domain,
+                &active_profile,
+                &mut envelope,
+                &mut warned_about_envelope_mismatch,
+                true,
+                args.allow_mismatch,
+                DROP_IS_INTERACTIVE,
+                &mut exit_writer,
+            ) {
+                loaded_masks.layers = parsed;
+            }
+        }
+        DropAction::Sim => match load_sim_from_path(path) {
+            Ok(sim) => {
+                info!(
+                    "loaded simulation from drop {}: {} layers / {} failures",
+                    path.display(),
+                    sim.summary().total_layers,
+                    sim.summary().critical_failures
+                );
+                loaded_sim.simulation = Some(sim);
+                loaded_sim.last_attempt = Some(Ok(()));
+                loaded_sim.source_path = Some(path.clone());
+            }
+            Err(e) => {
+                error!("dropped sim.json failed to load: {e}");
+                loaded_sim.simulation = None;
+                loaded_sim.last_attempt = Some(Err(e));
+                loaded_sim.source_path = None;
+            }
+        },
         DropAction::Skip => {
             warn!(
-                "unsupported drop {} — only .stl and .ctb are rendered",
+                "unsupported drop {} — only .stl, .ctb, and .sim.json are handled",
                 path.display()
             );
         }
@@ -1041,17 +1143,151 @@ fn handle_dropped_files(
 /// Keyboard handler. Up arrow advances to next layer (higher Z, later
 /// in print time); Down arrow returns to previous layer (lower Z).
 /// Matches PrusaSlicer convention. Saturating arithmetic at boundaries.
-fn handle_layer_keys(keys: Res<ButtonInput<KeyCode>>, mut current: ResMut<CurrentLayer>) {
+/// Hold-to-repeat state for the scrub keys. Tracks per-key
+/// `(first_press, last_fire)` timestamps (Bevy elapsed seconds).
+/// Absent entry = key not currently held. Lives as `Local<T>` on
+/// the `handle_layer_keys` system so each scrub session is
+/// self-contained.
+#[derive(Default)]
+struct ScrubKeyRepeat {
+    held: std::collections::HashMap<KeyCode, (f32, f32)>,
+}
+
+/// Initial hold delay before repeat fires, in seconds. Matches the
+/// macOS default key-repeat "first delay" feel; less aggressive
+/// would feel sluggish to the v2 user scrubbing through 4492
+/// layers.
+const KEY_REPEAT_INITIAL_DELAY: f32 = 0.3;
+
+/// Repeat interval once the hold passes the initial delay, in
+/// seconds. 25 fires per second; with the existing ±1 / ±10 /
+/// ±100 step sizes, the user covers the whole lilith print in
+/// ~3.5 s of held-Shift+arrow scrubbing.
+const KEY_REPEAT_INTERVAL: f32 = 0.04;
+
+/// Pure helper: should the held key fire again at `now` given
+/// when it was first pressed and last fired? Unit-tested.
+pub(crate) fn should_repeat(
+    now: f32,
+    first_press: f32,
+    last_fire: f32,
+    initial_delay: f32,
+    repeat_rate: f32,
+) -> bool {
+    (now - first_press) >= initial_delay && (now - last_fire) >= repeat_rate
+}
+
+fn handle_layer_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    mut current: ResMut<CurrentLayer>,
+    mut repeat: Local<ScrubKeyRepeat>,
+) {
     if current.max == 0 && current.index == 0 {
         // No layers loaded — keys are no-ops. Avoids confusing log spam
         // in an empty-world session.
+        repeat.held.clear();
         return;
     }
-    if keys.just_pressed(KeyCode::ArrowUp) {
-        current.index = current.index.saturating_add(1).min(current.max);
+    let now = time.elapsed_secs();
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    // Per `spec/viz-v2-design-brief.md` §7: ↑/↓ ±1, Shift+↑/↓ ±10,
+    // Home/End first/last, PgUp/PgDn ±100. Hold-to-repeat is
+    // implemented per-key with an initial 300 ms delay then 25
+    // fires/second.
+    let step = if shift { 10 } else { 1 };
+    let arrow_keys = [
+        (KeyCode::ArrowUp, step as i64),
+        (KeyCode::ArrowDown, -(step as i64)),
+        (KeyCode::PageUp, 100_i64),
+        (KeyCode::PageDown, -100_i64),
+    ];
+    for (key, delta) in arrow_keys {
+        if keys.just_pressed(key) {
+            apply_layer_delta(&mut current, delta);
+            repeat.held.insert(key, (now, now));
+        } else if keys.pressed(key) {
+            let entry = repeat
+                .held
+                .entry(key)
+                .or_insert((now, now));
+            let (first, last) = *entry;
+            if should_repeat(
+                now,
+                first,
+                last,
+                KEY_REPEAT_INITIAL_DELAY,
+                KEY_REPEAT_INTERVAL,
+            ) {
+                apply_layer_delta(&mut current, delta);
+                *entry = (first, now);
+            }
+        } else {
+            repeat.held.remove(&key);
+        }
     }
-    if keys.just_pressed(KeyCode::ArrowDown) {
-        current.index = current.index.saturating_sub(1);
+    if keys.just_pressed(KeyCode::Home) {
+        current.index = 0;
+    }
+    if keys.just_pressed(KeyCode::End) {
+        current.index = current.max;
+    }
+}
+
+/// Apply a signed step to `current.index`, clamping at `[0, max]`.
+/// Pure helper that's safer than open-coding `saturating_*`
+/// branches at each call site.
+fn apply_layer_delta(current: &mut CurrentLayer, delta: i64) {
+    if delta == 0 {
+        return;
+    }
+    let next = (current.index as i64) + delta;
+    let clamped = next.clamp(0, current.max as i64);
+    current.index = clamped as u32;
+}
+
+/// Bevy system: drop `LoadedSliceMasks.layers` once the world no
+/// longer has a `LoadedSliceStack` entity. Triggered by an STL
+/// drop (which despawns the slice stack) so the v2 layer-mask pane
+/// returns to its `NoCtb` placeholder instead of showing stale
+/// silhouettes from the previously-loaded CTB.
+fn clear_orphan_slice_masks(
+    slice_q: Query<(), With<LoadedSliceStack>>,
+    mut masks: ResMut<LoadedSliceMasks>,
+) {
+    if slice_q.is_empty() && !masks.layers.is_empty() {
+        masks.layers.clear();
+    }
+}
+
+/// Bevy system: keep `CurrentLayer.max` in sync with the loaded sim
+/// even when no CTB is paired. The v1 heatmap pipeline sets
+/// `CurrentLayer.max` on CTB load (and resets the cursor to the top
+/// layer); v2 reads `--load-sim` directly and never goes through
+/// that path, so without this system the scrubber and keyboard
+/// would see `max = 0` and refuse to move.
+///
+/// Idempotent: only writes when `LoadedSimulation` changes AND the
+/// computed max differs from the resource. Preserves the user's
+/// cursor.index unless it would exceed the new max (in which case
+/// it clamps).
+fn sync_cursor_max_from_sim(
+    loaded: Res<LoadedSimulation>,
+    mut current: ResMut<CurrentLayer>,
+) {
+    if !loaded.is_changed() {
+        return;
+    }
+    let sim_max = loaded
+        .simulation
+        .as_ref()
+        .map(|s| (s.layers().len() as u32).saturating_sub(1))
+        .unwrap_or(0);
+    if current.max != sim_max {
+        current.max = sim_max;
+        if current.index > sim_max {
+            current.index = sim_max;
+        }
     }
 }
 
@@ -1302,6 +1538,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let smoke_exit = args.smoke_exit;
     let capture_active = args.screenshot.is_some();
+    let v2_active = args.v2;
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
@@ -1314,6 +1551,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .add_plugins(EguiPlugin::default())
     .insert_resource(args)
     .init_resource::<LoadedSimulation>()
+    .init_resource::<LoadedSliceMasks>()
     .init_resource::<CurrentLayer>()
     .init_resource::<LayerZPrefix>()
     .init_resource::<CureDepthDomain>()
@@ -1341,19 +1579,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             log_layer_change,
             refresh_loaded_profiles_system,
             apply_run_request,
+            sync_cursor_max_from_sim,
+            clear_orphan_slice_masks,
         ),
-    )
-    .add_systems(
-        bevy_egui::EguiPrimaryContextPass,
-        // .chain() makes the layout-order dependency explicit per
-        // ADR-0014: SidePanels claim full vertical space in
-        // declaration order, then TopBottomPanel::bottom takes the
-        // bottom strip of the remaining centre. The exclusive
-        // EguiContext borrow already serialises these systems, but
-        // the chain documents the order so a future refactor can't
-        // accidentally reorder them.
-        (left_panel, right_panel, bottom_panel, debug_camera_overlay).chain(),
     );
+    // v1 panel chain vs v2 dashboard: mutually exclusive at App build
+    // time, gated on the `--v2` CLI flag. Picking at build time (rather
+    // than per-frame run_if) keeps the EguiPrimaryContextPass
+    // schedule simple and avoids a stale system contributing zero work
+    // every frame.
+    if v2_active {
+        app.add_plugins(crate::ui::v2::V2UiPlugin);
+    } else {
+        app.add_systems(
+            bevy_egui::EguiPrimaryContextPass,
+            // .chain() makes the layout-order dependency explicit per
+            // ADR-0014: SidePanels claim full vertical space in
+            // declaration order, then TopBottomPanel::bottom takes the
+            // bottom strip of the remaining centre. The exclusive
+            // EguiContext borrow already serialises these systems, but
+            // the chain documents the order so a future refactor can't
+            // accidentally reorder them.
+            (left_panel, right_panel, bottom_panel, debug_camera_overlay).chain(),
+        );
+    }
     // --screenshot wins over --smoke-exit: when both are set, the
     // capture system fires AppExit::Success after the PNG lands, and
     // smoke_exit_after_one_frame is NOT registered (otherwise the app
@@ -1514,6 +1763,7 @@ mod tests {
             .init_asset::<Mesh>()
             .init_asset::<StandardMaterial>()
             .init_resource::<LoadedSimulation>()
+            .init_resource::<LoadedSliceMasks>()
             .init_resource::<CurrentLayer>()
             .init_resource::<LayerZPrefix>()
             .init_resource::<CureDepthDomain>()
@@ -1559,6 +1809,7 @@ mod tests {
             load_sim: None,
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         };
         app.insert_resource(args);
         let stored = app
@@ -1590,6 +1841,7 @@ mod tests {
             load_sim: None,
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         });
         let stored = app
             .world()
@@ -1619,6 +1871,7 @@ mod tests {
             load_sim: None,
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         });
         let stored = app
             .world()
@@ -1645,6 +1898,7 @@ mod tests {
             load_sim: Some(PathBuf::from("cube.sim.json")),
             allow_mismatch: true,
             screenshot: None,
+            v2: false,
         });
         let stored = app
             .world()
@@ -1672,6 +1926,7 @@ mod tests {
             load_sim: None,
             allow_mismatch: false,
             screenshot: Some(PathBuf::from("/tmp/shot.png")),
+            v2: false,
         });
         let stored = app
             .world()
@@ -1704,6 +1959,7 @@ mod tests {
             load_sim: None,
             allow_mismatch: false,
             screenshot: Some(PathBuf::from("foo.png")),
+            v2: false,
         });
         let stored = app
             .world()
@@ -1729,6 +1985,7 @@ mod tests {
             load_sim: None,
             allow_mismatch: false,
             screenshot: screenshot.then(|| PathBuf::from("/tmp/x.png")),
+            v2: false,
         }
     }
 
@@ -1889,6 +2146,7 @@ mod tests {
             load_sim: None,
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         });
         app.add_systems(Startup, setup_initial_load);
         app.add_systems(Update, smoke_exit_after_one_frame);
@@ -2218,6 +2476,23 @@ mod tests {
     }
 
     #[test]
+    fn route_drop_recognises_sim_json_with_case_folding() {
+        for (path, want) in [
+            ("foo.sim.json", DropAction::Sim),
+            ("FOO.SIM.JSON", DropAction::Sim),
+            ("Lilith.Sim.Json", DropAction::Sim),
+            ("nested/dir/x.sim.json", DropAction::Sim),
+            // Plain .json is NOT a sim drop — must match the compound
+            // extension to avoid taking over unrelated drops.
+            ("plain.json", DropAction::Skip),
+            // .sim suffix alone (no .json) is not a sim drop either.
+            ("file.sim", DropAction::Skip),
+        ] {
+            assert_eq!(route_drop(Path::new(path)), want, "for path {path}");
+        }
+    }
+
+    #[test]
     fn route_drop_dispatches_by_extension_with_case_folding() {
         // Pure-fn test on `route_drop` — locks in the case-folding
         // contract. macOS drag-drop often emits mixed-case extensions;
@@ -2266,6 +2541,7 @@ mod tests {
             load_sim: None,
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         });
         app.add_systems(Startup, setup_initial_load);
         app.add_systems(Update, smoke_exit_after_one_frame);
@@ -2287,7 +2563,12 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<CurrentLayer>()
-            .init_resource::<LayerZPrefix>();
+            .init_resource::<LayerZPrefix>()
+            // `handle_layer_keys` reads `Time` for its hold-to-repeat
+            // dispatch; without it the system param validation
+            // panics. Default Time is the no-plugin variant which
+            // never advances — fine for these single-`update()` tests.
+            .init_resource::<Time>();
         app
     }
 
@@ -2431,6 +2712,7 @@ mod tests {
             load_sim: Some(sim_path),
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         });
         app.add_systems(Startup, setup_initial_load);
         app.add_systems(Update, smoke_exit_after_one_frame);
@@ -2498,6 +2780,7 @@ mod tests {
             load_sim: Some(PathBuf::from("/nonexistent/dir/missing-sim-file.sim.json")),
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         });
         app.add_systems(Startup, setup_initial_load);
         app.update();
@@ -2577,6 +2860,7 @@ mod tests {
             load_sim: Some(sim_path),
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         });
         app.add_systems(Startup, setup_initial_load);
         app.update();
@@ -2657,7 +2941,9 @@ mod tests {
         // ButtonInput<KeyCode> as a bare resource (no InputPlugin) — same
         // convention as the keyboard tests above. InputPlugin would clear
         // just_pressed in PreUpdate before our handler runs.
-        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            // `handle_layer_keys` reads `Time` for hold-to-repeat.
+            .init_resource::<Time>();
 
         // Insert the baked mesh into Assets<Mesh> and spawn the slice-stack
         // entity carrying its handle. Capture the asset count BEFORE the
@@ -2810,6 +3096,7 @@ mod tests {
             load_sim: None,
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         });
         app.init_resource::<PickerState>()
             .init_resource::<SimulationResult>()
@@ -2853,6 +3140,7 @@ mod tests {
             load_sim: None,
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         });
         app.init_resource::<PickerState>()
             .init_resource::<SimulationResult>()
@@ -2899,6 +3187,7 @@ mod tests {
             load_sim: None,
             allow_mismatch: false,
             screenshot: None,
+            v2: false,
         });
         // BottomPanelState is read by `bottom_panel` (egui-only); this
         // smoke harness doesn't load EguiPlugin so the panel system
