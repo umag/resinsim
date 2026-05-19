@@ -40,3 +40,24 @@ led_to_vat_coupling = 0.71    # user estimate (no vat sensor); recalibrate when 
 width_mm = 153.36
 depth_mm = 77.76
 max_z_mm = 165.0
+
+# Light crosstalk σ values (ADR-0018 / t2f2). Both ESTIMATE pending Athena II
+# beam-profile fit. σ values are in physical µm; converted at runtime to
+# per-axis voxel-index kernels via the storage's anisotropic conversion factors.
+#
+# σ_xy = 8 µm — cross-checked against two independent derivations:
+#   (1) KB-121 LED/LCD geometry: pixel_pitch_um × tan(5–10° collimation half-angle)
+#       ≈ 8 µm for 19 µm pixel pitch and typical mSLA collimation.
+#   (2) Wei et al. PMC11267290 ("Voxel Design of Grayscale DLP 3D-Printed
+#       Soft Robots"): reported ω₀ = 30 µm at 42 µm pixel pitch → σ = ω₀/2 = 15 µm
+#       → ratio σ/pixel_pitch ≈ 0.36 → applied to 19 µm pitch gives σ ≈ 6.8 µm.
+#   Two derivations agree within 20%. 8 µm is a defensible conservative round.
+#
+# σ_z = 40 µm — mid-range of typical photopolymer scatter mean-free-path
+#   (20–80 µm). Volumetric resin scatter parameter, calibratable independently
+#   from beam-profile measurements through cured-layer thickness deviation.
+#
+# Both values flagged ESTIMATE — re-fit jointly from Athena II beam-profile
+# measurement campaign (follow-up ticket).
+crosstalk_sigma_xy_um = 8.0
+crosstalk_sigma_z_um = 40.0

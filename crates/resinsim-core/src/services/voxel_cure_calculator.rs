@@ -1,5 +1,6 @@
 //! Voxel-resolved cure dose + photoinitiator depletion orchestrator.
-//! ADR-0017, KB-160, t2f1.
+//! ADR-0017, KB-160, t2f1; refactored under ADR-0018 / t2f2 (per-column
+//! pure variant for crosstalk Z post-convolution).
 //!
 //! `VoxelCureCalculator` is the Tier-2 counterpart of
 //! [`CureCalculator`](crate::services::CureCalculator). It does NOT re-derive
@@ -12,6 +13,29 @@
 //! Pattern follows `docs/patterns/single-source-arrhenius-helper.md`: the
 //! Ec(T) formula lives only in [`CureCalculator::ec_at_temp`]; this service
 //! delegates and never duplicates the math.
+//!
+//! # Public surface
+//!
+//! Two complementary entry points share a single Beer-Lambert helper:
+//!
+//! - [`apply_column_exposure`](Self::apply_column_exposure) — in-place
+//!   convenience: reads the column from `PhotoinitiatorField`, computes
+//!   the per-voxel dose, and applies BOTH `cure_field.add_dose` and
+//!   `pi_field.deplete` in one call. Used by the Tier-1.5 no-Z-crosstalk
+//!   path (regimes AA/BA/BB in ADR-0018 §2).
+//! - [`compute_column_exposure`](Self::compute_column_exposure) — pure
+//!   functional sibling: takes a `pi_snapshot: &[f32]` and returns the
+//!   per-voxel `Vec<f32>` dose column WITHOUT mutating any field. Used by
+//!   the σ_z-active regimes (CB/DD in ADR-0018 §2) so the orchestrator
+//!   can apply 1D Z convolution to the dose column before depositing.
+//!   Depletion at each voxel is then computed locally via
+//!   `pi_field.deplete(ix, iy, iz, k_d, convolved_dose[iz])`; because
+//!   KB-160 depletion is multiplicative-exponential (not linear), the
+//!   correct physics is to convolve DOSE (linear) and let local
+//!   depletion derive from convolved dose voxel-by-voxel.
+//!
+//! Both forms share `column_dose_inner` for the Beer-Lambert math —
+//! single-source preserved.
 //!
 //! # Stateless
 //!
@@ -71,9 +95,12 @@ impl VoxelCureCalculator {
     /// where `C` is the concentration of the relevant voxel (clamped to
     /// the KB-160 floor `C_THRESHOLD`).
     ///
-    /// For t2f1 v1 this method handles ONE COLUMN per call (no inter-
-    /// pixel scattering — that is t2f2's scope). Callers loop over
-    /// `(ix, iy)` across the LCD pixel grid per layer.
+    /// This method handles ONE COLUMN per call (no inter-pixel scattering
+    /// or axial scatter — those are handled by the orchestrator
+    /// `simulation_runner::apply_voxel_cure_for_layer` per ADR-0018,
+    /// which dispatches multiple `compute_column_exposure` calls across an
+    /// XY-convolved intensity grid and applies a 1D Z conv to the resulting
+    /// dose column).
     ///
     /// # Inputs
     /// - `cure_field` and `photoinitiator_field` must share dimensions.
@@ -120,6 +147,79 @@ impl VoxelCureCalculator {
                 pi_dims: photoinitiator_field.dimensions(),
             });
         }
+        let (_nx, _ny, nz) = cure_field.dimensions();
+        let pi_snapshot = photoinitiator_field
+            .column_at(ix, iy)
+            .map_err(VoxelCureError::PhotoinitiatorField)?;
+        let dose_col = Self::compute_column_exposure(
+            &pi_snapshot,
+            iz_top,
+            nz,
+            pixel_intensity_mw_cm2,
+            exposure_sec,
+            dp,
+            k_d,
+            layer_height_um,
+        )?;
+        // Apply the dose column to the persistent fields. Iterate only from
+        // iz_top (the column-march range) since dose_col[iz] is zero outside
+        // [iz_top, iz_break] anyway — early-return on zero matches the
+        // pre-refactor short-circuit behaviour bit-exactly.
+        for iz in iz_top..nz {
+            let voxel_dose = dose_col[iz as usize];
+            if voxel_dose == 0.0 {
+                // NEGLIGIBLE_DOSE_FLOOR break in compute_column_exposure
+                // leaves subsequent entries at 0.0; mirror the original
+                // loop's break here so we don't iterate to nz on every call.
+                break;
+            }
+            cure_field.add_dose(ix, iy, iz, voxel_dose)?;
+            // KB-160: deplete photoinitiator by the absorbed dose at this voxel.
+            photoinitiator_field.deplete(ix, iy, iz, k_d, voxel_dose)?;
+        }
+        Ok(())
+    }
+
+    /// Pure functional sibling of [`apply_column_exposure`](Self::apply_column_exposure):
+    /// computes the per-voxel cure dose column for a single pixel exposure
+    /// WITHOUT mutating any field. ADR-0018 / t2f2.
+    ///
+    /// Returns a `Vec<f32>` of length `nz` where `dose_col[iz]` is the dose
+    /// (mJ/cm²) deposited at voxel `(ix, iy, iz)` by THIS exposure.
+    /// Entries outside `[iz_top, iz_break]` (where `iz_break` is the first
+    /// voxel where the attenuated dose falls at or below the
+    /// `NEGLIGIBLE_DOSE_FLOOR`) are zero.
+    ///
+    /// Beer-Lambert math is identical to `apply_column_exposure` — both
+    /// share the inner helper [`column_dose_inner`](Self::column_dose_inner)
+    /// (single-source preserved). The difference: `compute_column_exposure`
+    /// reads PI concentrations from `pi_snapshot` (caller-provided slice of
+    /// length `nz`) instead of from a `&mut PhotoinitiatorField`, so the
+    /// caller can post-process the dose column (e.g. apply a 1D Z Gaussian
+    /// convolution for σ_z crosstalk per ADR-0018) before depositing.
+    ///
+    /// # Inputs
+    /// - `pi_snapshot`: PI concentrations at `(ix, iy, iz)` for `iz in 0..nz`,
+    ///   read from `PhotoinitiatorField::column_at(ix, iy)` or constructed
+    ///   manually in tests. Length MUST equal `nz`.
+    /// - All other inputs identical to `apply_column_exposure`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compute_column_exposure(
+        pi_snapshot: &[f32],
+        iz_top: u32,
+        nz: u32,
+        pixel_intensity_mw_cm2: f32,
+        exposure_sec: f32,
+        dp: PenetrationDepth,
+        k_d: f32,
+        layer_height_um: f32,
+    ) -> Result<Vec<f32>, VoxelCureError> {
+        if pi_snapshot.len() != nz as usize {
+            return Err(VoxelCureError::InvalidColumnInput {
+                pixel_intensity_mw_cm2: pi_snapshot.len() as f32,
+                exposure_sec: nz as f32,
+            });
+        }
         if !pixel_intensity_mw_cm2.is_finite()
             || pixel_intensity_mw_cm2 < 0.0
             || !exposure_sec.is_finite()
@@ -139,14 +239,13 @@ impl VoxelCureCalculator {
         if !layer_height_um.is_finite() || layer_height_um <= 0.0 {
             return Err(VoxelCureError::InvalidLayerHeight(layer_height_um));
         }
-
-        let (_nx, _ny, nz) = cure_field.dimensions();
+        let mut dose_col = vec![0.0_f32; nz as usize];
 
         // Surface dose (mJ/cm² = mW/cm² × s, the two units cancel via
         // 1000 W·s = 1 J ⇒ 1 mW·s = 1 mJ, /cm² stays).
         let surface_dose_mj_cm2 = pixel_intensity_mw_cm2 * exposure_sec;
         if surface_dose_mj_cm2 == 0.0 {
-            return Ok(());
+            return Ok(dose_col);
         }
         let dp_base = dp.value();
         if !(dp_base > 0.0 && dp_base.is_finite()) {
@@ -154,15 +253,13 @@ impl VoxelCureCalculator {
         }
 
         // March down the column from iz_top toward the field bottom (iz = nz - 1),
-        // accumulating dose and depleting photoinitiator. The local effective
-        // Dp scales inversely with local concentration (KB-160 link to
-        // Beer-Lambert: Dp ∝ 1 / C); deplete BEFORE moving deeper so this
-        // voxel's reduced concentration affects only subsequent voxels.
-        // Depth-per-Z-voxel is `layer_height_um` per the Z-axis convention
-        // documented above.
+        // computing per-voxel absorbed dose. The local effective Dp scales
+        // inversely with local concentration (KB-160 link to Beer-Lambert:
+        // Dp ∝ 1 / C). Depth-per-Z-voxel is `layer_height_um` per the
+        // Z-axis convention documented above.
         for iz in iz_top..nz {
             let depth_um = (iz - iz_top) as f32 * layer_height_um + (layer_height_um * 0.5);
-            let c_local = photoinitiator_field.concentration_at(ix, iy, iz)?;
+            let c_local = pi_snapshot[iz as usize];
             // KB-160 numerical floor: clamp local C to avoid divide-by-near-zero
             // when Dp_local = Dp / C. C_THRESHOLD = 0.01.
             let c_clamped = c_local.max(C_THRESHOLD);
@@ -175,11 +272,9 @@ impl VoxelCureCalculator {
                 // Below this, deeper voxels contribute even less — bail.
                 break;
             }
-            cure_field.add_dose(ix, iy, iz, voxel_dose)?;
-            // KB-160: deplete photoinitiator by the absorbed dose at this voxel.
-            photoinitiator_field.deplete(ix, iy, iz, k_d, voxel_dose)?;
+            dose_col[iz as usize] = voxel_dose;
         }
-        Ok(())
+        Ok(dose_col)
     }
 
     /// Critical energy at vat temperature — pure delegation to
@@ -733,5 +828,162 @@ mod tests {
             prev_cd_value,
             cd_baseline.value()
         );
+    }
+
+    // ADR-0018 / t2f2: bit-exact parity test gating the refactor of
+    // `apply_column_exposure` into a thin wrapper around
+    // `compute_column_exposure` + manual add/deplete.
+    //
+    // Without this test the refactor is load-bearing on faith. With it,
+    // any future change that diverges the two forms breaks loudly.
+
+    fn run_parity_pair(
+        nx: u32,
+        ny: u32,
+        nz: u32,
+        ix: u32,
+        iy: u32,
+        iz_top: u32,
+        intensity: f32,
+        exposure_sec: f32,
+        dp_um: f32,
+        k_d: f32,
+        layer_height_um: f32,
+        initial_c: f32,
+    ) {
+        let dp = PenetrationDepth::new(dp_um)
+            .expect("dp_um in PenetrationDepth domain — proptest filtered");
+
+        let mut cure_a = CureField::new(nx, ny, nz, 0.05, [0.0, 0.0, 0.0])
+            .expect("CureField fixture valid");
+        let mut pi_a =
+            PhotoinitiatorField::new(nx, ny, nz, initial_c).expect("PI fixture valid");
+        VoxelCureCalculator::apply_column_exposure(
+            &mut cure_a,
+            &mut pi_a,
+            ix,
+            iy,
+            iz_top,
+            intensity,
+            exposure_sec,
+            dp,
+            k_d,
+            layer_height_um,
+        )
+        .expect("in-place form must succeed for in-domain inputs");
+
+        // Form B: compute_column_exposure → add/deplete manually.
+        let mut cure_b = CureField::new(nx, ny, nz, 0.05, [0.0, 0.0, 0.0])
+            .expect("CureField fixture valid");
+        let mut pi_b =
+            PhotoinitiatorField::new(nx, ny, nz, initial_c).expect("PI fixture valid");
+        let pi_snapshot = pi_b
+            .column_at(ix, iy)
+            .expect("column_at on valid (ix, iy) succeeds");
+        let dose_col = VoxelCureCalculator::compute_column_exposure(
+            &pi_snapshot,
+            iz_top,
+            nz,
+            intensity,
+            exposure_sec,
+            dp,
+            k_d,
+            layer_height_um,
+        )
+        .expect("pure form must succeed for in-domain inputs");
+        for iz in iz_top..nz {
+            let d = dose_col[iz as usize];
+            if d == 0.0 {
+                break;
+            }
+            cure_b.add_dose(ix, iy, iz, d).expect("add_dose in bounds");
+            pi_b.deplete(ix, iy, iz, k_d, d).expect("deplete in bounds");
+        }
+
+        // Assert bit-exact f32 equality of both fields at every voxel.
+        let (dims_a, dims_b) = (cure_a.dimensions(), cure_b.dimensions());
+        assert_eq!(dims_a, dims_b);
+        for iix in 0..dims_a.0 {
+            for iiy in 0..dims_a.1 {
+                for iiz in 0..dims_a.2 {
+                    let ca = cure_a
+                        .dose_at(iix, iiy, iiz)
+                        .expect("voxel in bounds");
+                    let cb = cure_b
+                        .dose_at(iix, iiy, iiz)
+                        .expect("voxel in bounds");
+                    assert!(
+                        ca.to_bits() == cb.to_bits(),
+                        "cure mismatch at ({iix},{iiy},{iiz}): a={ca} ({:#010x}), b={cb} ({:#010x})",
+                        ca.to_bits(),
+                        cb.to_bits()
+                    );
+                    let pa = pi_a
+                        .concentration_at(iix, iiy, iiz)
+                        .expect("voxel in bounds");
+                    let pb = pi_b
+                        .concentration_at(iix, iiy, iiz)
+                        .expect("voxel in bounds");
+                    assert!(
+                        pa.to_bits() == pb.to_bits(),
+                        "pi mismatch at ({iix},{iiy},{iiz}): a={pa} ({:#010x}), b={pb} ({:#010x})",
+                        pa.to_bits(),
+                        pb.to_bits()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parity_apply_vs_compute_smoke_case() {
+        // Hand-crafted case in the typical Mars-5-Ultra regime.
+        run_parity_pair(
+            4, 4, 8, // dims
+            1, 1, 0, // (ix, iy, iz_top)
+            10.0, 2.5,    // intensity, exposure_sec
+            100.0, 0.05,  // dp_um, k_d
+            50.0,         // layer_height_um
+            1.0,          // initial_c
+        );
+    }
+
+    proptest::proptest! {
+        // Bit-exact parity over a randomised set of in-domain inputs.
+        // Fixture cap: 8×8×10 per plan step 3 risks block. 50 cases.
+        #![proptest_config(proptest::test_runner::Config {
+            cases: 50,
+            .. proptest::test_runner::Config::default()
+        })]
+
+        #[test]
+        fn parity_apply_vs_compute_proptest(
+            nx in 2u32..=8,
+            ny in 2u32..=8,
+            nz in 2u32..=10,
+            ix in 0u32..8,
+            iy in 0u32..8,
+            iz_top in 0u32..10,
+            intensity in 0.0_f32..50.0,
+            exposure_sec in 0.0_f32..10.0,
+            dp_um in 10.0_f32..500.0,
+            k_d in 0.0_f32..1.0,
+            layer_height_um in 10.0_f32..150.0,
+            initial_c in 0.0_f32..=1.0,
+        ) {
+            // proptest may generate (ix, iy) outside (nx, ny); skip those.
+            // Same for iz_top vs nz.
+            proptest::prop_assume!(ix < nx);
+            proptest::prop_assume!(iy < ny);
+            proptest::prop_assume!(iz_top < nz);
+
+            run_parity_pair(
+                nx, ny, nz,
+                ix, iy, iz_top,
+                intensity, exposure_sec,
+                dp_um, k_d, layer_height_um,
+                initial_c,
+            );
+        }
     }
 }

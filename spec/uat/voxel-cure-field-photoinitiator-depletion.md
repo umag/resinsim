@@ -95,12 +95,43 @@ Scenario: Voxel-mode cache reflects per-layer voxel summary
   And the LayerResult::cure_depth_um_summary dispatch method returns the same value as the cache
 ```
 
+## UAT-6: apply_column_exposure ↔ compute_column_exposure + manual deposit parity
+
+**Rationale.** ADR-0018 / t2f2 refactored `VoxelCureCalculator` to
+extract `compute_column_exposure` as a pure functional sibling of
+`apply_column_exposure`. The in-place form became a thin wrapper that
+reads the PI column via `column_at`, calls the pure compute, and
+applies the resulting dose column via `add_dose` + `deplete`. The
+two forms MUST remain bit-exact equivalent — this is the load-bearing
+invariant for the t2f2 crosstalk path which uses the pure compute form
+to post-process dose columns through a 1D Z convolution before deposit.
+
+Coverage: `parity_apply_vs_compute_proptest` (50 randomised cases,
+fixture cap 8×8×10) asserts byte-identical CureField + PhotoinitiatorField
+output between the two forms. Promoting to UAT here documents the
+invariant at a level that survives module reorganisation.
+
+```gherkin
+Scenario: VoxelCureCalculator apply_column_exposure equals compute_column_exposure + manual deposit
+  Given any valid (pi_field, cure_field, ix, iy, iz_top, intensity, exposure_sec, dp, k_d, layer_height_um)
+  When apply_column_exposure is invoked in-place on a cloned (cure, pi)
+  And compute_column_exposure is invoked on a snapshot of pi, producing a dose column
+  And the dose column is applied manually via cure.add_dose + pi.deplete for each in-bounds iz
+  Then both result fields are bit-exact f32 equal at every voxel
+```
+
 ## See also
 
 - `docs/adr/0017-voxel-cure-field-and-photoinitiator-depletion.md` —
   design decisions captured during planning.
+- `docs/adr/0018-light-crosstalk-3d-gaussian-convolution.md` —
+  the t2f2 ADR that motivated the `compute_column_exposure` refactor.
+- `docs/patterns/bit-exact-parity-proptest-for-pure-wrapper-refactors.md`
+  — the general refactor-gating pattern.
 - `docs/kb/KB-160-photoinitiator-depletion-model.md` — depletion physics +
   ±50 % uncertainty band for the default decay constant.
 - `crates/resinsim-core/tests/voxel_cure_integration.rs` — 5 end-to-end
   tests covering UAT-1 / UAT-2 / UAT-3 / UAT-5. UAT-4 covered by
-  `resinsim-inspect`'s `parse_voxel_cure_mm` unit tests.
+  `resinsim-inspect`'s `parse_voxel_cure_mm` unit tests. UAT-6
+  covered by `parity_apply_vs_compute_proptest` in
+  `crates/resinsim-core/src/services/voxel_cure_calculator.rs::tests`.

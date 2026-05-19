@@ -30,6 +30,16 @@ fn default_led_to_vat_coupling() -> f32 {
 /// resolution + memory budget — see ADR-0017 §"Variable voxel resolution".
 pub const DEFAULT_VOXEL_CURE_RESOLUTION_MM: f32 = 0.2;
 
+/// Upper-bound safety cap for `crosstalk_sigma_xy_um` and `crosstalk_sigma_z_um`
+/// when validating `PrinterProfile`. ADR-0018 §1 / t2f2.
+///
+/// 5000 µm = 5 mm, ~100× the typical LCD pixel pitch (50 µm) and ~125× the
+/// typical resin scatter mean-free-path (40 µm). Values above this would
+/// produce kernels with radius spanning the entire build envelope — almost
+/// certainly a misconfigured TOML, not a real calibration. Reject at
+/// validate-time to prevent silent simulation corruption.
+pub const MAX_SIGMA_UM: f32 = 5000.0;
+
 /// Hardware build envelope of a printer (ADR-0012, extends ADR-0005 Axis 1).
 ///
 /// Optional on [`PrinterProfile`] — see ADR-0012. When present, all three
@@ -211,6 +221,50 @@ pub struct PrinterProfile {
     /// intent for future calibration but has no current effect.
     #[serde(default)]
     pub(crate) voxel_cure_resolution_mm: Option<f32>,
+
+    /// Lateral (XY) light crosstalk standard deviation (µm). ADR-0018 §2 / t2f2.
+    ///
+    /// When `Some(σ)`, the Tier-2 voxel cure path applies a separable 2D
+    /// Gaussian convolution with this σ to the per-layer pixel intensity
+    /// grid BEFORE the Beer-Lambert column march — captures LCD-source
+    /// crosstalk (pixel pitch + collimation) plus the lateral component
+    /// of volumetric resin scatter as an empirical lumped parameter.
+    ///
+    /// When `None`, no XY pre-convolution is applied (the per-pixel
+    /// exposure path matches t2f1 behaviour at the XY level).
+    ///
+    /// Conversion to voxel-index σ: `σ_voxels = σ_xy_um / (mask.voxel_size_mm × 1000)`.
+    ///
+    /// Validation: `Some(s)` requires `s.is_finite() && s > 0.0 && s <= MAX_SIGMA_UM`.
+    /// Existing TOML profiles without this field deserialise to `None` via
+    /// `#[serde(default)]`.
+    #[serde(default)]
+    pub(crate) crosstalk_sigma_xy_um: Option<f32>,
+
+    /// Axial (Z) light crosstalk standard deviation (µm). ADR-0018 §2 / t2f2.
+    ///
+    /// When `Some(σ)`, the Tier-2 voxel cure path applies a 1D Gaussian
+    /// convolution with this σ along the Z (layer) axis to the per-column
+    /// cure-dose AND PI-depletion deltas AFTER the Beer-Lambert column
+    /// march — captures the axial component of volumetric resin scatter
+    /// as an empirical lumped parameter. Co-scattered with the cure-dose
+    /// delta to preserve consistency between deposited dose and resulting
+    /// initiator depletion.
+    ///
+    /// When `None`, no Z post-convolution is applied (cure dose stays in
+    /// its Beer-Lambert column).
+    ///
+    /// Conversion to layer-index σ: `σ_layers = σ_z_um / layer_height_um`.
+    /// The Z-direction kernel is therefore in LAYER units, not physical
+    /// µm — the per-axis kernels are anisotropic in INDEX space because
+    /// the voxel-field storage is anisotropic
+    /// (docs/patterns/voxel-field-z-dimension-is-layer-count.md).
+    ///
+    /// Validation: `Some(s)` requires `s.is_finite() && s > 0.0 && s <= MAX_SIGMA_UM`.
+    /// Existing TOML profiles without this field deserialise to `None` via
+    /// `#[serde(default)]`.
+    #[serde(default)]
+    pub(crate) crosstalk_sigma_z_um: Option<f32>,
 }
 
 impl PrinterProfile {
@@ -282,6 +336,16 @@ impl PrinterProfile {
     pub fn effective_voxel_cure_resolution_mm(&self) -> f32 {
         self.voxel_cure_resolution_mm
             .unwrap_or(DEFAULT_VOXEL_CURE_RESOLUTION_MM)
+    }
+
+    /// Lateral light crosstalk σ in µm — see struct field doc. ADR-0018 / t2f2.
+    pub fn crosstalk_sigma_xy_um(&self) -> Option<f32> {
+        self.crosstalk_sigma_xy_um
+    }
+
+    /// Axial light crosstalk σ in µm — see struct field doc. ADR-0018 / t2f2.
+    pub fn crosstalk_sigma_z_um(&self) -> Option<f32> {
+        self.crosstalk_sigma_z_um
     }
 
     /// Validate physical invariants. Must be called after deserialization from
@@ -371,6 +435,25 @@ impl PrinterProfile {
                  > 0.0 mm (got {vmm})"
             ));
         }
+        // ADR-0018 / t2f2: crosstalk_sigma_{xy,z}_um are Optional; when Some,
+        // must be finite, > 0, and <= MAX_SIGMA_UM. NaN-two-layer-defence:
+        // explicit is_finite() check before numeric comparisons. The
+        // upper-bound rejects misconfigured TOMLs (kernels spanning the
+        // entire build envelope are almost certainly a calibration error,
+        // not a real measurement).
+        for (label, value) in [
+            ("crosstalk_sigma_xy_um", self.crosstalk_sigma_xy_um),
+            ("crosstalk_sigma_z_um", self.crosstalk_sigma_z_um),
+        ] {
+            if let Some(s) = value
+                && (!s.is_finite() || s <= 0.0 || s > MAX_SIGMA_UM)
+            {
+                return Err(format!(
+                    "{label}, when present, must be finite, > 0.0 µm, and \
+                     <= {MAX_SIGMA_UM} µm (got {s})"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -411,6 +494,15 @@ impl PrinterProfile {
             // pitch could justify finer voxels, but until per-printer voxel
             // calibration data exists, the default is the right call.
             voxel_cure_resolution_mm: None,
+            // ADR-0018 / t2f2: Mars 5 Ultra crosstalk ESTIMATE pending
+            // Athena II beam-profile fit. σ_xy ≈ 8 µm cross-checked against
+            // Wei et al. PMC11267290 (σ/pixel_pitch ≈ 0.36 → 19 µm pitch
+            // gives σ ≈ 6.8 µm; 8 µm is conservative round) and KB-121 LED/LCD
+            // geometry (pixel pitch × tan(5-10° collimation) ≈ 8 µm).
+            // σ_z = 40 µm is the mid-range of typical photopolymer scatter
+            // mean-free-path (20-80 µm).
+            crosstalk_sigma_xy_um: Some(8.0),
+            crosstalk_sigma_z_um: Some(40.0),
         }
     }
 
@@ -444,6 +536,12 @@ impl PrinterProfile {
                 max_z_mm: 200.0,
             }),
             voxel_cure_resolution_mm: None, // ADR-0017: inherit default
+            // ADR-0018 / t2f2: leave both fields unset so the generic 4K
+            // profile runs the t2f1 no-crosstalk path. Per-printer
+            // crosstalk calibration is required to activate Tier-2 light
+            // crosstalk modelling.
+            crosstalk_sigma_xy_um: None,
+            crosstalk_sigma_z_um: None,
         }
     }
 }
@@ -485,6 +583,89 @@ mod tests {
         let mut p = PrinterProfile::generic_msla_4k();
         p.bottom_layer_count_max = 0;
         assert!(p.validate().is_err());
+    }
+
+    // ADR-0018 / t2f2: crosstalk σ validation.
+
+    #[test]
+    fn crosstalk_sigma_xy_um_zero_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.crosstalk_sigma_xy_um = Some(0.0);
+        let err = p
+            .validate()
+            .expect_err("σ_xy = 0.0 must be rejected");
+        assert!(err.contains("crosstalk_sigma_xy_um"));
+    }
+
+    #[test]
+    fn crosstalk_sigma_z_um_zero_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.crosstalk_sigma_z_um = Some(0.0);
+        let err = p
+            .validate()
+            .expect_err("σ_z = 0.0 must be rejected");
+        assert!(err.contains("crosstalk_sigma_z_um"));
+    }
+
+    #[test]
+    fn crosstalk_sigma_xy_um_nan_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.crosstalk_sigma_xy_um = Some(f32::NAN);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn crosstalk_sigma_z_um_negative_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.crosstalk_sigma_z_um = Some(-1.0);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn crosstalk_sigma_xy_um_above_max_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.crosstalk_sigma_xy_um = Some(MAX_SIGMA_UM + 1.0);
+        let err = p
+            .validate()
+            .expect_err("σ_xy above MAX_SIGMA_UM must be rejected");
+        assert!(err.contains("crosstalk_sigma_xy_um"));
+    }
+
+    #[test]
+    fn crosstalk_sigma_z_um_above_max_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.crosstalk_sigma_z_um = Some(MAX_SIGMA_UM + 1.0);
+        let err = p
+            .validate()
+            .expect_err("σ_z above MAX_SIGMA_UM must be rejected");
+        assert!(err.contains("crosstalk_sigma_z_um"));
+    }
+
+    #[test]
+    fn crosstalk_sigmas_none_accepted() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.crosstalk_sigma_xy_um = None;
+        p.crosstalk_sigma_z_um = None;
+        p.validate()
+            .expect("both σ fields None must satisfy validate (t2f1 path)");
+    }
+
+    #[test]
+    fn crosstalk_sigmas_at_upper_bound_accepted() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.crosstalk_sigma_xy_um = Some(MAX_SIGMA_UM);
+        p.crosstalk_sigma_z_um = Some(MAX_SIGMA_UM);
+        p.validate()
+            .expect("σ values equal to MAX_SIGMA_UM must satisfy validate (boundary inclusive)");
+    }
+
+    #[test]
+    fn crosstalk_sigma_accessors_round_trip() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.crosstalk_sigma_xy_um = Some(8.0);
+        p.crosstalk_sigma_z_um = Some(40.0);
+        assert_eq!(p.crosstalk_sigma_xy_um(), Some(8.0));
+        assert_eq!(p.crosstalk_sigma_z_um(), Some(40.0));
     }
 
     #[test]

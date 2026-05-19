@@ -11,6 +11,8 @@ pub mod thermal_calculator;
 pub mod uniformity_calculator;
 #[cfg(feature = "field-sim")]
 pub mod voxel_cure_calculator;
+#[cfg(feature = "field-sim")]
+pub mod light_crosstalk_calculator;
 pub mod z_axis_compensator;
 
 pub use build_plate::BuildPlate;
@@ -25,4 +27,6 @@ pub use thermal_calculator::ThermalCalculator;
 pub use uniformity_calculator::UniformityCalculator;
 #[cfg(feature = "field-sim")]
 pub use voxel_cure_calculator::{VoxelCureCalculator, VoxelCureError};
+#[cfg(feature = "field-sim")]
+pub use light_crosstalk_calculator::{CrosstalkError, LightCrosstalkCalculator};
 pub use z_axis_compensator::ZAxisCompensator;

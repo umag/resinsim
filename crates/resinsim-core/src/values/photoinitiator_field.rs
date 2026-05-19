@@ -126,6 +126,28 @@ impl PhotoinitiatorField {
         Ok(self.data[(ix as usize, iy as usize, iz as usize)])
     }
 
+    /// Concentration column at `(ix, iy)`: returns the Z-axis slice as a
+    /// fresh `Vec<f32>` of length `nz`. ADR-0018 / t2f2.
+    ///
+    /// Read-only snapshot — the returned vector is decoupled from the field's
+    /// internal buffer, so callers can pass it as a snapshot for
+    /// `VoxelCureCalculator::compute_column_exposure` while the field is
+    /// later mutated through `deplete`.
+    pub fn column_at(&self, ix: u32, iy: u32) -> Result<Vec<f32>, PhotoinitiatorFieldError> {
+        if ix >= self.nx || iy >= self.ny {
+            return Err(PhotoinitiatorFieldError::OutOfBounds {
+                ix,
+                iy,
+                iz: 0,
+                nx: self.nx,
+                ny: self.ny,
+                nz: self.nz,
+            });
+        }
+        let (ix_u, iy_u) = (ix as usize, iy as usize);
+        Ok((0..self.nz as usize).map(|iz| self.data[(ix_u, iy_u, iz)]).collect())
+    }
+
     /// Deplete the voxel at `[ix, iy, iz]` per KB-160:
     /// `C_after = C_before × exp(-k_d × delta_dose)`.
     ///

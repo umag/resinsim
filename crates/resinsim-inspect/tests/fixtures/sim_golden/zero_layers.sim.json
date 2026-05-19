@@ -46,7 +46,9 @@
         "depth_mm": 120.0,
         "max_z_mm": 200.0
       },
-      "voxel_cure_resolution_mm": null
+      "voxel_cure_resolution_mm": null,
+      "crosstalk_sigma_xy_um": null,
+      "crosstalk_sigma_z_um": null
     },
     "layers": [],
     "failures": []

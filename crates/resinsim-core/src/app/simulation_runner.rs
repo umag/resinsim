@@ -11,7 +11,7 @@ use crate::services::suction_detector::SuctionDetector;
 #[cfg(feature = "field-sim")]
 use crate::services::uniformity_calculator::UniformityProfile;
 #[cfg(feature = "field-sim")]
-use crate::services::{UniformityCalculator, VoxelCureCalculator};
+use crate::services::{LightCrosstalkCalculator, UniformityCalculator, VoxelCureCalculator};
 use crate::simulation::PrintSimulation;
 use crate::values::{
     AmbientTemperature, CrossSectionArea, InitialLedTemperature, LayerHeightProvenance,
@@ -37,7 +37,11 @@ pub struct SimulationRunner;
 /// - `led_power_mw_cm2` is the printer's nominal LED intensity at the LCD
 ///   plane; per-pixel intensity is `led_power_mw_cm2 × uniformity_factor(x,y)`
 ///   per KB-120 / `UniformityCalculator::intensity_factor`. Lateral light
-///   crosstalk (Gaussian pixel bleed) stays out — that is t2f2's scope.
+///   crosstalk (XY Gaussian pixel bleed) and axial volumetric scatter
+///   (Z Gaussian) are applied in `apply_voxel_cure_for_layer` per ADR-0018
+///   when `printer.crosstalk_sigma_xy_um()` / `crosstalk_sigma_z_um()` are
+///   `Some`. The four resulting runtime regimes (AA/BA/BB/CB/DD) are
+///   enumerated in the `apply_voxel_cure_for_layer` doc.
 #[cfg(feature = "field-sim")]
 struct VoxelState {
     cure: CureField,
@@ -629,7 +633,30 @@ impl SimulationRunner {
     /// mask, run `VoxelCureCalculator::apply_column_exposure` for each, then
     /// overwrite the LayerResult's Tier-1 cache fields with `LayerSummary`
     /// from the voxel field's Z-slab at this layer. v1 minimum-viable
-    /// implementation per ADR-0017.
+    /// implementation per ADR-0017, extended per ADR-0018 / t2f2.
+    ///
+    /// **Four runtime regimes** based on
+    /// `(printer.crosstalk_sigma_xy_um().is_some(), printer.crosstalk_sigma_z_um().is_some())`:
+    /// - **(AA)** both None ⇒ t2f1 path unchanged: `mask.iter_solid()`
+    ///   loop calling `apply_column_exposure` once per pixel at `iz_top = layer`.
+    /// - **(BA/BB)** σ_xy Some, σ_z None ⇒ build per-layer intensity grid,
+    ///   XY-convolve via `LightCrosstalkCalculator::apply_separable_2d`,
+    ///   iterate FULL grid (off-mask pixels may have non-zero convolved
+    ///   intensity), call `apply_column_exposure` once per (ix, iy) at
+    ///   `iz_top = layer`.
+    /// - **(CB)** σ_xy None, σ_z Some ⇒ no XY conv; per `iter_solid()`
+    ///   pixel, call `compute_column_exposure` to obtain the dose column,
+    ///   apply 1D Z convolution to the dose column via
+    ///   `apply_separable_1d_z`, then deposit via `add_dose` + `deplete`.
+    /// - **(DD)** both Some ⇒ XY-convolve intensity first, iterate full
+    ///   grid; for each pixel, `compute_column_exposure` + Z-conv + deposit.
+    ///
+    /// Co-scattering of cure dose + PI depletion: the Z conv operates on
+    /// the cure DOSE column (a linear quantity); the deposit-time
+    /// `pi_field.deplete(k_d, convolved_dose[iz])` uses KB-160's
+    /// multiplicative-exponential depletion law on the convolved dose at
+    /// each voxel, so depletion correctly composes with scatter — see
+    /// ADR-0018 §2 Approximation regime.
     #[cfg(feature = "field-sim")]
     #[allow(clippy::too_many_arguments)]
     fn apply_voxel_cure_for_layer(
@@ -654,37 +681,54 @@ impl SimulationRunner {
 
         let dp = PenetrationDepth::new(state.dp_um).map_err(|e| format!("voxel dp: {e}"))?;
 
-        // KB-120 spatial LCD non-uniformity. Per-pixel intensity is the
-        // nominal LED density scaled by `UniformityCalculator::intensity_factor`
-        // at the pixel's world position. With `state.uniformity.variation == 0.0`
-        // the factor collapses to 1.0 and all pixels see identical intensity
-        // (legacy behaviour). Lateral light crosstalk (Gaussian bleed)
-        // remains out — that is t2f2's scope.
+        // ADR-0018 / t2f2: detect the runtime regime from the printer's
+        // crosstalk configuration. None/None ⇒ t2f1 fast path (regime AA).
+        let sigma_xy_um = printer.crosstalk_sigma_xy_um();
+        let sigma_z_um = printer.crosstalk_sigma_z_um();
+
         let voxel_size_mm = mask.voxel_size_mm();
         // Z-step depth is the CTB-authoritative layer_height_um (the actual
         // print layer thickness, file-axis per ADR-0005 + ticket
         // `ctb-layer-height-authority`), NOT the LATERAL mask voxel size
         // — Z-voxel index represents one layer slab. ADR-0017 §6
         // "Coordinates" + voxel_cure_calculator doc comment.
-        for (ix, iy) in mask.iter_solid() {
-            let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
-            let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
-            let factor = UniformityCalculator::intensity_factor(x_mm, y_mm, &state.uniformity);
-            let pixel_intensity = state.led_power_mw_cm2 * factor;
-            VoxelCureCalculator::apply_column_exposure(
-                &mut state.cure,
-                &mut state.pi,
-                ix,
-                iy,
+        if sigma_xy_um.is_none() && sigma_z_um.is_none() {
+            // Regime AA: t2f1 path UNCHANGED for bit-exact equivalence.
+            for (ix, iy) in mask.iter_solid() {
+                let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
+                let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
+                let factor = UniformityCalculator::intensity_factor(x_mm, y_mm, &state.uniformity);
+                let pixel_intensity = state.led_power_mw_cm2 * factor;
+                VoxelCureCalculator::apply_column_exposure(
+                    &mut state.cure,
+                    &mut state.pi,
+                    ix,
+                    iy,
+                    layer,
+                    pixel_intensity,
+                    exposure_sec,
+                    dp,
+                    state.k_d,
+                    layer_height_um,
+                )
+                .map_err(|e| format!("voxel cure layer {layer}: {e}"))?;
+            }
+        } else {
+            Self::apply_voxel_cure_for_layer_crosstalk(
+                state,
                 layer,
-                pixel_intensity,
+                mask,
                 exposure_sec,
                 dp,
-                state.k_d,
+                sigma_xy_um,
+                sigma_z_um,
                 layer_height_um,
-            )
-            .map_err(|e| format!("voxel cure layer {layer}: {e}"))?;
+            )?;
         }
+
+        // Note: regimes BA/BB/CB/DD branched into
+        // `apply_voxel_cure_for_layer_crosstalk` above; control returns
+        // here and continues with the layer-summary recomputation below.
 
         // Recompute layer summary using KB-153 Ec(T) at the actual vat
         // temperature for this layer (single-source-arrhenius-helper
@@ -719,6 +763,143 @@ impl SimulationRunner {
             }
         }
 
+        Ok(())
+    }
+
+    /// ADR-0018 / t2f2 crosstalk helper. Handles regimes BA/BB/CB/DD.
+    /// Called from `apply_voxel_cure_for_layer` when at least one σ is Some.
+    ///
+    /// Algorithm:
+    /// 1. Build a 2D pixel intensity grid for this layer (mask × uniformity ×
+    ///    led_power).
+    /// 2. If σ_xy is Some: XY 2D Gaussian convolution on the intensity grid
+    ///    (LCD source crosstalk + lateral resin scatter component).
+    /// 3. Iterate the (possibly post-XY-conv) grid:
+    ///    - σ_xy active ⇒ FULL grid (off-mask pixels may now have non-zero
+    ///      intensity);
+    ///    - σ_xy None ⇒ `mask.iter_solid()` only (no XY spread).
+    /// 4. For each pixel: snapshot PI column, call `compute_column_exposure`
+    ///    to obtain the Beer-Lambert dose column (Vec<f32>).
+    /// 5. If σ_z is Some: 1D Z Gaussian convolution on the dose column.
+    /// 6. Deposit: for each in-bounds iz, `cure.add_dose` + `pi.deplete`
+    ///    using the (possibly Z-convolved) dose at iz. KB-160 multiplicative
+    ///    depletion correctly co-scatters with the convolved linear dose.
+    #[cfg(feature = "field-sim")]
+    #[allow(clippy::too_many_arguments)]
+    fn apply_voxel_cure_for_layer_crosstalk(
+        state: &mut VoxelState,
+        layer: u32,
+        mask: &LayerMask,
+        exposure_sec: f32,
+        dp: PenetrationDepth,
+        sigma_xy_um: Option<f32>,
+        sigma_z_um: Option<f32>,
+        layer_height_um: f32,
+    ) -> Result<(), String> {
+        use ndarray::Array2;
+
+        let (nx, ny, nz) = state.cure.dimensions();
+        let voxel_size_mm = mask.voxel_size_mm();
+
+        // (1) Build the 2D intensity grid from the solid mask + KB-120
+        // uniformity factor. Off-mask pixels stay at 0.
+        let mut intensity = Array2::<f32>::zeros((nx as usize, ny as usize));
+        for (ix, iy) in mask.iter_solid() {
+            let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
+            let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
+            let factor = UniformityCalculator::intensity_factor(x_mm, y_mm, &state.uniformity);
+            intensity[(ix as usize, iy as usize)] = state.led_power_mw_cm2 * factor;
+        }
+
+        // (2) XY pre-convolution (if σ_xy active).
+        let xy_active = if let Some(sigma_xy) = sigma_xy_um {
+            let sigma_xy_voxels = sigma_xy / (voxel_size_mm * 1000.0);
+            let xy_kernel = LightCrosstalkCalculator::build_separable_kernel(sigma_xy_voxels)
+                .map_err(|e| format!("xy kernel layer {layer}: {e:?}"))?;
+            let mut xy_scratch = Array2::<f32>::zeros((nx as usize, ny as usize));
+            LightCrosstalkCalculator::apply_separable_2d(
+                &mut intensity,
+                &xy_kernel,
+                &mut xy_scratch,
+            )
+            .map_err(|e| format!("xy conv layer {layer}: {e:?}"))?;
+            true
+        } else {
+            false
+        };
+
+        // (3) Build the Z kernel + reusable per-column scratch buffers if σ_z active.
+        let z_kernel = if let Some(sigma_z) = sigma_z_um {
+            let sigma_z_layers = sigma_z / layer_height_um;
+            Some(
+                LightCrosstalkCalculator::build_separable_kernel(sigma_z_layers)
+                    .map_err(|e| format!("z kernel layer {layer}: {e:?}"))?,
+            )
+        } else {
+            None
+        };
+        let mut z_scratch_column: Vec<f32> = vec![0.0; nz as usize];
+
+        // (4) Iterate pixels. When σ_xy is active we walk the full grid
+        // (post-conv intensity may be non-zero off the original mask);
+        // otherwise only iter_solid pixels see exposure.
+        let iter_pixels: Box<dyn Iterator<Item = (u32, u32)>> = if xy_active {
+            Box::new((0..ny).flat_map(move |iy| (0..nx).map(move |ix| (ix, iy))))
+        } else {
+            Box::new(mask.iter_solid())
+        };
+        for (ix, iy) in iter_pixels {
+            let pixel_intensity = intensity[(ix as usize, iy as usize)];
+            if pixel_intensity == 0.0 {
+                continue;
+            }
+
+            // (5) PI column snapshot + compute_column_exposure → dose column.
+            let pi_snapshot = state
+                .pi
+                .column_at(ix, iy)
+                .map_err(|e| format!("pi snapshot ({ix},{iy}) layer {layer}: {e}"))?;
+            let mut dose_col = VoxelCureCalculator::compute_column_exposure(
+                &pi_snapshot,
+                layer,
+                nz,
+                pixel_intensity,
+                exposure_sec,
+                dp,
+                state.k_d,
+                layer_height_um,
+            )
+            .map_err(|e| format!("compute col ({ix},{iy}) layer {layer}: {e}"))?;
+
+            // (6) Z convolution on the dose column (if σ_z active).
+            if let Some(ref zk) = z_kernel {
+                LightCrosstalkCalculator::apply_separable_1d_z(
+                    &mut dose_col,
+                    zk,
+                    &mut z_scratch_column,
+                )
+                .map_err(|e| format!("z conv ({ix},{iy}) layer {layer}: {e:?}"))?;
+            }
+
+            // (7) Deposit: add_dose + deplete at each iz with non-zero
+            // convolved dose. KB-160 multiplicative depletion is applied
+            // per-voxel using local C(iz), composing correctly with the
+            // convolved dose (linear) — see ADR-0018 §2 Approximation regime.
+            for iz in 0..nz {
+                let dose = dose_col[iz as usize];
+                if dose == 0.0 {
+                    continue;
+                }
+                state
+                    .cure
+                    .add_dose(ix, iy, iz, dose)
+                    .map_err(|e| format!("add_dose ({ix},{iy},{iz}) layer {layer}: {e}"))?;
+                state
+                    .pi
+                    .deplete(ix, iy, iz, state.k_d, dose)
+                    .map_err(|e| format!("deplete ({ix},{iy},{iz}) layer {layer}: {e}"))?;
+            }
+        }
         Ok(())
     }
 
