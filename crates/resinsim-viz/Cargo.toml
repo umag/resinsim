@@ -27,6 +27,12 @@ directories = "5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+[features]
+# Forwarding feature: enabling on this crate cascades to resinsim-core's
+# field-sim feature, which gates the voxel cure heatmap rendering path
+# (ADR-0017, t2f1).
+field-sim = ["resinsim-core/field-sim"]
+
 [dev-dependencies]
 # Tempdir TOML round-trips for issue 04's pairing-violation +
 # save/load-sim tests, and the Pass 5 v2 layout-persistence tests.

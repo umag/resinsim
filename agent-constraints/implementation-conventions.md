@@ -97,6 +97,26 @@ For everything else: linear stack, advance main on completion.
 - `cargo fmt --all`
 - `cargo clippy -p resinsim-core -p resinsim-inspect --all-targets -- -D warnings` — clippy clean on core + inspect (resinsim-viz has pre-existing warnings unrelated to issue 15; not blocking)
 
+### Cargo feature matrix (ADR-0017, t2f1)
+
+Crates carrying optional Cargo features (currently `field-sim`, forwarded
+through resinsim-inspect and resinsim-viz from resinsim-core) require
+**all four** configurations to pass before `review_code`:
+
+1. `cargo build --workspace` — default features only; voxel modules must
+   not be compiled
+2. `cargo build --workspace --features resinsim-inspect/field-sim,resinsim-viz/field-sim`
+   — feature-on build compiles; ndarray dep resolves; voxel modules
+   compile
+3. `cargo nextest run --workspace` — default tests pass; Tier-1 scalar
+   path untouched
+4. `cargo nextest run --workspace --features resinsim-inspect/field-sim,resinsim-viz/field-sim`
+   — feature-on tests pass; voxel path exercised
+
+The canonical failure mode for Cargo feature flags is "feature-off
+build silently regressed because a `#[cfg(feature = \"…\")]` was forgotten";
+configs (1) and (3) catch this and (2) and (4) catch the inverse.
+
 Tests must pass before `review_code`.
 
 ## PR convention

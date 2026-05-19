@@ -14,6 +14,10 @@ stl_io = "0.8"
 aes = "0.8"
 cbc = "0.1"
 bitvec = "1.0"
+ndarray = { version = "0.16", optional = true }
+
+[features]
+field-sim = ["dep:ndarray"]
 
 [dev-dependencies]
 proptest = "1.9.0"
