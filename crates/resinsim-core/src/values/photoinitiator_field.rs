@@ -29,6 +29,7 @@
 #![cfg(feature = "field-sim")]
 
 use ndarray::Array3;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Errors from `PhotoinitiatorField` construction and access.
@@ -59,7 +60,7 @@ pub enum PhotoinitiatorFieldError {
 
 /// Dense 3D voxel field of photoinitiator concentration (dimensionless
 /// fraction in `[0, initial_concentration]`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhotoinitiatorField {
     nx: u32,
     ny: u32,

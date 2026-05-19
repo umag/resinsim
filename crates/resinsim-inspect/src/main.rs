@@ -78,7 +78,36 @@ enum Commands {
         /// silently (POSIX default; ADR-0015).
         #[arg(long)]
         out: Option<std::path::PathBuf>,
+        /// **Tier-2 voxel cure mode** (ADR-0017 / t2f1). Voxel edge length in
+        /// mm. Presence enables the voxel cure + photoinitiator depletion
+        /// path; absence runs the Tier-1 scalar path. Precedence:
+        /// (1) this flag value — highest;
+        /// (2) `PrinterProfile.voxel_cure_resolution_mm` — middle;
+        /// (3) workspace default 0.2 mm — lowest.
+        /// Validated finite > 0 at parse time. Only available in builds with
+        /// the `field-sim` Cargo feature; default builds reject this flag
+        /// with the standard clap unknown-flag error.
+        #[cfg(feature = "field-sim")]
+        #[arg(long, value_parser = parse_voxel_cure_mm)]
+        voxel_cure_mm: Option<f32>,
     },
+}
+
+/// Clap `value_parser` for `--voxel-cure-mm`. Rejects non-finite or
+/// non-positive values at parse time so the error surfaces with the flag
+/// name instead of deep inside profile validation. Mirrors the
+/// `--ambient` / `--initial-led-temp` parse-time validation pattern.
+#[cfg(feature = "field-sim")]
+fn parse_voxel_cure_mm(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| format!("not a valid float: {e}"))?;
+    if !v.is_finite() || v <= 0.0 {
+        return Err(format!(
+            "must be finite and positive (got {v}); typical values: 0.05-0.5 mm"
+        ));
+    }
+    Ok(v)
 }
 
 #[derive(Subcommand)]
@@ -422,6 +451,8 @@ fn main() {
             ambient,
             initial_led_temp,
             out,
+            #[cfg(feature = "field-sim")]
+            voxel_cure_mm,
         } => cmd_sim(
             stl.as_deref(),
             file.as_deref(),
@@ -433,6 +464,10 @@ fn main() {
             ambient,
             initial_led_temp,
             out.as_deref(),
+            #[cfg(feature = "field-sim")]
+            voxel_cure_mm,
+            #[cfg(not(feature = "field-sim"))]
+            None::<f32>,
         ),
     }
 }
@@ -1242,6 +1277,11 @@ fn cmd_sim(
     ambient: f32,
     initial_led_temp: Option<f32>,
     out: Option<&std::path::Path>,
+    // ADR-0017 / t2f1: Some(mm) ⇒ voxel cure mode at that resolution;
+    // None ⇒ Tier-1 scalar mode. With feature off, this is always None
+    // because the CLI flag itself is gated. Consumed by SimulationRunner
+    // after task 18 wires the voxel path through PrintSimulation.
+    _voxel_cure_mm: Option<f32>,
 ) {
     use resinsim_core::app::SimulationRunner;
     use resinsim_core::repositories::{save_with_provenance, Provenance};
@@ -1508,5 +1548,48 @@ mod tests {
         let file = std::path::PathBuf::from("/from-file/b.ctb");
         let out = default_sim_out_path(Some(&stl), Some(&file));
         assert_eq!(out, Path::new("/from-file/b.sim.json"));
+    }
+
+    // --- ADR-0017 / t2f1 --voxel-cure-mm parser tests ---
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn voxel_cure_mm_parses_positive_value() {
+        assert_eq!(parse_voxel_cure_mm("0.2"), Ok(0.2));
+        assert_eq!(parse_voxel_cure_mm("0.05"), Ok(0.05));
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn voxel_cure_mm_rejects_zero() {
+        let err = parse_voxel_cure_mm("0").unwrap_err();
+        assert!(
+            err.contains("finite and positive"),
+            "error must explain the constraint: {err}"
+        );
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn voxel_cure_mm_rejects_negative() {
+        assert!(parse_voxel_cure_mm("-0.1").is_err());
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn voxel_cure_mm_rejects_nan() {
+        assert!(parse_voxel_cure_mm("nan").is_err());
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn voxel_cure_mm_rejects_infinity() {
+        assert!(parse_voxel_cure_mm("inf").is_err());
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn voxel_cure_mm_rejects_non_numeric() {
+        assert!(parse_voxel_cure_mm("abc").is_err());
     }
 }

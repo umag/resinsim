@@ -9,6 +9,8 @@ pub mod suction_detector;
 pub mod support_analyzer;
 pub mod thermal_calculator;
 pub mod uniformity_calculator;
+#[cfg(feature = "field-sim")]
+pub mod voxel_cure_calculator;
 pub mod z_axis_compensator;
 
 pub use build_plate::BuildPlate;
@@ -21,4 +23,6 @@ pub use suction_detector::SuctionDetector;
 pub use support_analyzer::{SupportAnalyzer, SupportAssessment};
 pub use thermal_calculator::ThermalCalculator;
 pub use uniformity_calculator::UniformityCalculator;
+#[cfg(feature = "field-sim")]
+pub use voxel_cure_calculator::{VoxelCureCalculator, VoxelCureError};
 pub use z_axis_compensator::ZAxisCompensator;

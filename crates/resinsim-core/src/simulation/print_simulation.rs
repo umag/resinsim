@@ -3,6 +3,8 @@ use thiserror::Error;
 
 use crate::entities::{FailureEvent, LayerResult, PrinterProfile, Recipe, Severity};
 use crate::services::LayerTimingCalculator;
+#[cfg(feature = "field-sim")]
+use crate::values::{CureField, PhotoinitiatorField};
 
 /// Errors returned by [`PrintSimulation`] mutators.
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -13,6 +15,15 @@ pub enum AggregateError {
     /// bugs, not domain failures.
     #[error("layers must be sequential: expected {expected}, got {got}")]
     NonContiguousLayer { expected: u32, got: u32 },
+    /// `set_voxel_fields` was called with a CureField and PhotoinitiatorField
+    /// whose dimensions disagree. The two fields must share `(nx, ny, nz)`
+    /// because every cure-mode iteration touches both at the same voxel
+    /// index. Caller bug; ADR-0017 invariant.
+    #[error("voxel field dimensions must match: cure={cure_dims:?}, photoinitiator={pi_dims:?}")]
+    VoxelFieldDimensionMismatch {
+        cure_dims: (u32, u32, u32),
+        pi_dims: (u32, u32, u32),
+    },
 }
 
 /// Aggregate root: a complete simulation run for one geometry + resin + printer.
@@ -41,6 +52,18 @@ pub struct PrintSimulation {
     printer: PrinterProfile,
     layers: Vec<LayerResult>,
     failures: Vec<FailureEvent>,
+    /// Voxel cure dose field (ADR-0017 / t2f1). Populated by
+    /// `SimulationRunner` only when the `--voxel-cure-mm` flag is set;
+    /// `None` for Tier-1 scalar runs. Aggregate invariant: when `Some`,
+    /// the field's bbox must contain every layer's solid region.
+    #[cfg(feature = "field-sim")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cure_field: Option<CureField>,
+    /// Per-voxel photoinitiator concentration field (KB-160). Populated
+    /// in lockstep with `cure_field`.
+    #[cfg(feature = "field-sim")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    photoinitiator_field: Option<PhotoinitiatorField>,
 }
 
 /// Summary statistics for a completed simulation.
@@ -77,6 +100,10 @@ impl PrintSimulation {
             printer,
             layers: Vec::new(),
             failures: Vec::new(),
+            #[cfg(feature = "field-sim")]
+            cure_field: None,
+            #[cfg(feature = "field-sim")]
+            photoinitiator_field: None,
         }
     }
 
@@ -118,6 +145,57 @@ impl PrintSimulation {
 
     pub fn failures(&self) -> &[FailureEvent] {
         &self.failures
+    }
+
+    /// Voxel cure dose field (ADR-0017 / t2f1). Returns `None` when the
+    /// simulation was run in Tier-1 scalar mode (no `--voxel-cure-mm` flag).
+    /// Only present in builds with the `field-sim` Cargo feature.
+    #[cfg(feature = "field-sim")]
+    pub fn cure_field(&self) -> Option<&CureField> {
+        self.cure_field.as_ref()
+    }
+
+    /// Per-voxel photoinitiator concentration field (KB-160). Populated
+    /// in lockstep with `cure_field`.
+    #[cfg(feature = "field-sim")]
+    pub fn photoinitiator_field(&self) -> Option<&PhotoinitiatorField> {
+        self.photoinitiator_field.as_ref()
+    }
+
+    /// Mutable borrow of the voxel cure field — used by SimulationRunner
+    /// while orchestrating the voxel path. Outside of the runner this is
+    /// not the right API; consumers should use [`Self::cure_field`].
+    #[cfg(feature = "field-sim")]
+    pub fn cure_field_mut(&mut self) -> Option<&mut CureField> {
+        self.cure_field.as_mut()
+    }
+
+    /// Mutable borrow of the photoinitiator field. Symmetric with
+    /// [`Self::cure_field_mut`].
+    #[cfg(feature = "field-sim")]
+    pub fn photoinitiator_field_mut(&mut self) -> Option<&mut PhotoinitiatorField> {
+        self.photoinitiator_field.as_mut()
+    }
+
+    /// Install voxel cure + photoinitiator fields onto the aggregate.
+    /// Both must be set together (their dimensions must match) — passing
+    /// only one would break the t2f1 invariant that the two fields share
+    /// shape. Idempotent: overwrites any previously-set fields.
+    #[cfg(feature = "field-sim")]
+    pub fn set_voxel_fields(
+        &mut self,
+        cure: CureField,
+        photoinitiator: PhotoinitiatorField,
+    ) -> Result<(), AggregateError> {
+        if cure.dimensions() != photoinitiator.dimensions() {
+            return Err(AggregateError::VoxelFieldDimensionMismatch {
+                cure_dims: cure.dimensions(),
+                pi_dims: photoinitiator.dimensions(),
+            });
+        }
+        self.cure_field = Some(cure);
+        self.photoinitiator_field = Some(photoinitiator);
+        Ok(())
     }
 
     pub fn critical_failures(&self) -> Vec<&FailureEvent> {
@@ -594,5 +672,94 @@ pub(crate) mod tests {
                 times[i]
             );
         }
+    }
+
+    // --- ADR-0017 / t2f1 voxel-field aggregate-membership tests ---
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn voxel_fields_absent_by_default() {
+        let sim = PrintSimulation::new(default_recipe(), linear_printer());
+        assert!(sim.cure_field().is_none());
+        assert!(sim.photoinitiator_field().is_none());
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn set_voxel_fields_installs_both() {
+        use crate::values::{CureField, PhotoinitiatorField};
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        let cure = CureField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0]).unwrap();
+        let pi = PhotoinitiatorField::new(4, 4, 4, 1.0).unwrap();
+        sim.set_voxel_fields(cure, pi).unwrap();
+        assert!(sim.cure_field().is_some());
+        assert!(sim.photoinitiator_field().is_some());
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn set_voxel_fields_rejects_dimension_mismatch() {
+        use crate::values::{CureField, PhotoinitiatorField};
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        let cure = CureField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0]).unwrap();
+        let pi = PhotoinitiatorField::new(4, 4, 5, 1.0).unwrap();
+        let err = sim.set_voxel_fields(cure, pi).unwrap_err();
+        matches!(err, AggregateError::VoxelFieldDimensionMismatch { .. });
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn set_voxel_fields_overwrites_previous() {
+        use crate::values::{CureField, PhotoinitiatorField};
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        let cure_a = CureField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0]).unwrap();
+        let pi_a = PhotoinitiatorField::new(4, 4, 4, 1.0).unwrap();
+        sim.set_voxel_fields(cure_a, pi_a).unwrap();
+        let (nx_a, _, _) = sim.cure_field().unwrap().dimensions();
+        assert_eq!(nx_a, 4);
+
+        let cure_b = CureField::new(8, 8, 8, 0.1, [0.0, 0.0, 0.0]).unwrap();
+        let pi_b = PhotoinitiatorField::new(8, 8, 8, 1.0).unwrap();
+        sim.set_voxel_fields(cure_b, pi_b).unwrap();
+        let (nx_b, _, _) = sim.cure_field().unwrap().dimensions();
+        assert_eq!(nx_b, 8);
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn voxel_fields_mut_borrow_works() {
+        use crate::values::{CureField, PhotoinitiatorField};
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        let cure = CureField::new(2, 2, 2, 0.2, [0.0, 0.0, 0.0]).unwrap();
+        let pi = PhotoinitiatorField::new(2, 2, 2, 1.0).unwrap();
+        sim.set_voxel_fields(cure, pi).unwrap();
+        // Mutate through the &mut accessor — SimulationRunner's usage shape.
+        sim.cure_field_mut().unwrap().add_dose(0, 0, 0, 5.0).unwrap();
+        assert_eq!(sim.cure_field().unwrap().dose_at(0, 0, 0).unwrap(), 5.0);
+        sim.photoinitiator_field_mut()
+            .unwrap()
+            .deplete(0, 0, 0, 0.05, 5.0)
+            .unwrap();
+        let c = sim.photoinitiator_field().unwrap().concentration_at(0, 0, 0).unwrap();
+        assert!(c < 1.0 && c > 0.0);
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn voxel_fields_skip_serializing_when_none() {
+        // Aggregate without voxel fields ⇒ JSON output does NOT contain
+        // `cure_field` or `photoinitiator_field` keys, preserving the
+        // shape for Tier-1 sim.json consumers.
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![]).unwrap();
+        let json = serde_json::to_string(&sim).unwrap();
+        assert!(
+            !json.contains("cure_field"),
+            "Tier-1 sim.json must omit cure_field when None; got: {json}"
+        );
+        assert!(
+            !json.contains("photoinitiator_field"),
+            "Tier-1 sim.json must omit photoinitiator_field when None"
+        );
     }
 }

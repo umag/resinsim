@@ -32,6 +32,7 @@
 #![cfg(feature = "field-sim")]
 
 use ndarray::Array3;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::values::CureDepth;
@@ -66,7 +67,7 @@ pub enum CureFieldError {
 /// legacy `LayerResult.cure_depth_um` scalar. `min` is the
 /// cure-depth-at-minimum-dose (most-undercured voxel) — replaces the
 /// legacy `LayerResult.worst_cure_depth_um`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LayerSummary {
     /// Mean cure depth (µm) across all voxels in the layer's Z-slab.
     pub mean: f32,
@@ -80,7 +81,15 @@ pub struct LayerSummary {
 /// Dimensions and voxel size are fixed at construction. Dose values are
 /// mutated via [`Self::add_dose`] (cumulative addition) and read via
 /// [`Self::dose_at`] (bounds-checked).
-#[derive(Debug, Clone)]
+///
+/// # Serialization
+///
+/// Serde derives via `ndarray`'s `serde` feature. The on-disk JSON shape
+/// emits the dense f32 array as a nested list (`[[[...]]]`); for the
+/// 50×50×100 mm-at-0.2 mm typical case (62 MB raw) this is large but
+/// round-trippable. Future iterations may compress; v1 prioritises
+/// correctness over wire size.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CureField {
     nx: u32,
     ny: u32,

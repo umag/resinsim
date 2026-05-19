@@ -45,7 +45,8 @@
         "width_mm": 192.0,
         "depth_mm": 120.0,
         "max_z_mm": 200.0
-      }
+      },
+      "voxel_cure_resolution_mm": null
     },
     "layers": [],
     "failures": []
