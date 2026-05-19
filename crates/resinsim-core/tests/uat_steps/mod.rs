@@ -27,6 +27,7 @@ pub mod cli_fixtures;
 pub mod cli_profile_by_name_loading;
 pub mod cli_requires_resin_for_recipe_fields;
 pub mod cli_temperature_flag_validation;
+pub mod ctb_layer_height_authority;
 pub mod cure_depth_nan_guard;
 pub mod legacy_resin_toml_defaults;
 pub mod legacy_resin_toml_without_recipe;

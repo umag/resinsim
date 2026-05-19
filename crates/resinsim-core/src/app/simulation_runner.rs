@@ -14,7 +14,8 @@ use crate::services::uniformity_calculator::UniformityProfile;
 use crate::services::{UniformityCalculator, VoxelCureCalculator};
 use crate::simulation::PrintSimulation;
 use crate::values::{
-    AmbientTemperature, CrossSectionArea, InitialLedTemperature, LayerMask, LayerPhase,
+    AmbientTemperature, CrossSectionArea, InitialLedTemperature, LayerHeightProvenance,
+    LayerHeightSeq, LayerMask, LayerPhase,
 };
 #[cfg(feature = "field-sim")]
 use crate::values::{CureField, Energy, PenetrationDepth, PhotoinitiatorField};
@@ -57,6 +58,35 @@ struct VoxelState {
     uniformity: UniformityProfile,
 }
 
+/// Output of [`SimulationRunner::prepare_layer_inputs`]: everything the
+/// run-inner path needs derived from a CTB-style `LayerInput` slice, plus
+/// the layer-height reconciliation between file-axis (CTB) and recipe-axis
+/// (resin profile). See ADR-0005 Consequences "Policy: CTB as file-axis
+/// authority" and ticket `ctb-layer-height-authority`.
+///
+/// **No I/O happens inside `prepare_layer_inputs`** — the helper is pure
+/// data preparation. Callers inspect `layer_height_provenance.has_mismatch()`
+/// and emit the user-facing warning themselves at the entry-point boundary
+/// (next to where exit codes are decided). This keeps the helper testable
+/// without a sink injection and avoids dyn-dispatch.
+#[derive(Debug)]
+struct PreparedInputs {
+    areas: Vec<CrossSectionArea>,
+    masks: Vec<LayerMask>,
+    per_layer_overrides: Vec<(f32, f32)>,
+    /// Per-layer CTB-authoritative layer heights as a typed value object.
+    /// `.len() == areas.len()`. Each call to `predict_layer` and
+    /// `apply_voxel_cure_for_layer` dispatches its layer's value via
+    /// `layer_heights.get(i)`. Adaptive (variable-Z) CTBs are supported
+    /// transparently — every layer carries its own slab thickness.
+    /// Rationale: ADR-0005 Consequences "Policy: CTB as file-axis
+    /// authority" + the `MismatchKind::Variable` branch on
+    /// `LayerHeightProvenance`.
+    layer_heights: LayerHeightSeq,
+    /// Reconciliation outcome installed on the resulting `PrintSimulation`.
+    layer_height_provenance: LayerHeightProvenance,
+}
+
 impl SimulationRunner {
     /// Run full simulation on an STL file.
     ///
@@ -93,6 +123,12 @@ impl SimulationRunner {
         );
         let areas: Vec<CrossSectionArea> = geometries.iter().map(|g| g.area).collect();
         let masks: Vec<LayerMask> = geometries.into_iter().map(|g| g.mask).collect();
+        // STL path: no CTB-derived layer_height; fall back to recipe.
+        // Build a uniform per-layer Vec sized to the slice (the recipe
+        // value is constant across every STL-sliced layer by construction
+        // — slice_layers() uses recipe.layer_height_um as the Z-step).
+        // Provenance is None (no file-axis value exists to reconcile).
+        let layer_heights_um = vec![recipe.layer_height_um(); areas.len()];
         Self::run_inner(
             &areas,
             &masks,
@@ -103,6 +139,8 @@ impl SimulationRunner {
             plate,
             ambient,
             initial_led_temp,
+            &layer_heights_um,
+            None,
         )
     }
 
@@ -137,6 +175,10 @@ impl SimulationRunner {
                     .expect("1×1 all-solid mask at validated positive voxel_size_mm constructs")
             })
             .collect();
+        // Area-only path: no CTB; build a uniform per-layer Vec from the
+        // recipe value. No provenance to install (file-axis value does
+        // not exist).
+        let layer_heights_um = vec![resin.recipe().layer_height_um(); areas.len()];
         Self::run_inner(
             areas,
             &masks,
@@ -147,16 +189,26 @@ impl SimulationRunner {
             plate,
             ambient,
             initial_led_temp,
+            &layer_heights_um,
+            None,
         )
     }
 
     /// Run simulation from parsed LayerInputs (from CTB or other sliced files).
     ///
     /// Uses per-layer exposure and lift speed from the sliced file; baseline recipe
-    /// values (layer_height_um, bottom_exposure_sec, bottom_layer_count) come from
-    /// `resin.recipe()`. Each `LayerInput` should carry a populated `mask` for
-    /// cavity detection; inputs without a mask get a synthesised fully-solid 1×1
-    /// mask at `printer.voxel_size_mm()` (no cavity events emitted for those layers).
+    /// values (bottom_exposure_sec, bottom_layer_count) come from `resin.recipe()`.
+    /// The runtime layer-height is sourced **per layer** from the CTB
+    /// (`LayerInput.layer_height_um`, file-axis authority per ADR-0005), so
+    /// adaptive (variable layer height) CTBs are first-class — each layer's
+    /// physics uses its own slab thickness. When the CTB disagrees with
+    /// `recipe.layer_height_um` — either by being uniform but different, or
+    /// by being variable — a warning is emitted to stderr and the
+    /// reconciliation is surfaced on `PrintSimulation::layer_height_provenance()`.
+    ///
+    /// Each `LayerInput` should carry a populated `mask` for cavity detection;
+    /// inputs without a mask get a synthesised fully-solid 1×1 mask at
+    /// `printer.voxel_size_mm()` (no cavity events emitted for those layers).
     #[allow(clippy::too_many_arguments)]
     pub fn run_from_layer_inputs(
         layers: &[LayerInput],
@@ -172,6 +224,53 @@ impl SimulationRunner {
         pairing_validator::validate_pairing(printer, resin.recipe())
             .map_err(|violations| format!("pairing: {}", violations.join("; ")))?;
 
+        let prepared = Self::prepare_layer_inputs(layers, resin, printer)?;
+        Self::emit_layer_height_warning_if_mismatch(
+            &prepared.layer_height_provenance,
+            resin.name(),
+        );
+        // Destructure to move the Vec instead of cloning — addresses the
+        // round-1 LOW finding about clone overhead on large prints.
+        let PreparedInputs {
+            areas,
+            masks,
+            per_layer_overrides,
+            layer_heights,
+            layer_height_provenance,
+        } = prepared;
+        Self::run_inner(
+            &areas,
+            &masks,
+            Some(&per_layer_overrides),
+            resin,
+            printer,
+            supports,
+            plate,
+            ambient,
+            initial_led_temp,
+            layer_heights.as_slice(),
+            Some(layer_height_provenance),
+        )
+    }
+
+    /// Pure data-preparation helper shared by [`Self::run_from_layer_inputs`]
+    /// and [`Self::run_from_layer_inputs_with_voxel`]. **No I/O** — the
+    /// returned `PreparedInputs.layer_height_provenance` is what the callers
+    /// inspect to decide whether to emit the user-facing stderr warning.
+    ///
+    /// Extracts areas, mask-fallback-synthesises, builds per-layer overrides,
+    /// collects the **per-layer** CTB layer heights (adaptive / variable-Z
+    /// CTBs are supported — each layer's slab thickness is dispatched
+    /// individually downstream), and reconciles against
+    /// `recipe.layer_height_um`. Rejects non-finite / non-positive
+    /// `layer_height_um` values (covers the NaN gap noted in
+    /// `docs/patterns/anti/rust-nan-positive-validation-gap.md`) via the
+    /// extractor.
+    fn prepare_layer_inputs(
+        layers: &[LayerInput],
+        resin: &ResinProfile,
+        printer: &PrinterProfile,
+    ) -> Result<PreparedInputs, String> {
         let areas: Vec<CrossSectionArea> = layers
             .iter()
             .map(|li| {
@@ -211,17 +310,38 @@ impl SimulationRunner {
             .iter()
             .map(|li| (li.exposure_sec, li.lift_speed_mm_min))
             .collect();
-        Self::run_inner(
-            &areas,
-            &masks,
-            Some(&per_layer_overrides),
-            resin,
-            printer,
-            supports,
-            plate,
-            ambient,
-            initial_led_temp,
-        )
+
+        // CTB is the file-axis authority for layer height (ADR-0005
+        // Consequences). LayerHeightSeq carries the per-layer Vec as a
+        // domain value object — it's the runtime authority both for
+        // per-layer dispatch and for the LayerHeightProvenance
+        // reconciliation. Adaptive (variable-Z) CTBs surface a
+        // MismatchKind::Variable; the uniform-but-disagrees case
+        // surfaces MismatchKind::Uniform.
+        let ctb_seq = LayerHeightSeq::from_layer_inputs(layers)?;
+        let recipe_layer_height_um = resin.recipe().layer_height_um();
+        let provenance = LayerHeightProvenance::reconcile(ctb_seq.clone(), recipe_layer_height_um)
+            .map_err(|e| format!("layer-height reconciliation: {e}"))?;
+
+        Ok(PreparedInputs {
+            areas,
+            masks,
+            per_layer_overrides,
+            layer_heights: ctb_seq,
+            layer_height_provenance: provenance,
+        })
+    }
+
+    /// Emit the layer-height-mismatch warning to stderr when present.
+    /// Delegates the wording to [`LayerHeightProvenance::format_warning`]
+    /// (behaviour lives with the data, not the runner).
+    fn emit_layer_height_warning_if_mismatch(
+        provenance: &LayerHeightProvenance,
+        profile_name: &str,
+    ) {
+        if let Some(text) = provenance.format_warning(profile_name) {
+            eprintln!("{text}");
+        }
     }
 
     /// ADR-0017 / t2f1 voxel-cure-mode entry point. Identical to
@@ -254,40 +374,19 @@ impl SimulationRunner {
         pairing_validator::validate_pairing(printer, resin.recipe())
             .map_err(|violations| format!("pairing: {}", violations.join("; ")))?;
 
-        let areas: Vec<CrossSectionArea> = layers
-            .iter()
-            .map(|li| {
-                CrossSectionArea::new(li.cross_section_area_mm2)
-                    .map_err(|e| format!("layer {}: {e}", li.index))
-            })
-            .collect::<Result<_, _>>()?;
-
-        let printer_voxel = printer.voxel_size_mm();
-        let carrying_voxel = layers
-            .iter()
-            .find_map(|li| li.mask.as_ref().map(|m| m.voxel_size_mm()))
-            .unwrap_or(printer_voxel);
-        let carrying_dims = layers
-            .iter()
-            .find_map(|li| {
-                li.mask
-                    .as_ref()
-                    .map(|m| (m.width_cells(), m.height_cells()))
-            })
-            .unwrap_or((1, 1));
-        let masks: Vec<LayerMask> = layers
-            .iter()
-            .map(|li| match &li.mask {
-                Some(m) => m.clone(),
-                None => LayerMask::new_all_solid(carrying_dims.0, carrying_dims.1, carrying_voxel)
-                    .expect("consistent dims + positive voxel_size yields valid all-solid mask"),
-            })
-            .collect();
-
-        let per_layer_overrides: Vec<(f32, f32)> = layers
-            .iter()
-            .map(|li| (li.exposure_sec, li.lift_speed_mm_min))
-            .collect();
+        let prepared = Self::prepare_layer_inputs(layers, resin, printer)?;
+        Self::emit_layer_height_warning_if_mismatch(
+            &prepared.layer_height_provenance,
+            resin.name(),
+        );
+        // Destructure to move the Vec instead of cloning.
+        let PreparedInputs {
+            areas,
+            masks,
+            per_layer_overrides,
+            layer_heights,
+            layer_height_provenance,
+        } = prepared;
         Self::run_inner_full(
             &areas,
             &masks,
@@ -299,11 +398,20 @@ impl SimulationRunner {
             ambient,
             initial_led_temp,
             voxel_cure_mm,
+            layer_heights.as_slice(),
+            Some(layer_height_provenance),
         )
     }
 
     /// Internal: run the simulation given resolved areas + masks. Every public
     /// entry point converges here.
+    ///
+    /// `layer_heights_um` is the runtime authority for layer height (CTB
+    /// per-layer Vec when the call came in via `run_from_layer_inputs*`,
+    /// or a recipe-derived uniform Vec for STL / area-only paths). Length
+    /// must equal `areas.len()`. `layer_height_provenance` is `Some` only
+    /// for LayerInput-based runs and gets installed on the resulting
+    /// `PrintSimulation`.
     #[allow(clippy::too_many_arguments)]
     fn run_inner(
         areas: &[CrossSectionArea],
@@ -315,6 +423,8 @@ impl SimulationRunner {
         plate: &PlateAdhesionProfile,
         ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
+        layer_heights_um: &[f32],
+        layer_height_provenance: Option<LayerHeightProvenance>,
     ) -> Result<PrintSimulation, String> {
         // Tier-1 scalar path: voxel mode disabled.
         Self::run_inner_full(
@@ -328,6 +438,8 @@ impl SimulationRunner {
             ambient,
             initial_led_temp,
             None,
+            layer_heights_um,
+            layer_height_provenance,
         )
     }
 
@@ -357,7 +469,23 @@ impl SimulationRunner {
         ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
         #[cfg_attr(not(feature = "field-sim"), allow(unused_variables))] voxel_cure_mm: Option<f32>,
+        layer_heights_um: &[f32],
+        layer_height_provenance: Option<LayerHeightProvenance>,
     ) -> Result<PrintSimulation, String> {
+        // Caller-contract: `layer_heights_um` is indexed by layer index;
+        // its length must equal `areas.len()` so per-layer dispatch can
+        // pick the right slab thickness. Enforced by the two construction
+        // sites: STL/area paths build a uniform Vec sized to areas.len();
+        // CTB paths build a LayerHeightSeq via from_layer_inputs (same
+        // length as the layer slice that produced areas). Violation =
+        // programmer bug, not a runtime error, so debug_assert_eq! is
+        // the right shape — panics loudly under debug builds and is a
+        // no-op in release builds.
+        debug_assert_eq!(
+            layer_heights_um.len(),
+            areas.len(),
+            "internal contract: layer_heights_um indexed by layer must match areas len"
+        );
         let recipe = resin.recipe();
         let suction_map = Self::build_suction_map(masks)?;
         let phases = LayerPhase::classify_sequence(areas, recipe);
@@ -442,9 +570,21 @@ impl SimulationRunner {
                 suction_force_n: suction_map.get(&(i as u32)).copied(),
                 is_raft: matches!(phases.get(i), Some(LayerPhase::Raft)),
             };
+            // Per-layer CTB-authoritative slab thickness — supports
+            // adaptive (variable-Z) slicing transparently.
+            let layer_height_um_i = layer_heights_um[i];
             #[allow(unused_mut)]
             let (mut result, failures) = FailurePredictor::predict_layer(
-                i as u32, area, prev_area, &overrides, resin, printer, recipe, supports, plate,
+                i as u32,
+                area,
+                prev_area,
+                &overrides,
+                resin,
+                printer,
+                recipe,
+                layer_height_um_i,
+                supports,
+                plate,
                 &thermal,
             );
 
@@ -457,6 +597,7 @@ impl SimulationRunner {
                     &masks[i],
                     &thermal,
                     recipe,
+                    layer_height_um_i,
                     printer,
                     &overrides,
                     &mut result,
@@ -472,6 +613,13 @@ impl SimulationRunner {
         if let Some(state) = voxel_state {
             sim.set_voxel_fields(state.cure, state.pi)
                 .map_err(|e| format!("install voxel fields: {e}"))?;
+        }
+
+        // Install layer-height reconciliation on the aggregate. Present only
+        // for runs entered via run_from_layer_inputs* (CTB / sliced-file
+        // paths); STL / area-only paths pass `None` here.
+        if let Some(provenance) = layer_height_provenance {
+            sim.set_layer_height_provenance(provenance);
         }
 
         Ok(sim)
@@ -490,6 +638,7 @@ impl SimulationRunner {
         mask: &LayerMask,
         thermal: &ThermalContext,
         recipe: &crate::entities::Recipe,
+        layer_height_um: f32,
         printer: &PrinterProfile,
         overrides: &LayerOverrides,
         result: &mut crate::entities::LayerResult,
@@ -512,13 +661,11 @@ impl SimulationRunner {
         // (legacy behaviour). Lateral light crosstalk (Gaussian bleed)
         // remains out — that is t2f2's scope.
         let voxel_size_mm = mask.voxel_size_mm();
-        // Apply the column exposure for every set pixel in this layer mask,
-        // each at its uniformity-adjusted intensity. Z-step depth is
-        // `recipe.layer_height_um` (the actual print layer thickness),
-        // NOT the LATERAL mask voxel size — Z-voxel index represents one
-        // layer slab. ADR-0017 §6 "Coordinates" + voxel_cure_calculator
-        // doc comment.
-        let layer_height_um = recipe.layer_height_um();
+        // Z-step depth is the CTB-authoritative layer_height_um (the actual
+        // print layer thickness, file-axis per ADR-0005 + ticket
+        // `ctb-layer-height-authority`), NOT the LATERAL mask voxel size
+        // — Z-voxel index represents one layer slab. ADR-0017 §6
+        // "Coordinates" + voxel_cure_calculator doc comment.
         for (ix, iy) in mask.iter_solid() {
             let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
             let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
@@ -645,6 +792,13 @@ mod tests {
     fn cube_areas(n_layers: usize, area: f64) -> Vec<CrossSectionArea> {
         vec![CrossSectionArea::new(area).expect("test area is non-negative"); n_layers]
     }
+
+    // ---- Layer-height warning wording tests moved (DDD: behaviour
+    //      with the data). See
+    //      crates/resinsim-core/src/values/layer_height_provenance.rs
+    //      `format_warning_*` tests, which cover the uniform branch,
+    //      the variable-Z branch, and the collision-aware variable-Z
+    //      sub-branch (round-1 UX MED fix).
 
     fn sphere_areas(n_layers: usize, radius_mm: f64) -> Vec<CrossSectionArea> {
         let layer_height = 2.0 * radius_mm / n_layers as f64;

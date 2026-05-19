@@ -16,11 +16,15 @@ dose in a dense `CureField` with dimensions `(nx, ny, nz)` where:
 
 Each Z-voxel represents ONE LAYER of the print, not a cube of side
 `voxel_size_mm`. The physical depth between adjacent Z-voxels is the
-recipe layer height (typically 30–50 µm), which is INDEPENDENT of the
+**per-layer** CTB-authoritative layer height (typically 30–50 µm, but
+adaptive slicers vary it per layer), which is INDEPENDENT of the
 lateral X-Y voxel pitch. See sibling pattern note
 `docs/patterns/voxel-field-z-dimension-is-layer-count.md` and the
-follow-on ticket `ctb-layer-height-authority` for the recipe-vs-CTB
-authority concern.
+follow-on ticket `ctb-layer-height-authority` (resolved 2026-05-19 —
+the runtime now sources the Z-step **per layer** from
+`LayerInput.layer_height_um`, supporting adaptive-slicing CTBs as
+first-class, with a stderr warning when `recipe.layer_height_um`
+disagrees) for the recipe-vs-CTB authority concern.
 
 ## The mistake
 
@@ -101,4 +105,46 @@ formula: ~77; buggy formula: ~8). The threshold cleanly distinguishes.
 - `docs/patterns/voxel-field-z-dimension-is-layer-count.md` — sibling
   decision rationale
 - Ticket `ctb-layer-height-authority` — recipe-vs-CTB authority gap
-  surfaced during this lifecycle's harvest
+  surfaced during this lifecycle's harvest (resolved 2026-05-19)
+
+## Resolution
+
+`ctb-layer-height-authority` shipped on 2026-05-19. The runtime
+authority for layer-height is now the CTB's per-layer
+`LayerInput.layer_height_um` Vec (extracted via
+`LayerInput::extract_layer_heights_um`; non-finite/non-positive
+values rejected, variability preserved). Each layer's physics —
+`predict_layer` and `apply_voxel_cure_for_layer` — receives its own
+slab thickness, so adaptive / variable-layer-height CTBs (Chitubox v2,
+Lychee Pro, PrusaSlicer MSLA) run end-to-end.
+
+On disagreement with `recipe.layer_height_um`, the runner emits a
+loud user-facing warning to stderr with two branches:
+
+- **Uniform CTB disagrees with recipe** — quotes both values, names
+  the recipe's value as a GUESS, names the recipe-implied WRONG LAYER
+  COUNT for the same Z-extent.
+- **Variable / adaptive CTB** — quotes the min/max/mean of the per-
+  layer heights, names the recipe value as a GUESS that necessarily
+  produces the WRONG LAYER COUNT (because no single value can
+  describe a varying stack).
+
+Both surfaces in `sim.json` via
+`PrintSimulation.layer_height_provenance: Option<LayerHeightProvenance>`
+(additive, schema-stable). The
+`provenance.mismatch.kind` enum (`"uniform"` / `"variable"`)
+discriminates the two failure modes so downstream consumers can
+render appropriate badges. See ADR-0005 Consequences "Policy: CTB as
+file-axis authority" and ADR-0017 §2 "Variable voxel resolution"
+update for the canonical decision record.
+
+Follow-up reminder queued for Phase 6 harvest:
+- `LayerInput::new` validation tightening — mirror the helper's
+  `is_finite() && > 0.0` guard at construction time so unsafe
+  `LayerInput`s can't reach the reconciler.
+
+(The `--accept-layer-height-mismatch` suppression flag idea was
+mooted but is moot now that adaptive-slicing CTBs are first-class:
+the warning surfaces in two distinct flavours, and a batch user
+running adaptive CTBs would want the variable-Z badge as confirmation
+rather than suppression.)

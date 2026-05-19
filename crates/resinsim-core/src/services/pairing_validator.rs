@@ -36,6 +36,13 @@ use crate::entities::{PrinterProfile, Recipe};
 pub fn validate_pairing(printer: &PrinterProfile, recipe: &Recipe) -> Result<(), Vec<String>> {
     let mut violations = Vec::new();
 
+    // Intentional non-migration to CTB-axis (ticket `ctb-layer-height-authority`):
+    // pairing validation checks the RECIPE against the printer envelope, not
+    // the file. The recipe is the user's authored intent; we want to flag
+    // recipes that the printer cannot physically execute, regardless of
+    // whether a specific CTB happens to use a different (in-range) value.
+    // See ADR-0005 Consequences "Policy: CTB as file-axis authority" for
+    // the axis distinction.
     let layer_range = printer.layer_height_range_um();
     if !layer_range.contains(recipe.layer_height_um()) {
         violations.push(format!(
@@ -235,6 +242,47 @@ mod tests {
 
     // --- Skipped-fields invariant. If a future Recipe field is added without a paired
     // printer range, this test signals that pairing_validator must be updated. ---
+
+    // --- Intentional non-migration regression (ticket
+    //     `ctb-layer-height-authority`).
+    //
+    // The CTB-as-runtime-authority work migrated `recipe.layer_height_um`
+    // consumers in `FailurePredictor` and `apply_voxel_cure_for_layer` to a
+    // CTB-derived `layer_height_um` arg, BUT pairing_validator deliberately
+    // stays on `recipe.layer_height_um`. Rationale: pairing checks
+    // RECIPE-vs-printer (range conformance), not file-vs-printer; the user
+    // wants to know when their authored recipe is incompatible with their
+    // hardware, regardless of which CTBs happen to be in scope. ADR-0005
+    // Consequences "Policy: CTB as file-axis authority" + the comment
+    // inside `validate_pairing` document this.
+    //
+    // This test pins that decision so a future drive-by edit doesn't
+    // accidentally retire the recipe-range check.
+
+    #[test]
+    fn validates_recipe_not_file_axis_layer_height() {
+        let printer = test_printer();
+        let mut recipe = test_recipe();
+
+        // Pin: an out-of-range recipe value must STILL be flagged even
+        // though pairing_validator has no awareness of any CTB.
+        recipe.layer_height_um = 5.0; // below generic_msla_4k range [20, 100]
+        let violations = validate_pairing(&printer, &recipe)
+            .expect_err("recipe-range check must still flag out-of-range values");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("recipe.layer_height_um")),
+            "violation must name `recipe.layer_height_um`: {violations:?}"
+        );
+
+        // And conversely: an in-range recipe value passes regardless of
+        // whether a hypothetical CTB carries a different value (pairing
+        // takes no CTB arg).
+        recipe.layer_height_um = 50.0;
+        validate_pairing(&printer, &recipe)
+            .expect("in-range recipe must pass pairing regardless of any CTB");
+    }
 
     #[test]
     fn skipped_fields_locked() {

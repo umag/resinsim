@@ -78,6 +78,13 @@ pub struct UatWorld {
     pub cli_exit_code: Option<i32>,
     pub cli_stdout: Option<String>,
     pub cli_stderr: Option<String>,
+
+    // ---- ctb-layer-height-authority UAT scenarios ----
+    /// Per-scenario CTB layer stack. Set by `Given a CTB input sliced at
+    /// N µm`. Stored on World rather than a thread_local because cucumber
+    /// runs scenarios concurrently — a thread_local would leak state
+    /// across scenarios on the same thread (caught 2026-05-19).
+    pub ctb_layer_inputs: Option<Vec<resinsim_core::io::sliced::LayerInput>>,
 }
 
 /// Summary of a single `CavityDetector` event for step-def assertions.

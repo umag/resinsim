@@ -29,6 +29,7 @@ fn given_zero_peel_force(world: &mut UatWorld) {
 #[when(regex = r"^the failure predictor runs on those layers$")]
 fn when_failure_predictor_runs(world: &mut UatWorld) {
     let inputs = PredictLayerInputs::default_for_test().with_zero_area();
+    let layer_height_um = inputs.resin.recipe().layer_height_um();
     let (result, failures) = FailurePredictor::predict_layer(
         inputs.layer,
         inputs.area,
@@ -37,6 +38,7 @@ fn when_failure_predictor_runs(world: &mut UatWorld) {
         &inputs.resin,
         &inputs.printer,
         inputs.resin.recipe(),
+        layer_height_um,
         &inputs.supports,
         &inputs.plate,
         &inputs.thermal,

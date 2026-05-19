@@ -88,6 +88,36 @@ impl ReportGenerator {
             "  Max Z deflection: {:.1} µm\n",
             summary.max_z_deflection_um
         ));
+        // CTB-vs-recipe layer-height reconciliation (ticket
+        // `ctb-layer-height-authority`). The single-line summary lives
+        // on the value object (`LayerHeightProvenance::render_text_summary`)
+        // so the wording stays adjacent to the data it describes; this
+        // surface just routes the call. The mismatch-detail follow-up
+        // line is layout-specific (a sub-indented bullet under the
+        // header line) so it stays here.
+        if let Some(p) = sim.layer_height_provenance() {
+            use crate::values::MismatchKind;
+            out.push_str("  ");
+            out.push_str(&p.render_text_summary());
+            out.push('\n');
+            if let Some(m) = p.mismatch() {
+                let detail = match &m.kind {
+                    MismatchKind::Uniform { .. } => format!(
+                        "    ⚠ recipe disagrees — would imply {} layers vs the CTB's {}",
+                        m.recipe_layers_for_same_z,
+                        p.layer_count(),
+                    ),
+                    MismatchKind::Variable => format!(
+                        "    ⚠ adaptive slicing — recipe would imply {} layers vs the CTB's {} \
+                         (recipe value is informational only)",
+                        m.recipe_layers_for_same_z,
+                        p.layer_count(),
+                    ),
+                };
+                out.push_str(&detail);
+                out.push('\n');
+            }
+        }
         out.push_str(&format!(
             "  Total time: {}\n",
             format_duration_hms(summary.total_time_sec),
@@ -154,7 +184,7 @@ impl ReportGenerator {
         // populated case; printer/n_supports/tip_radius_mm are deliberately
         // omitted from JSON mode (they remain text-only) until a future
         // issue widens the JSON schema for downstream tooling.
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "stl": ctx.stl_path,
             "resin": ctx.resin_name,
             "summary": {
@@ -174,6 +204,28 @@ impl ReportGenerator {
             },
             "failures": failures,
         });
+
+        // CTB-vs-recipe layer-height reconciliation (ticket
+        // `ctb-layer-height-authority`). Inserted only when the run came
+        // in via a sliced-file path (CTB); absent for STL / area-only
+        // runs — STL/area JSON keeps its pre-existing schema so the
+        // byte-identity goldens (ADR-0015 producer/consumer contract)
+        // continue to match. Downstream machine consumers branch on the
+        // presence of `layer_height_provenance` rather than parsing the
+        // text format.
+        if let Some(p) = sim.layer_height_provenance() {
+            // Mirror the LayerHeightProvenance serde shape so downstream
+            // consumers can deserialise the full struct or inspect fields
+            // ad-hoc. `ctb_layer_heights_um` is the per-layer Vec (full
+            // fidelity for adaptive slicing); `mismatch.kind` carries
+            // the discriminator (`"uniform"` / `"variable"`) per the
+            // value object's `#[serde(tag = "kind", rename_all = "snake_case")]`.
+            // Using serde_json::to_value avoids hand-formatting drift —
+            // the field set follows the struct definition.
+            let v = serde_json::to_value(p)
+                .expect("LayerHeightProvenance derive-Serialize is infallible by construction");
+            result["layer_height_provenance"] = v;
+        }
 
         serde_json::to_string_pretty(&result)
             .expect("internal error: serde_json scalar serialisation is infallible by construction; panic here indicates a corrupted build or heap exhaustion")

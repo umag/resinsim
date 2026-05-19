@@ -67,9 +67,19 @@ pub struct LayerOverrides {
 
 impl FailurePredictor {
     /// Simulate a single layer and return result + failures.
-    // The 10 arguments each name a distinct physical input; bundling them into a
-    // `PredictLayerInputs` struct would move the collection point one frame up
-    // without reducing the caller's parameter count. Documented as accepted.
+    ///
+    /// `layer_height_um` is the runtime-authoritative slab thickness in
+    /// micrometres. For CTB-based runs this is the value extracted from
+    /// `LayerInput.layer_height_um` (file-axis, per ADR-0005 Consequences
+    /// "Policy: CTB as file-axis authority"); for STL / area-only paths
+    /// callers pass `recipe.layer_height_um()` as a fallback. Replaces six
+    /// previous direct reads of `recipe.layer_height_um()` (cure-depth
+    /// sufficiency, LCD-uniformity edge-cure check, effective-layer-height
+    /// vs Z-deflection) — see ticket `ctb-layer-height-authority`.
+    // The 11 arguments each name a distinct physical input; bundling them
+    // into a `PredictLayerInputs` struct would move the collection point
+    // one frame up without reducing the caller's parameter count.
+    // Documented as accepted.
     #[allow(clippy::too_many_arguments)]
     pub fn predict_layer(
         layer: u32,
@@ -79,6 +89,7 @@ impl FailurePredictor {
         resin: &ResinProfile,
         printer: &PrinterProfile,
         recipe: &Recipe,
+        layer_height_um: f32,
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
         thermal: &ThermalContext,
@@ -141,7 +152,7 @@ impl FailurePredictor {
             ea_cure_kj_mol,
         );
 
-        if !cure_depth.is_sufficient(recipe.layer_height_um()) {
+        if !cure_depth.is_sufficient(layer_height_um) {
             failures.push(FailureEvent {
                 layer,
                 failure_type: FailureType::InsufficientCure,
@@ -149,7 +160,7 @@ impl FailurePredictor {
                 message: format!(
                     "Cure depth {:.1} µm < layer height {} µm",
                     cure_depth.value(),
-                    recipe.layer_height_um()
+                    layer_height_um
                 ),
             });
         }
@@ -168,16 +179,14 @@ impl FailurePredictor {
                 ea_cure_kj_mol,
             );
             // Warn if center is sufficient but corner is not
-            if cure_depth.is_sufficient(recipe.layer_height_um())
-                && !cd.is_sufficient(recipe.layer_height_um())
-            {
+            if cure_depth.is_sufficient(layer_height_um) && !cd.is_sufficient(layer_height_um) {
                 failures.push(FailureEvent {
                     layer,
                     failure_type: FailureType::NonUniformCure,
                     severity: Severity::Warning,
                     message: format!(
                         "Center cure {:.1} µm OK but edge cure {:.1} µm < {} µm layer height ({:.0}% LCD variation)",
-                        cure_depth.value(), cd.value(), recipe.layer_height_um(),
+                        cure_depth.value(), cd.value(), layer_height_um,
                         printer.lcd_uniformity_variation * 100.0,
                     ),
                 });
@@ -235,7 +244,7 @@ impl FailurePredictor {
         let z_deflection =
             ZAxisCompensator::deflection_um(total_force, printer.z_stiffness_n_per_mm);
         let effective_height =
-            ZAxisCompensator::effective_layer_height_um(recipe.layer_height_um(), z_deflection);
+            ZAxisCompensator::effective_layer_height_um(layer_height_um, z_deflection);
 
         if effective_height <= 0.0 {
             let (severity, note) = if overrides.is_raft {
@@ -249,8 +258,7 @@ impl FailurePredictor {
                 severity,
                 message: format!(
                     "Z deflection {:.1} µm exceeds layer height {} µm{note}",
-                    z_deflection,
-                    recipe.layer_height_um()
+                    z_deflection, layer_height_um
                 ),
             });
         }
@@ -340,6 +348,7 @@ mod tests {
             &test_resin(),
             &test_printer(),
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &test_supports(),
             &test_plate(),
             &test_thermal(),
@@ -371,6 +380,7 @@ mod tests {
             &test_resin(),
             &test_printer(),
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &test_supports(),
             &no_plate,
             &test_thermal(),
@@ -393,6 +403,7 @@ mod tests {
             &test_resin(),
             &test_printer(),
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &test_supports(),
             &test_plate(),
             &test_thermal(),
@@ -415,6 +426,7 @@ mod tests {
             &test_resin(),
             &test_printer(),
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &test_supports(),
             &test_plate(),
             &test_thermal(),
@@ -427,6 +439,7 @@ mod tests {
             &test_resin(),
             &test_printer(),
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &test_supports(),
             &test_plate(),
             &test_thermal(),
@@ -444,6 +457,7 @@ mod tests {
             &test_resin(),
             &test_printer(),
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &test_supports(),
             &test_plate(),
             &test_thermal(),
@@ -456,6 +470,7 @@ mod tests {
             &test_resin(),
             &test_printer(),
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &test_supports(),
             &test_plate(),
             &test_thermal(),
@@ -476,6 +491,7 @@ mod tests {
             &test_resin(),
             &printer,
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &test_supports(),
             &test_plate(),
             &test_thermal(),
@@ -506,6 +522,7 @@ mod tests {
             &test_resin(),
             &test_printer(),
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &no_supports,
             &test_plate(),
             &test_thermal(),
@@ -535,6 +552,7 @@ mod tests {
             &test_resin(),
             &test_printer(),
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &no_supports,
             &test_plate(),
             &test_thermal(),
@@ -561,6 +579,7 @@ mod tests {
             &test_resin(),
             &test_printer(),
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &test_supports(),
             &test_plate(),
             &test_thermal(),
@@ -585,6 +604,7 @@ mod tests {
             &test_resin(),
             &printer,
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &test_supports(),
             &test_plate(),
             &test_thermal(),
@@ -618,6 +638,7 @@ mod tests {
             &test_resin(),
             &printer,
             &test_recipe(),
+            test_recipe().layer_height_um(),
             &test_supports(),
             &test_plate(),
             &test_thermal(),

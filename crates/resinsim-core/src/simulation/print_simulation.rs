@@ -3,6 +3,7 @@ use thiserror::Error;
 
 use crate::entities::{FailureEvent, LayerResult, PrinterProfile, Recipe, Severity};
 use crate::services::LayerTimingCalculator;
+use crate::values::LayerHeightProvenance;
 #[cfg(feature = "field-sim")]
 use crate::values::{CureField, PhotoinitiatorField};
 
@@ -64,6 +65,15 @@ pub struct PrintSimulation {
     #[cfg(feature = "field-sim")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     photoinitiator_field: Option<PhotoinitiatorField>,
+    /// Reconciliation between the CTB's embedded layer-height (file-axis,
+    /// runtime authority) and the resin recipe's `layer_height_um`
+    /// (recipe-axis, authoring metadata). Per ADR-0005 Consequences
+    /// "Policy: CTB as file-axis authority" + ticket
+    /// `ctb-layer-height-authority`. Present on runs that entered via
+    /// `run_from_layer_inputs*` (CTB / sliced-file paths); absent on STL /
+    /// area-only paths where no CTB-derived value exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layer_height_provenance: Option<LayerHeightProvenance>,
 }
 
 /// Summary statistics for a completed simulation.
@@ -104,6 +114,7 @@ impl PrintSimulation {
             cure_field: None,
             #[cfg(feature = "field-sim")]
             photoinitiator_field: None,
+            layer_height_provenance: None,
         }
     }
 
@@ -196,6 +207,22 @@ impl PrintSimulation {
         self.cure_field = Some(cure);
         self.photoinitiator_field = Some(photoinitiator);
         Ok(())
+    }
+
+    /// Layer-height reconciliation between the CTB (file-axis, runtime
+    /// authority) and the resin recipe (recipe-axis, authoring metadata).
+    /// `None` when the simulation came in via STL / area-only entry points
+    /// (no CTB-derived value exists). `Some` for CTB-based runs;
+    /// `.has_mismatch()` flags whether the user should be warned.
+    pub fn layer_height_provenance(&self) -> Option<&LayerHeightProvenance> {
+        self.layer_height_provenance.as_ref()
+    }
+
+    /// Install the layer-height reconciliation onto the aggregate. Called
+    /// by `SimulationRunner` after `prepare_layer_inputs` has produced the
+    /// provenance; STL / area-only paths skip this call.
+    pub(crate) fn set_layer_height_provenance(&mut self, provenance: LayerHeightProvenance) {
+        self.layer_height_provenance = Some(provenance);
     }
 
     pub fn critical_failures(&self) -> Vec<&FailureEvent> {

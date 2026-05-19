@@ -201,6 +201,61 @@ That is the mental model the refactor aligns to.
   (industry-standard reference for peel measurements). Migration guidance also
   referenced from `spec/uat/legacy-resin-toml-without-recipe.md`.
 
+### Policy: CTB as file-axis authority (2026-05-19 update)
+
+ADR-0005 names three axes — printer (rig), resin (chemistry), recipe
+(how the resin is printed on the rig). The CTB file *also* expresses a
+recipe at the file-format-embedded layer (`LayerInput.layer_height_um`
+populated by the parser from the on-disk header). When a CTB is loaded
+and its layer-height disagrees with `recipe.layer_height_um` in the
+resin profile, **the CTB wins at runtime** because the CTB is the
+operating point — the file the user actually submitted to print —
+while the recipe is the user's authoring metadata describing their
+calibration intent.
+
+The Consequences:
+
+- `SimulationRunner::run_from_layer_inputs*` extracts
+  `LayerInput.layer_height_um` **per layer** (via
+  `LayerInput::extract_layer_heights_um`, which rejects only
+  non-finite/non-positive values and otherwise preserves variability)
+  and threads the Vec through `run_inner_full → predict_layer +
+  apply_voxel_cure_for_layer`. Each layer's physics receives its own
+  slab thickness, so adaptive / variable layer height CTBs (Chitubox
+  v2, Lychee Pro, PrusaSlicer MSLA) are first-class. Six previous
+  reads of `recipe.layer_height_um()` in `FailurePredictor` and the
+  voxel cure path migrate to the per-layer CTB-derived scalar.
+- `pairing_validator` is **intentionally NOT migrated**. Pairing
+  validates the recipe (authored config) against the printer
+  envelope — range conformance, not file conformance. The simulator
+  must flag user-authored recipes that the printer cannot physically
+  execute, regardless of which CTBs happen to be in scope. Documented
+  in `pairing_validator.rs` + locked by a regression test.
+- `STL` and area-only entry points (`run_stl`, `run_from_areas`) have
+  no CTB-derived value; they pass `recipe.layer_height_um()`
+  explicitly at the call site.
+- A user-facing stderr warning fires on either mismatch flavour:
+  - **Uniform-but-disagrees**: "WARNING: CTB layer_height (X µm) does
+    NOT match recipe layer_height (Y µm)… GUESS … WRONG LAYER COUNT …"
+  - **Variable-Z (adaptive slicing)**: "WARNING: CTB uses variable
+    layer height (adaptive slicing): N layers ranging from MIN to MAX
+    µm (mean …). The recipe layer_height (Y µm) … is a GUESS …
+    WRONG LAYER COUNT …"
+  Both branches honour Mag's literal "GUESS" + "WRONG LAYER COUNT"
+  keywords. The two modes are discriminated on the
+  `LayerHeightProvenance.mismatch.kind` enum
+  (`"uniform"` / `"variable"`) so downstream consumers (viz, inspect,
+  report_health) can render appropriate badges.
+- `PrintSimulation` gains an optional `layer_height_provenance:
+  Option<LayerHeightProvenance>` field, surfacing the reconciliation
+  outcome on the aggregate so `report health` and the viz can render
+  the discrepancy. Sim.json schema is additive (no
+  `CURRENT_SCHEMA_VERSION` bump).
+
+Reference: ticket `ctb-layer-height-authority` (shipped 2026-05-19),
+anti-pattern `docs/patterns/anti/voxel-z-step-from-lateral-voxel-size.md`,
+ADR-0017 §2 Coordinates clarification.
+
 ## Executable UAT anchor (2026-04-23)
 
 Every ADR-0005 scenario is now executable Gherkin under the cucumber

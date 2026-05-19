@@ -3,39 +3,14 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::entities::Recipe;
-use crate::values::LayerMask;
 
-/// Per-layer data extracted from a sliced file (CTB, SL1, GOO).
-/// Format-independent — the simulation consumes this regardless of source.
-///
-/// Retains flat recipe-shaped fields by design (ADR-0005 §4): per-layer values can
-/// legitimately differ from the Recipe default (e.g. transition layers with their own
-/// exposure schedule). Collapsing them under Recipe would misrepresent per-layer
-/// override semantics. Only `SlicedFileInfo` header gains a nested Recipe.
-///
-/// # Mask field (Step 5 of suction-detector-raft-false-positive)
-///
-/// `mask: Option<LayerMask>` is populated by mask-producing parsers (e.g. the
-/// extended CTB parser). Area-only parsers or test fixtures may leave it None;
-/// downstream consumers (`SimulationRunner::run_from_areas` adapter) synthesise
-/// a trivial fully-solid mask when None is observed. Phase B (Step 7)
-/// migrates `Option<LayerMask>` → `LayerMask` (required) once all producers
-/// emit masks.
-///
-/// The mask is `#[serde(skip)]` — it is large binary data, not meaningful for
-/// TOML / JSON persistence. Callers that serialise `LayerInput` (e.g. CLI
-/// `--json` output) see the area + recipe fields only.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LayerInput {
-    pub index: u32,
-    pub cross_section_area_mm2: f64,
-    pub exposure_sec: f32,
-    pub lift_speed_mm_min: f32,
-    pub layer_height_um: f32,
-    pub z_mm: f32,
-    #[serde(skip)]
-    pub mask: Option<LayerMask>,
-}
+// `LayerInput` lives in `crate::values::layer_input` per the
+// ctb-layer-height-authority round-2 cleanup; re-exported here so
+// `crate::io::sliced::LayerInput` paths still resolve for callers
+// outside this crate (resinsim-viz, resinsim-inspect, integration
+// tests). The canonical import path within resinsim-core is
+// `crate::values::LayerInput`.
+pub use crate::values::LayerInput;
 
 /// Header metadata extracted from a sliced file.
 ///
@@ -57,56 +32,12 @@ pub struct SlicedFileInfo {
     pub recipe: Recipe,
 }
 
-impl LayerInput {
-    pub fn new(
-        index: u32,
-        cross_section_area_mm2: f64,
-        exposure_sec: f32,
-        lift_speed_mm_min: f32,
-        layer_height_um: f32,
-        z_mm: f32,
-    ) -> Result<Self, &'static str> {
-        if exposure_sec <= 0.0 {
-            return Err("exposure must be positive");
-        }
-        if cross_section_area_mm2 < 0.0 {
-            return Err("area cannot be negative");
-        }
-        Ok(Self {
-            index,
-            cross_section_area_mm2,
-            exposure_sec,
-            lift_speed_mm_min,
-            layer_height_um,
-            z_mm,
-            mask: None,
-        })
-    }
-
-    /// Attach a `LayerMask` to this input. Chainable builder for constructors
-    /// that also want to populate the 3D topology field.
-    pub fn with_mask(mut self, mask: LayerMask) -> Self {
-        self.mask = Some(mask);
-        self
-    }
-}
-
 impl SlicedFileInfo {
     /// Compute physical area per pixel in mm².
     pub fn pixel_area_mm2(&self) -> f64 {
         let px_w = self.bed_size_mm.0 / self.resolution_xy.0 as f32;
         let px_h = self.bed_size_mm.1 / self.resolution_xy.1 as f32;
         px_w as f64 * px_h as f64
-    }
-}
-
-impl fmt::Display for LayerInput {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Layer {}: {:.1} mm², {:.2}s exposure, z={:.3}mm",
-            self.index, self.cross_section_area_mm2, self.exposure_sec, self.z_mm
-        )
     }
 }
 
@@ -143,37 +74,9 @@ pub fn detect_format(path: &std::path::Path) -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn layer_input_rejects_zero_exposure() {
-        let result = LayerInput::new(0, 100.0, 0.0, 60.0, 50.0, 0.025);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn layer_input_rejects_negative_exposure() {
-        let result = LayerInput::new(0, 100.0, -1.0, 60.0, 50.0, 0.025);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn layer_input_rejects_negative_area() {
-        let result = LayerInput::new(0, -10.0, 2.5, 60.0, 50.0, 0.025);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn layer_input_accepts_valid() {
-        let li = LayerInput::new(0, 100.0, 2.5, 60.0, 50.0, 0.025)
-            .expect("test fixture: finite non-negative inputs are in LayerInput::new domain");
-        assert_eq!(li.index, 0);
-        assert!((li.cross_section_area_mm2 - 100.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn layer_input_accepts_zero_area() {
-        let li = LayerInput::new(5, 0.0, 2.5, 60.0, 50.0, 0.275);
-        assert!(li.is_ok());
-    }
+    // LayerInput unit tests live in `crate::values::layer_input::tests`
+    // alongside the struct definition (moved 2026-05-19 per ticket
+    // `ctb-layer-height-authority` round-2 code review LOW).
 
     #[test]
     fn sliced_file_info_pixel_area() {
@@ -212,12 +115,8 @@ mod tests {
         assert_eq!(detect_format(std::path::Path::new("model.xyz")), None);
     }
 
-    #[test]
-    fn layer_input_display() {
-        let li = LayerInput::new(42, 256.7, 2.5, 60.0, 50.0, 2.125)
-            .expect("test fixture: finite non-negative inputs are in LayerInput::new domain");
-        let s = format!("{li}");
-        assert!(s.contains("Layer 42"));
-        assert!(s.contains("256.7 mm²"));
-    }
+    // Per-layer-height extraction + uniformity detection live in
+    // `crate::values::layer_height_seq::LayerHeightSeq` (round-1 code
+    // review HIGH — module dependency direction). See those tests for
+    // coverage.
 }

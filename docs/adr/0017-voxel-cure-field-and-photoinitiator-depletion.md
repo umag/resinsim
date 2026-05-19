@@ -87,8 +87,19 @@ case `t2f1` is meant to capture).
 - The cure field's X-Y resolution is the slicer `LayerMask`'s
   `voxel_size_mm` (typically 0.5 mm for cavity-detection-class masks,
   0.05 mm for the build-simulation path).
-- The cure field's Z-step is `recipe.layer_height_um` (the actual print
-  layer thickness — independent of the LATERAL voxel size).
+- The cure field's Z-step is sourced **per layer** from the CTB's
+  `LayerInput.layer_height_um` (file-axis authority per ADR-0005
+  Consequences + ticket `ctb-layer-height-authority`, shipped
+  2026-05-19). Each layer's `apply_voxel_cure_for_layer` call receives
+  its own slab thickness so adaptive (variable-Z) CTBs are first-class.
+  When the recipe disagrees — either because the CTB is uniform but
+  differs from `recipe.layer_height_um`, or because the CTB is
+  adaptive — the simulation still uses the CTB's per-layer values and
+  surfaces a stderr warning + sim.json provenance (with a
+  `kind: "uniform" | "variable"` discriminator on the mismatch detail).
+  STL / area-only entry points (`run_stl`, `run_from_areas`) have no
+  CTB to consult, so they continue to source the Z-step from
+  `recipe.layer_height_um` for every layer.
 
 **Why deferred.** Decoupling the X-Y resolution from the slicer mask
 requires a resampling pass (different bbox dimensions + a mapping
