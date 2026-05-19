@@ -23,6 +23,27 @@ fn default_min_safe_temp_c() -> f32 {
 /// arrive.
 pub const DEFAULT_CURE_KINETICS_EA_KJ_MOL: f32 = 30.0;
 
+/// KB-160 default initial photoinitiator concentration (dimensionless
+/// fraction in `[0, 1]`). Convention: `PhotoinitiatorField` starts uniform
+/// at 1.0 everywhere unless the resin TOML overrides via
+/// `photoinitiator_concentration_initial`.
+pub const DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL: f32 = 1.0;
+
+/// KB-160 literature-midpoint estimate for the photoinitiator decay rate
+/// constant in `1 / (mJ·cm⁻² × concentration-fraction)` units. Applied when
+/// a ResinProfile has `photoinitiator_decay_constant_k_d = None`; the CLI /
+/// reports MUST emit a LOUD warning in that case (±50 % uncertainty band).
+/// Per-resin calibration data should update the TOML's
+/// `photoinitiator_decay_constant_k_d` field as measurements arrive.
+pub const DEFAULT_PHOTOINITIATOR_DECAY_CONSTANT_K_D: f32 = 0.05;
+
+/// serde-default returning [`DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL`].
+/// Used so legacy resin TOMLs without the field parse to the convention
+/// default (1.0) rather than erroring at deserialise.
+fn default_photoinitiator_concentration_initial() -> f32 {
+    DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL
+}
+
 /// Physical properties of a resin formulation (chemistry) + its recipe (ADR-0005, Axis 2).
 /// Identity: `name`. Loaded from TOML profiles in `data/resins/`.
 ///
@@ -103,6 +124,25 @@ pub struct ResinProfile {
     #[serde(default)]
     pub(crate) cure_kinetics_ea_kj_mol: Option<f32>,
 
+    /// Initial photoinitiator concentration as a dimensionless fraction in
+    /// `[0, 1]`. KB-160. Default 1.0 (convention) via `#[serde(default = ...)]`
+    /// so legacy resin TOMLs without the field parse unchanged.
+    /// Consumed by the t2f1 voxel cure path
+    /// (`VoxelCureCalculator`) when the runtime `--voxel-cure-mm` flag is
+    /// active; the Tier-1 scalar path does not read this field.
+    #[serde(default = "default_photoinitiator_concentration_initial")]
+    pub(crate) photoinitiator_concentration_initial: f32,
+
+    /// Photoinitiator decay rate constant, in
+    /// `1 / (mJ·cm⁻² × concentration-fraction)` units. KB-160.
+    /// **Optional** — when `None`, the voxel cure path uses
+    /// [`DEFAULT_PHOTOINITIATOR_DECAY_CONSTANT_K_D`] (0.05 literature midpoint
+    /// with ±50 % uncertainty) and the CLI / reports MUST emit a loud
+    /// warning. Per-resin calibration replaces the default. Mirrors the
+    /// `cure_kinetics_ea_kj_mol` Option-with-warn precedent.
+    #[serde(default)]
+    pub(crate) photoinitiator_decay_constant_k_d: Option<f32>,
+
     /// Concrete operating point for this resin (ADR-0005 Axis 2b).
     /// **Required** — no serde default. A legacy resin TOML missing `[recipe]` fails
     /// to deserialise, surfacing the migration loudly per ADR-0005 Consequences.
@@ -165,6 +205,24 @@ impl ResinProfile {
     pub fn effective_cure_kinetics_ea_kj_mol(&self) -> f32 {
         self.cure_kinetics_ea_kj_mol
             .unwrap_or(DEFAULT_CURE_KINETICS_EA_KJ_MOL)
+    }
+    /// Initial photoinitiator concentration (dimensionless fraction in [0,1]).
+    /// KB-160. Consumed by the voxel cure path.
+    pub fn photoinitiator_concentration_initial(&self) -> f32 {
+        self.photoinitiator_concentration_initial
+    }
+    /// Photoinitiator decay constant if the TOML carries a measured value.
+    /// See [`DEFAULT_PHOTOINITIATOR_DECAY_CONSTANT_K_D`] for the fallback.
+    pub fn photoinitiator_decay_constant_k_d(&self) -> Option<f32> {
+        self.photoinitiator_decay_constant_k_d
+    }
+    /// Effective k_d: TOML value if present, otherwise the KB-160 default
+    /// (0.05 with ±50 % uncertainty). Callers SHOULD check
+    /// [`photoinitiator_decay_constant_k_d`](Self::photoinitiator_decay_constant_k_d)
+    /// and warn when it is None.
+    pub fn effective_photoinitiator_decay_constant_k_d(&self) -> f32 {
+        self.photoinitiator_decay_constant_k_d
+            .unwrap_or(DEFAULT_PHOTOINITIATOR_DECAY_CONSTANT_K_D)
     }
     /// The concrete operating point (Recipe VO) for this resin.
     pub fn recipe(&self) -> &Recipe {
@@ -239,6 +297,28 @@ impl ResinProfile {
                  (0.0, 200.0] kJ/mol (got {ea})"
             ));
         }
+        // KB-160: photoinitiator concentration is a dimensionless [0, 1]
+        // fraction. NaN-two-layer-defence (docs/patterns/nan-two-layer-defence.md):
+        // explicit finite check before the range check so NaN doesn't silently
+        // satisfy `0 <= NaN <= 1` (Rust's IEEE-754 NaN comparison gap, see
+        // docs/patterns/anti/rust-nan-positive-validation-gap.md).
+        if !self.photoinitiator_concentration_initial.is_finite()
+            || !(0.0..=1.0).contains(&self.photoinitiator_concentration_initial)
+        {
+            return Err(format!(
+                "photoinitiator_concentration_initial must be finite and in \
+                 [0.0, 1.0] (got {})",
+                self.photoinitiator_concentration_initial
+            ));
+        }
+        if let Some(k_d) = self.photoinitiator_decay_constant_k_d
+            && (!k_d.is_finite() || k_d <= 0.0)
+        {
+            return Err(format!(
+                "photoinitiator_decay_constant_k_d, when present, must be \
+                 finite and > 0.0 (got {k_d})"
+            ));
+        }
         // Both fields are validated finite above, so `>=` is safe on f32.
         if self.min_safe_temp_c >= self.degradation_temp_c {
             return Err(format!(
@@ -280,6 +360,8 @@ impl ResinProfile {
             degradation_temp_c: default_degradation_temp_c(),
             min_safe_temp_c: default_min_safe_temp_c(),
             cure_kinetics_ea_kj_mol: None, // KB-153: no measured value — uses default 30 kJ/mol w/ loud warning
+            photoinitiator_concentration_initial: DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL,
+            photoinitiator_decay_constant_k_d: None, // KB-160: no measured value — uses default 0.05 w/ ±50 % loud warning
             recipe: Recipe::elegoo_ceramic_grey(),
         }
     }
@@ -301,6 +383,8 @@ impl ResinProfile {
             degradation_temp_c: default_degradation_temp_c(),
             min_safe_temp_c: default_min_safe_temp_c(),
             cure_kinetics_ea_kj_mol: None, // KB-153: no measured value — uses default 30 kJ/mol w/ loud warning
+            photoinitiator_concentration_initial: DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL,
+            photoinitiator_decay_constant_k_d: None, // KB-160: no measured value — uses default 0.05 w/ ±50 % loud warning
             recipe: Recipe::generic_standard(),
         }
     }
@@ -482,6 +566,117 @@ mod tests {
         let mut p = ResinProfile::generic_standard();
         p.cure_kinetics_ea_kj_mol = Some(200.0);
         assert!(p.validate().is_ok());
+    }
+
+    // --- KB-160 photoinitiator fields tests ---
+
+    #[test]
+    fn photoinitiator_concentration_initial_default_is_one() {
+        let p = ResinProfile::generic_standard();
+        assert_eq!(
+            p.photoinitiator_concentration_initial(),
+            DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL
+        );
+        assert_eq!(p.photoinitiator_concentration_initial(), 1.0);
+    }
+
+    #[test]
+    fn photoinitiator_decay_constant_k_d_default_is_none() {
+        let p = ResinProfile::generic_standard();
+        assert_eq!(p.photoinitiator_decay_constant_k_d(), None);
+        // The effective k_d falls back to the KB-160 literature midpoint.
+        assert_eq!(
+            p.effective_photoinitiator_decay_constant_k_d(),
+            DEFAULT_PHOTOINITIATOR_DECAY_CONSTANT_K_D
+        );
+        assert_eq!(p.effective_photoinitiator_decay_constant_k_d(), 0.05);
+    }
+
+    #[test]
+    fn photoinitiator_concentration_nan_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.photoinitiator_concentration_initial = f32::NAN;
+        let err = p
+            .validate()
+            .expect_err("NaN photoinitiator_concentration must fail validate");
+        assert!(
+            err.contains("photoinitiator_concentration_initial"),
+            "error names the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn photoinitiator_concentration_negative_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.photoinitiator_concentration_initial = -0.1;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn photoinitiator_concentration_above_one_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.photoinitiator_concentration_initial = 1.5;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn photoinitiator_concentration_zero_accepted_as_boundary() {
+        // Zero is a legitimate boundary (a resin with all photoinitiator
+        // exhausted before t=0 — pathological but well-defined). The voxel
+        // cure path will treat such a field as "burnt-out everywhere" per
+        // KB-160's C_threshold floor.
+        let mut p = ResinProfile::generic_standard();
+        p.photoinitiator_concentration_initial = 0.0;
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn photoinitiator_concentration_one_accepted_as_boundary() {
+        let mut p = ResinProfile::generic_standard();
+        p.photoinitiator_concentration_initial = 1.0;
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn photoinitiator_decay_k_d_nan_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.photoinitiator_decay_constant_k_d = Some(f32::NAN);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn photoinitiator_decay_k_d_zero_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.photoinitiator_decay_constant_k_d = Some(0.0);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn photoinitiator_decay_k_d_negative_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.photoinitiator_decay_constant_k_d = Some(-0.01);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn photoinitiator_decay_k_d_some_finite_positive_accepted() {
+        let mut p = ResinProfile::generic_standard();
+        p.photoinitiator_decay_constant_k_d = Some(0.07);
+        assert!(p.validate().is_ok());
+        assert_eq!(p.photoinitiator_decay_constant_k_d(), Some(0.07));
+        // effective_ returns the TOML value, not the default.
+        assert_eq!(p.effective_photoinitiator_decay_constant_k_d(), 0.07);
+    }
+
+    #[test]
+    fn photoinitiator_decay_k_d_none_uses_default() {
+        let p = ResinProfile::generic_standard();
+        // None ⇒ effective_ falls back to KB-160 default. Callers SHOULD warn.
+        assert_eq!(p.photoinitiator_decay_constant_k_d(), None);
+        assert_eq!(
+            p.effective_photoinitiator_decay_constant_k_d(),
+            DEFAULT_PHOTOINITIATOR_DECAY_CONSTANT_K_D
+        );
     }
 
     #[test]
@@ -679,6 +874,61 @@ density_g_cm3 = 1.1
         assert!(
             err.contains("recipe") && err.contains("normal_exposure_sec"),
             "error must name recipe + field: {err}"
+        );
+    }
+
+    // --- KB-160 legacy TOML compat ---
+
+    #[test]
+    fn legacy_toml_without_photoinitiator_fields_applies_defaults() {
+        // Legacy TOML (no photoinitiator_* fields) parses with
+        // photoinitiator_concentration_initial = 1.0 (serde default) and
+        // photoinitiator_decay_constant_k_d = None (serde default), satisfies
+        // validate(). Matches the cure_kinetics_ea_kj_mol Option-default
+        // precedent.
+        let toml_str = legacy_toml_without_thermal_thresholds();
+        let p: ResinProfile = toml::from_str(&toml_str)
+            .expect("legacy TOML without photoinitiator_* fields must parse");
+        assert_eq!(
+            p.photoinitiator_concentration_initial(),
+            DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL
+        );
+        assert_eq!(p.photoinitiator_decay_constant_k_d(), None);
+        p.validate()
+            .expect("defaulted photoinitiator fields must satisfy validate()");
+    }
+
+    #[test]
+    fn toml_with_explicit_photoinitiator_fields_round_trips() {
+        let toml_str = format!(
+            "{}\nphotoinitiator_concentration_initial = 0.85\nphotoinitiator_decay_constant_k_d = 0.07\n{}",
+            legacy_toml_root_without_thermal_thresholds(),
+            valid_recipe_table()
+        );
+        let p: ResinProfile =
+            toml::from_str(&toml_str).expect("explicit photoinitiator_* TOML must parse");
+        assert_eq!(p.photoinitiator_concentration_initial(), 0.85);
+        assert_eq!(p.photoinitiator_decay_constant_k_d(), Some(0.07));
+        assert_eq!(p.effective_photoinitiator_decay_constant_k_d(), 0.07);
+        p.validate()
+            .expect("explicit photoinitiator_* values must satisfy validate()");
+    }
+
+    #[test]
+    fn toml_with_nan_photoinitiator_concentration_rejected_by_validate() {
+        let toml_str = format!(
+            "{}\nphotoinitiator_concentration_initial = nan\n{}",
+            legacy_toml_root_without_thermal_thresholds(),
+            valid_recipe_table()
+        );
+        let p: ResinProfile =
+            toml::from_str(&toml_str).expect("TOML parse succeeds; validate() is the gate");
+        let err = p
+            .validate()
+            .expect_err("NaN photoinitiator_concentration must fail validate()");
+        assert!(
+            err.contains("photoinitiator_concentration_initial"),
+            "error must name the field: {err}"
         );
     }
 }

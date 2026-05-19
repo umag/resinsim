@@ -24,6 +24,12 @@ fn default_led_to_vat_coupling() -> f32 {
     0.5
 }
 
+/// Workspace-default voxel cure resolution (mm). ADR-0017 / t2f1.
+/// Applied when `PrinterProfile.voxel_cure_resolution_mm` is `None` and the
+/// CLI does not override. 0.2 mm is the Pareto point between thin-wall
+/// resolution + memory budget — see ADR-0017 §"Variable voxel resolution".
+pub const DEFAULT_VOXEL_CURE_RESOLUTION_MM: f32 = 0.2;
+
 /// Hardware build envelope of a printer (ADR-0012, extends ADR-0005 Axis 1).
 ///
 /// Optional on [`PrinterProfile`] — see ADR-0012. When present, all three
@@ -189,6 +195,19 @@ pub struct PrinterProfile {
     /// bed_size_mm + sentinel max_z + a one-shot warn.
     #[serde(default)]
     pub(crate) build_envelope_mm: Option<BuildEnvelope>,
+
+    /// Voxel cure resolution (mm) for the t2f1 voxel cure path (ADR-0017).
+    /// **Optional** — the resolution precedence chain is:
+    ///   1. CLI `--voxel-cure-mm <FLOAT>` value (highest)
+    ///   2. This per-printer override
+    ///   3. [`DEFAULT_VOXEL_CURE_RESOLUTION_MM`] (0.2 mm, lowest)
+    ///
+    /// Profile authors only set this when they have a printer-specific reason
+    /// (e.g. extremely fine pixel pitch wanting 0.05 mm voxels, or known
+    /// memory pressure wanting coarser 0.5 mm voxels). Default-leaving (None)
+    /// inherits the workspace default. Validated as finite > 0 when Some.
+    #[serde(default)]
+    pub(crate) voxel_cure_resolution_mm: Option<f32>,
 }
 
 impl PrinterProfile {
@@ -246,6 +265,20 @@ impl PrinterProfile {
     }
     pub fn build_envelope_mm(&self) -> Option<BuildEnvelope> {
         self.build_envelope_mm
+    }
+    /// Per-printer voxel cure resolution override (mm). See struct doc.
+    pub fn voxel_cure_resolution_mm(&self) -> Option<f32> {
+        self.voxel_cure_resolution_mm
+    }
+    /// Effective voxel cure resolution after applying the precedence chain
+    /// **without** the CLI level — i.e. the value the simulation uses when
+    /// the CLI flag is absent. Returns the per-printer override if Some,
+    /// otherwise [`DEFAULT_VOXEL_CURE_RESOLUTION_MM`]. The CLI layer
+    /// (resinsim-inspect) applies the highest-priority override before
+    /// consulting this method.
+    pub fn effective_voxel_cure_resolution_mm(&self) -> f32 {
+        self.voxel_cure_resolution_mm
+            .unwrap_or(DEFAULT_VOXEL_CURE_RESOLUTION_MM)
     }
 
     /// Validate physical invariants. Must be called after deserialization from
@@ -324,6 +357,17 @@ impl PrinterProfile {
         if let Some(env) = self.build_envelope_mm.as_ref() {
             env.validate()?;
         }
+        // ADR-0017 / t2f1: voxel_cure_resolution_mm is Optional; when Some,
+        // must be finite > 0. NaN-two-layer-defence: explicit is_finite()
+        // check before the > 0.0 comparison to avoid the IEEE-754 NaN gap.
+        if let Some(vmm) = self.voxel_cure_resolution_mm
+            && (!vmm.is_finite() || vmm <= 0.0)
+        {
+            return Err(format!(
+                "voxel_cure_resolution_mm, when present, must be finite and \
+                 > 0.0 mm (got {vmm})"
+            ));
+        }
         Ok(())
     }
 
@@ -359,6 +403,11 @@ impl PrinterProfile {
                 depth_mm: 77.76,
                 max_z_mm: 165.0,
             }),
+            // ADR-0017 / t2f1: leave None to inherit the workspace default
+            // (0.2 mm) for the voxel cure path. Mars 5 Ultra's 19 µm pixel
+            // pitch could justify finer voxels, but until per-printer voxel
+            // calibration data exists, the default is the right call.
+            voxel_cure_resolution_mm: None,
         }
     }
 
@@ -391,6 +440,7 @@ impl PrinterProfile {
                 depth_mm: 120.0,
                 max_z_mm: 200.0,
             }),
+            voxel_cure_resolution_mm: None, // ADR-0017: inherit default
         }
     }
 }
@@ -755,5 +805,87 @@ lcd_uniformity_variation = 0.22
             err.contains("exposure_range_sec"),
             "error names the range: {err}"
         );
+    }
+
+    // --- ADR-0017 / t2f1 voxel_cure_resolution_mm tests ---
+
+    #[test]
+    fn voxel_cure_resolution_default_is_0_2_mm() {
+        assert!((DEFAULT_VOXEL_CURE_RESOLUTION_MM - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mars5_ultra_factory_inherits_voxel_cure_resolution_default() {
+        let p = PrinterProfile::elegoo_mars5_ultra();
+        assert_eq!(p.voxel_cure_resolution_mm(), None);
+        // The effective value is the workspace default.
+        assert!(
+            (p.effective_voxel_cure_resolution_mm() - DEFAULT_VOXEL_CURE_RESOLUTION_MM).abs() < 1e-6
+        );
+    }
+
+    #[test]
+    fn generic_msla_4k_factory_inherits_voxel_cure_resolution_default() {
+        let p = PrinterProfile::generic_msla_4k();
+        assert_eq!(p.voxel_cure_resolution_mm(), None);
+        assert!(
+            (p.effective_voxel_cure_resolution_mm() - DEFAULT_VOXEL_CURE_RESOLUTION_MM).abs() < 1e-6
+        );
+    }
+
+    #[test]
+    fn voxel_cure_resolution_some_value_overrides_default() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.voxel_cure_resolution_mm = Some(0.05);
+        assert!(p.validate().is_ok());
+        assert_eq!(p.voxel_cure_resolution_mm(), Some(0.05));
+        assert!((p.effective_voxel_cure_resolution_mm() - 0.05).abs() < 1e-6);
+    }
+
+    #[test]
+    fn voxel_cure_resolution_zero_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.voxel_cure_resolution_mm = Some(0.0);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn voxel_cure_resolution_negative_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.voxel_cure_resolution_mm = Some(-0.1);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn voxel_cure_resolution_nan_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.voxel_cure_resolution_mm = Some(f32::NAN);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn voxel_cure_resolution_infinity_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.voxel_cure_resolution_mm = Some(f32::INFINITY);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_toml_without_voxel_cure_resolution_defaults_to_none() {
+        let p: PrinterProfile = toml::from_str(&valid_printer_toml())
+            .expect("legacy TOML without voxel_cure_resolution_mm must parse");
+        assert_eq!(p.voxel_cure_resolution_mm(), None);
+        p.validate()
+            .expect("None voxel_cure_resolution_mm must satisfy validate()");
+    }
+
+    #[test]
+    fn toml_with_explicit_voxel_cure_resolution_round_trips() {
+        let toml_str = valid_printer_toml() + "voxel_cure_resolution_mm = 0.1\n";
+        let p: PrinterProfile =
+            toml::from_str(&toml_str).expect("explicit voxel_cure_resolution_mm must parse");
+        assert_eq!(p.voxel_cure_resolution_mm(), Some(0.1));
+        p.validate()
+            .expect("explicit 0.1 mm must satisfy validate()");
     }
 }
