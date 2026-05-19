@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[cfg(feature = "field-sim")]
+use crate::entities::ResinProfile;
 use crate::entities::{FailureEvent, LayerResult, PrinterProfile, Recipe, Severity};
+#[cfg(feature = "field-sim")]
+use crate::services::CureCalculator;
 use crate::services::LayerTimingCalculator;
 use crate::values::LayerHeightProvenance;
 #[cfg(feature = "field-sim")]
-use crate::values::{CureField, PhotoinitiatorField};
+use crate::values::{CureDepth, CureField, Energy, PhotoinitiatorField, VatTemperature};
 
 /// Errors returned by [`PrintSimulation`] mutators.
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -209,6 +213,61 @@ impl PrintSimulation {
         Ok(())
     }
 
+    /// Per-layer cure-depth summary derived from the resin profile, with
+    /// Ec(T) Arrhenius correction applied automatically using the layer's
+    /// cached `vat_temperature_c`. AR-level composition: navigates to the
+    /// requested layer, computes `Ec(T)` via
+    /// [`CureCalculator::ec_at_temp`](crate::services::CureCalculator::ec_at_temp),
+    /// then delegates to the lower-level
+    /// [`LayerResult::cure_depth_um_summary`] primitive.
+    ///
+    /// Returns `None` when `layer_index` is out of bounds. In Tier-1 mode
+    /// (no voxel cure field), short-circuits the Ec(T) compute and returns
+    /// the cached `cure_depth_um` directly — this matches the underlying
+    /// primitive's cache-fallback contract and avoids wasted Arrhenius
+    /// arithmetic when the voxel path is inactive.
+    ///
+    /// See also:
+    /// - KB-153 (Ec(T) Arrhenius source-of-truth)
+    /// - ADR-0017 §3 (voxel cure architecture)
+    /// - ADR-0007 (vat-temperature population contract in `SimulationRunner`)
+    /// - `docs/patterns/single-source-arrhenius-helper.md`
+    #[cfg(feature = "field-sim")]
+    pub fn cure_depth_summary_for_resin(
+        &self,
+        layer_index: u32,
+        resin: &ResinProfile,
+    ) -> Option<CureDepth> {
+        let layer = self.layers.get(layer_index as usize)?;
+        // Tier-1 short-circuit: no voxel field ⇒ the primitive returns the
+        // cached scalar anyway; skip the Ec(T) compute to save wasted work.
+        if self.cure_field.is_none() {
+            return CureDepth::new(layer.cure_depth_um).ok();
+        }
+        let ec_t = Self::ec_t_for_layer(layer, resin);
+        Some(layer.cure_depth_um_summary(self, resin.penetration_depth_um(), ec_t.value()))
+    }
+
+    /// Worst-case (most-undercured) cure depth for a specific layer derived
+    /// from the resin profile, with the same Ec(T) Arrhenius treatment as
+    /// [`Self::cure_depth_summary_for_resin`]. Symmetric API.
+    ///
+    /// Returns `None` when `layer_index` is out of bounds. Tier-1 mode
+    /// short-circuits to the cached `worst_cure_depth_um`.
+    #[cfg(feature = "field-sim")]
+    pub fn worst_cure_depth_summary_for_resin(
+        &self,
+        layer_index: u32,
+        resin: &ResinProfile,
+    ) -> Option<CureDepth> {
+        let layer = self.layers.get(layer_index as usize)?;
+        if self.cure_field.is_none() {
+            return CureDepth::new(layer.worst_cure_depth_um).ok();
+        }
+        let ec_t = Self::ec_t_for_layer(layer, resin);
+        Some(layer.worst_cure_depth_um_summary(self, resin.penetration_depth_um(), ec_t.value()))
+    }
+
     /// Layer-height reconciliation between the CTB (file-axis, runtime
     /// authority) and the resin recipe (recipe-axis, authoring metadata).
     /// `None` when the simulation came in via STL / area-only entry points
@@ -366,6 +425,25 @@ impl PrintSimulation {
             transition_time_sec,
             normal_time_sec,
         }
+    }
+
+    // Shared Ec(T) compose for the for_resin methods. Pulls the cached vat
+    // temperature off the layer (populated by SimulationRunner per ADR-0007)
+    // and composes the resin's reference Ec under Arrhenius correction.
+    // .expect-justifications cite the upstream invariants per ADR-0003.
+    #[cfg(feature = "field-sim")]
+    fn ec_t_for_layer(layer: &LayerResult, resin: &ResinProfile) -> Energy {
+        let ec_ref = Energy::new(resin.critical_energy_mj_cm2())
+            .expect("ResinProfile::validate() guarantees critical_energy_mj_cm2 > 0");
+        let vat = VatTemperature::new(layer.vat_temperature_c).expect(
+            "LayerResult.vat_temperature_c populated from VatTemperature::value() in SimulationRunner per ADR-0007",
+        );
+        CureCalculator::ec_at_temp(
+            ec_ref,
+            resin.reference_temp_c(),
+            vat,
+            resin.effective_cure_kinetics_ea_kj_mol(),
+        )
     }
 
     // (total, bottom, transition, normal) in seconds.
@@ -787,6 +865,132 @@ pub(crate) mod tests {
         assert!(
             !json.contains("photoinitiator_field"),
             "Tier-1 sim.json must omit photoinitiator_field when None"
+        );
+    }
+
+    // --- *_summary_for_resin convenience methods (t2f1.5 F1) ---
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn cure_depth_summary_for_resin_out_of_bounds_returns_none() {
+        // AR query for a layer index past the end must return None — no
+        // panic, no .expect on a missing slot. Witness for the
+        // Option<CureDepth> return contract.
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![])
+            .expect("test fixture: index 0 satisfies add_layer contiguity on an empty sim");
+        let resin = ResinProfile::generic_standard();
+        assert!(sim.cure_depth_summary_for_resin(1, &resin).is_none());
+        assert!(sim.cure_depth_summary_for_resin(99, &resin).is_none());
+        assert!(sim.worst_cure_depth_summary_for_resin(1, &resin).is_none());
+    }
+
+    /// Tier-1 short-circuit witness. We deliberately set
+    /// `vat_temperature_c = f32::NAN` on the fixture LayerResult — if the
+    /// AR method DIDN'T short-circuit before computing Ec(T), the
+    /// `VatTemperature::new(NAN).expect(...)` inside `ec_t_for_layer` would
+    /// panic. The fact that this test returns Some(cached) proves the
+    /// `if self.cure_field.is_none()` short-circuit ran first, matching
+    /// the lower-level primitive's cache-fallback cost profile.
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn cure_depth_summary_for_resin_tier1_skips_ec_t_compute() {
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        let mut layer = make_layer(0, 5.0, 3.0, 22.0);
+        layer.cure_depth_um = 87.5; // distinctive non-default cached value
+        layer.vat_temperature_c = f32::NAN; // poison — would panic Ec(T) compute
+        layer.worst_cure_depth_um = 73.25;
+        sim.add_layer(layer, vec![])
+            .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
+        let resin = ResinProfile::generic_standard();
+
+        let cd = sim
+            .cure_depth_summary_for_resin(0, &resin)
+            .expect("Tier-1 mode must return Some(cached) for in-bounds layer");
+        assert_eq!(
+            cd.value(),
+            87.5,
+            "Tier-1 path must return the cached cure_depth_um verbatim"
+        );
+
+        let worst = sim
+            .worst_cure_depth_summary_for_resin(0, &resin)
+            .expect("Tier-1 mode must return Some(cached) for in-bounds layer");
+        assert_eq!(
+            worst.value(),
+            73.25,
+            "Tier-1 path must return the cached worst_cure_depth_um verbatim"
+        );
+    }
+
+    /// Voxel-mode contract: the AR convenience method composes
+    /// `CureCalculator::ec_at_temp` with the cached `vat_temperature_c` and
+    /// delegates to the existing `LayerResult::cure_depth_um_summary`
+    /// primitive. This test proves byte-identical agreement with the
+    /// manual Ec(T) compose chain — the smoking gun that the v1 plan
+    /// (placement on LayerResult) was trying to resolve.
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn cure_depth_summary_for_resin_matches_manual_ec_t_chain() {
+        use crate::services::CureCalculator;
+        use crate::values::{CureField, Energy, PhotoinitiatorField, VatTemperature};
+
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        // Single-layer fixture at a representative non-reference temperature
+        // so Ec(T) actually drifts from Ec_ref (35 °C plateau vs 25 °C ref).
+        let mut layer = make_layer(0, 5.0, 3.0, 35.0);
+        layer.cure_depth_um = 110.0; // post-runner cache, computed using Ec(T)
+        sim.add_layer(layer, vec![])
+            .expect("test fixture: explicit index 0 matches layer count 0 at this call site");
+        // Tiny 1×1×1 cure_field with a known dose so the primitive's
+        // dispatch branch (cf.layer_summary) actually runs.
+        let mut cure = CureField::new(1, 1, 1, 0.05, [0.0, 0.0, 0.0])
+            .expect("1×1×1 at 0.05 mm voxel + (0,0,0) bbox_min satisfies CureField::new domain");
+        cure.add_dose(0, 0, 0, 25.0)
+            .expect("(0,0,0) is in-bounds for the 1×1×1 field we just constructed");
+        let pi = PhotoinitiatorField::new(1, 1, 1, 1.0)
+            .expect("1×1×1 at C₀ = 1.0 satisfies PhotoinitiatorField::new domain");
+        sim.set_voxel_fields(cure, pi)
+            .expect("matching 1×1×1 dims satisfy set_voxel_fields precondition");
+
+        let resin = ResinProfile::generic_standard();
+
+        // Manual chain — same calls the runner makes in failure_predictor.
+        let ec_ref = Energy::new(resin.critical_energy_mj_cm2()).expect(
+            "ResinProfile::generic_standard() factory guarantees critical_energy_mj_cm2 > 0",
+        );
+        let vat = VatTemperature::new(35.0)
+            .expect("35.0 °C is in the VatTemperature domain (finite, above absolute zero)");
+        let ec_t = CureCalculator::ec_at_temp(
+            ec_ref,
+            resin.reference_temp_c(),
+            vat,
+            resin.effective_cure_kinetics_ea_kj_mol(),
+        );
+        let expected =
+            sim.layers()[0].cure_depth_um_summary(&sim, resin.penetration_depth_um(), ec_t.value());
+
+        let observed = sim
+            .cure_depth_summary_for_resin(0, &resin)
+            .expect("voxel-mode call on in-bounds layer 0 must yield Some");
+        assert_eq!(
+            observed.value().to_bits(),
+            expected.value().to_bits(),
+            "AR convenience method must be byte-identical to the manual Ec(T) compose chain"
+        );
+
+        let expected_worst = sim.layers()[0].worst_cure_depth_um_summary(
+            &sim,
+            resin.penetration_depth_um(),
+            ec_t.value(),
+        );
+        let observed_worst = sim
+            .worst_cure_depth_summary_for_resin(0, &resin)
+            .expect("voxel-mode call on in-bounds layer 0 must yield Some");
+        assert_eq!(
+            observed_worst.value().to_bits(),
+            expected_worst.value().to_bits(),
+            "worst_* AR convenience method must be byte-identical to its manual chain too"
         );
     }
 }

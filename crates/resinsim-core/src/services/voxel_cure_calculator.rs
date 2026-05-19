@@ -36,11 +36,19 @@ pub enum VoxelCureError {
         cure_dims: (u32, u32, u32),
         pi_dims: (u32, u32, u32),
     },
-    #[error("VoxelCureCalculator: per-column input must be finite (got pixel_intensity_mw_cm2={pixel_intensity_mw_cm2}, exposure_sec={exposure_sec})")]
+    #[error("VoxelCureCalculator: per-column input must be finite and non-negative (got pixel_intensity_mw_cm2={pixel_intensity_mw_cm2}, exposure_sec={exposure_sec})")]
     InvalidColumnInput {
         pixel_intensity_mw_cm2: f32,
         exposure_sec: f32,
     },
+    #[error("VoxelCureCalculator: layer_height_um must be finite and > 0 (got {0})")]
+    InvalidLayerHeight(f32),
+    #[error(
+        "VoxelCureCalculator: photoinitiator decay constant k_d must be finite and >= 0 (got {0})"
+    )]
+    InvalidDecayConstantKd(f32),
+    #[error("VoxelCureCalculator: penetration depth dp must be finite and > 0 (got {0})")]
+    InvalidDpBase(f32),
     #[error("VoxelCureCalculator: CureField error: {0}")]
     CureField(#[from] CureFieldError),
     #[error("VoxelCureCalculator: PhotoinitiatorField error: {0}")]
@@ -126,16 +134,10 @@ impl VoxelCureCalculator {
             // k_d sourced from ResinProfile.photoinitiator_decay_constant_k_d
             // (or KB-160 default 0.05) — both validated upstream, but
             // defence-in-depth here.
-            return Err(VoxelCureError::InvalidColumnInput {
-                pixel_intensity_mw_cm2: k_d,
-                exposure_sec,
-            });
+            return Err(VoxelCureError::InvalidDecayConstantKd(k_d));
         }
         if !layer_height_um.is_finite() || layer_height_um <= 0.0 {
-            return Err(VoxelCureError::InvalidColumnInput {
-                pixel_intensity_mw_cm2,
-                exposure_sec: layer_height_um,
-            });
+            return Err(VoxelCureError::InvalidLayerHeight(layer_height_um));
         }
 
         let (_nx, _ny, nz) = cure_field.dimensions();
@@ -148,10 +150,7 @@ impl VoxelCureCalculator {
         }
         let dp_base = dp.value();
         if !(dp_base > 0.0 && dp_base.is_finite()) {
-            return Err(VoxelCureError::InvalidColumnInput {
-                pixel_intensity_mw_cm2: dp_base,
-                exposure_sec,
-            });
+            return Err(VoxelCureError::InvalidDpBase(dp_base));
         }
 
         // March down the column from iz_top toward the field bottom (iz = nz - 1),
@@ -225,8 +224,10 @@ mod tests {
 
     #[test]
     fn dimension_mismatch_rejected() {
-        let mut cure = CureField::new(2, 2, 2, 0.05, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
-        let mut pi = PhotoinitiatorField::new(2, 2, 3, 1.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
+        let mut cure = CureField::new(2, 2, 2, 0.05, [0.0, 0.0, 0.0])
+            .expect("2×2×2 at 0.05 mm voxel + (0,0,0) bbox_min satisfies CureField::new domain");
+        let mut pi = PhotoinitiatorField::new(2, 2, 3, 1.0)
+            .expect("2×2×3 at C₀ = 1.0 satisfies PhotoinitiatorField::new domain (note: deliberately mismatched nz vs cure for this test)");
         let err = VoxelCureCalculator::apply_column_exposure(
             &mut cure,
             &mut pi,
@@ -239,8 +240,11 @@ mod tests {
             0.05,
             50.0, // layer_height_um — typical Mars-class 50 µm slabs
         )
-        .expect_err("test fixture: input deliberately violates VoxelCureCalculator precondition, so Err is the expected outcome");
-        matches!(err, VoxelCureError::DimensionMismatch { .. });
+        .expect_err("dimension mismatch (cure=2×2×2, pi=2×2×3) deliberately injected, so Err is the expected outcome");
+        assert!(
+            matches!(err, VoxelCureError::DimensionMismatch { .. }),
+            "expected DimensionMismatch, got {err:?}"
+        );
     }
 
     #[test]
@@ -254,12 +258,19 @@ mod tests {
             0,
             f32::NAN,
             2.5,
-            PenetrationDepth::new(100.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)"),
+            PenetrationDepth::new(100.0)
+                .expect("test fixture: 100 µm Dp is in PenetrationDepth domain"),
             0.05,
             50.0, // layer_height_um — typical Mars-class 50 µm slabs
         )
-        .expect_err("test fixture: input deliberately violates VoxelCureCalculator precondition, so Err is the expected outcome");
-        matches!(err, VoxelCureError::InvalidColumnInput { .. });
+        .expect_err("NAN intensity violates apply_column_exposure precondition");
+        // Tightened (t2f1.5 F2): intensity/exposure failures still bundle as
+        // InvalidColumnInput; the k_d/layer_height/dp branches now have their
+        // own dedicated variants.
+        assert!(
+            matches!(err, VoxelCureError::InvalidColumnInput { .. }),
+            "expected InvalidColumnInput, got {err:?}"
+        );
     }
 
     #[test]
@@ -273,18 +284,22 @@ mod tests {
             0,
             10.0,
             f32::NAN,
-            PenetrationDepth::new(100.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)"),
+            PenetrationDepth::new(100.0)
+                .expect("test fixture: 100 µm Dp is in PenetrationDepth domain"),
             0.05,
             50.0, // layer_height_um — typical Mars-class 50 µm slabs
         )
-        .expect_err("test fixture: input deliberately violates VoxelCureCalculator precondition, so Err is the expected outcome");
-        matches!(err, VoxelCureError::InvalidColumnInput { .. });
+        .expect_err("NAN exposure_sec violates apply_column_exposure precondition");
+        assert!(
+            matches!(err, VoxelCureError::InvalidColumnInput { .. }),
+            "expected InvalidColumnInput, got {err:?}"
+        );
     }
 
     #[test]
     fn negative_exposure_rejected() {
         let (mut cure, mut pi) = make_pair(2, 2, 2);
-        assert!(VoxelCureCalculator::apply_column_exposure(
+        let err = VoxelCureCalculator::apply_column_exposure(
             &mut cure,
             &mut pi,
             0,
@@ -292,17 +307,22 @@ mod tests {
             0,
             10.0,
             -1.0,
-            PenetrationDepth::new(100.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)"),
+            PenetrationDepth::new(100.0)
+                .expect("test fixture: 100 µm Dp is in PenetrationDepth domain"),
             0.05,
             50.0, // layer_height_um — typical Mars-class 50 µm slabs
         )
-        .is_err());
+        .expect_err("negative exposure_sec violates apply_column_exposure precondition");
+        assert!(
+            matches!(err, VoxelCureError::InvalidColumnInput { .. }),
+            "expected InvalidColumnInput, got {err:?}"
+        );
     }
 
     #[test]
-    fn nan_k_d_rejected() {
+    fn nan_k_d_rejected_yields_invalid_kd_variant() {
         let (mut cure, mut pi) = make_pair(2, 2, 2);
-        assert!(VoxelCureCalculator::apply_column_exposure(
+        let err = VoxelCureCalculator::apply_column_exposure(
             &mut cure,
             &mut pi,
             0,
@@ -310,12 +330,79 @@ mod tests {
             0,
             10.0,
             2.5,
-            PenetrationDepth::new(100.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)"),
+            PenetrationDepth::new(100.0)
+                .expect("test fixture: 100 µm Dp is in PenetrationDepth domain"),
             f32::NAN,
             50.0,
         )
-        .is_err());
+        .expect_err("NAN k_d violates apply_column_exposure precondition");
+        // t2f1.5 F2: k_d failures now report InvalidDecayConstantKd, not
+        // InvalidColumnInput (which previously packed k_d into the
+        // pixel_intensity_mw_cm2 field — misleading error string).
+        assert!(
+            matches!(err, VoxelCureError::InvalidDecayConstantKd(_)),
+            "expected InvalidDecayConstantKd, got {err:?}"
+        );
     }
+
+    #[test]
+    fn nan_layer_height_rejected_yields_invalid_layer_height_variant() {
+        let (mut cure, mut pi) = make_pair(2, 2, 2);
+        let err = VoxelCureCalculator::apply_column_exposure(
+            &mut cure,
+            &mut pi,
+            0,
+            0,
+            0,
+            10.0,
+            2.5,
+            PenetrationDepth::new(100.0)
+                .expect("test fixture: 100 µm Dp is in PenetrationDepth domain"),
+            0.05,
+            f32::NAN, // layer_height_um — poison
+        )
+        .expect_err("NAN layer_height_um violates apply_column_exposure precondition");
+        // t2f1.5 F2: layer_height_um failures now report InvalidLayerHeight,
+        // not InvalidColumnInput (which previously packed the bad value into
+        // the exposure_sec field — misleading "exposure_sec=NAN" error).
+        assert!(
+            matches!(err, VoxelCureError::InvalidLayerHeight(_)),
+            "expected InvalidLayerHeight, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn zero_layer_height_rejected_yields_invalid_layer_height_variant() {
+        let (mut cure, mut pi) = make_pair(2, 2, 2);
+        let err = VoxelCureCalculator::apply_column_exposure(
+            &mut cure,
+            &mut pi,
+            0,
+            0,
+            0,
+            10.0,
+            2.5,
+            PenetrationDepth::new(100.0)
+                .expect("test fixture: 100 µm Dp is in PenetrationDepth domain"),
+            0.05,
+            0.0, // layer_height_um — zero violates `> 0`
+        )
+        .expect_err("zero layer_height_um violates apply_column_exposure precondition");
+        assert!(
+            matches!(err, VoxelCureError::InvalidLayerHeight(h) if h == 0.0),
+            "expected InvalidLayerHeight(0.0), got {err:?}"
+        );
+    }
+
+    // Note: VoxelCureError::InvalidDpBase is defence-in-depth.
+    // `PenetrationDepth::new()` already rejects non-finite or non-positive
+    // values, so no safe-Rust call site can deliver a poison
+    // `dp: PenetrationDepth` to `apply_column_exposure`. The branch persists
+    // so that any future relaxation of PenetrationDepth's constructor
+    // invariant fails loud rather than dividing by zero in
+    // `dp_local = dp_base / c_clamped`. Compile-only construction proves
+    // the variant is wired (see ec_at_temp_delegation_byte_identical's
+    // imports below — VoxelCureError is in scope).
 
     /// Z-step regression guard (code review round 1 HIGH-correctness):
     /// `apply_column_exposure` previously used `voxel_size_mm × 1000` as
@@ -391,9 +478,17 @@ mod tests {
             0.05,
             50.0, // layer_height_um — typical Mars-class 50 µm slabs
         )
-        .expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
-        assert_eq!(cure.dose_at(0, 0, 0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)"), 0.0);
-        assert_eq!(pi.concentration_at(0, 0, 0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)"), 1.0);
+        .expect("10 mW/cm² × 0 s zero-dose exposure is a valid no-op call");
+        assert_eq!(
+            cure.dose_at(0, 0, 0)
+                .expect("(0,0,0) is in-bounds for the 2×2×2 field"),
+            0.0
+        );
+        assert_eq!(
+            pi.concentration_at(0, 0, 0)
+                .expect("(0,0,0) is in-bounds for the 2×2×2 field"),
+            1.0
+        );
     }
 
     /// Delegation regression: a single-voxel-thick "column" must produce
@@ -410,9 +505,11 @@ mod tests {
         // Surface dose 10 mW/cm² × 2.5 s = 25 mJ/cm².
         // Voxel centre depth = 0.5 × 1 µm = 0.5 µm.
         // Attenuation = exp(-0.5 / 1000) ≈ 0.9995. Expected voxel dose ≈ 24.99.
-        let mut cure =
-            CureField::new(1, 1, 1, 0.001, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)"); // 1 µm voxels
-        let mut pi = PhotoinitiatorField::new(1, 1, 1, 1.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
+        let mut cure = CureField::new(1, 1, 1, 0.001, [0.0, 0.0, 0.0]).expect(
+            "1×1×1 at 0.001 mm (1 µm) voxel + (0,0,0) bbox_min satisfies CureField::new domain",
+        ); // 1 µm voxels
+        let mut pi = PhotoinitiatorField::new(1, 1, 1, 1.0)
+            .expect("1×1×1 at C₀ = 1.0 satisfies PhotoinitiatorField::new domain");
         VoxelCureCalculator::apply_column_exposure(
             &mut cure,
             &mut pi,
@@ -425,8 +522,10 @@ mod tests {
             0.05,
             1.0, // layer_height_um — 1 µm slab to keep attenuation negligible
         )
-        .expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
-        let dose = cure.dose_at(0, 0, 0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
+        .expect("10 mW/cm² × 2.5 s with 1000 µm Dp and 1 µm layer-height — all in-domain literal args");
+        let dose = cure
+            .dose_at(0, 0, 0)
+            .expect("(0,0,0) is in-bounds for the 1×1×1 field constructed above");
         let expected_surface_dose = 25.0;
         // 0.5 µm depth out of 1000 µm Dp ⇒ attenuation 0.9995.
         assert!(
@@ -443,12 +542,13 @@ mod tests {
     fn single_voxel_cure_depth_matches_scalar_cure_depth() {
         // Skip the per-column physics here and write a known dose
         // directly via add_dose so we isolate the cure-depth mapping.
-        let mut cure =
-            CureField::new(1, 1, 1, 0.05, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
-        cure.add_dose(0, 0, 0, 25.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)"); // E = 25 mJ/cm²
+        let mut cure = CureField::new(1, 1, 1, 0.05, [0.0, 0.0, 0.0])
+            .expect("1×1×1 at 0.05 mm voxel + (0,0,0) bbox_min satisfies CureField::new domain");
+        cure.add_dose(0, 0, 0, 25.0)
+            .expect("(0,0,0) in-bounds for 1×1×1 field + 25 mJ/cm² finite positive — both add_dose preconditions"); // E = 25 mJ/cm²
         let cd = cure
             .cure_depth_at(0, 0, 0, 100.0, 5.0)
-            .expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
+            .expect("(0,0,0) in-bounds for 1×1×1; Dp=100µm and Ec=5mJ/cm² both > 0");
         let scalar = CureCalculator::cure_depth(
             PenetrationDepth::new(100.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)"),
             Energy::new(25.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)"),
@@ -578,8 +678,10 @@ mod tests {
         // 1 column, 1 voxel deep, repeated exposures at successively
         // higher vat temperatures (Ec(T) drops) and accumulating
         // photoinitiator depletion.
-        let mut cure = CureField::new(1, 1, 1, 0.05, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
-        let mut pi = PhotoinitiatorField::new(1, 1, 1, 1.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
+        let mut cure = CureField::new(1, 1, 1, 0.05, [0.0, 0.0, 0.0])
+            .expect("1×1×1 at 0.05 mm voxel + (0,0,0) bbox_min satisfies CureField::new domain");
+        let mut pi = PhotoinitiatorField::new(1, 1, 1, 1.0)
+            .expect("1×1×1 at C₀ = 1.0 satisfies PhotoinitiatorField::new domain");
         let dp = PenetrationDepth::new(100.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
         let ec_ref = Energy::new(5.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
         let mut prev_cd_value: f32 = 0.0;
@@ -608,9 +710,10 @@ mod tests {
 
         // Baseline: single isolated exposure at the starting temperature
         // (no depletion, no Ec(T) drift).
-        let mut cure_baseline =
-            CureField::new(1, 1, 1, 0.05, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
-        let mut pi_baseline = PhotoinitiatorField::new(1, 1, 1, 1.0).expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, finite floats in domain ranges)");
+        let mut cure_baseline = CureField::new(1, 1, 1, 0.05, [0.0, 0.0, 0.0])
+            .expect("1×1×1 at 0.05 mm voxel + (0,0,0) bbox_min satisfies CureField::new domain");
+        let mut pi_baseline = PhotoinitiatorField::new(1, 1, 1, 1.0)
+            .expect("1×1×1 at C₀ = 1.0 satisfies PhotoinitiatorField::new domain");
         VoxelCureCalculator::apply_column_exposure(
             &mut cure_baseline, &mut pi_baseline, 0, 0, 0, 20.0, 2.5, dp, 0.05, 50.0,
         )

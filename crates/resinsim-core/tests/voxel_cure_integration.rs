@@ -314,31 +314,18 @@ fn dispatch_summary_matches_overwritten_cache() {
     )
     .expect("voxel-mode run must succeed");
 
-    // The dispatch reads layer_summary on demand using whatever ec the
-    // caller passes. The cache was written using KB-153 Ec(T) at the
-    // layer's vat temperature — NOT the resin's reference Ec. To make
-    // dispatch and cache agree, the test must pass the SAME Ec(T) the
-    // runner used. Compute it here using the same helper:
-    use resinsim_core::services::{CureCalculator, ThermalCalculator};
-    use resinsim_core::values::Energy;
-    let ec_ref = Energy::new(resin.critical_energy_mj_cm2())
-        .expect("test fixture: ResinProfile factory guarantees critical_energy_mj_cm2 > 0");
+    // Pre-t2f1.5 this test had to manually compose Ec(T) for each layer
+    // (CureCalculator::ec_at_temp + ThermalCalculator::vat_temperature_at_layer_v2)
+    // because the dispatch method on LayerResult took raw Ec — the cache,
+    // however, was populated using KB-153 Ec(T) at the layer's vat
+    // temperature, so the two paths disagreed unless callers replicated
+    // the compose chain. PrintSimulation::cure_depth_summary_for_resin
+    // hides that compose behind the AR; the test now asserts agreement
+    // directly.
     for layer in sim.layers() {
-        let vat = ThermalCalculator::vat_temperature_at_layer_v2(
-            resin.recipe(),
-            &printer,
-            test_ambient().value(),
-            None,
-            layer.index,
-        );
-        let ec_t = CureCalculator::ec_at_temp(
-            ec_ref,
-            resin.reference_temp_c(),
-            vat,
-            resin.effective_cure_kinetics_ea_kj_mol(),
-        );
-        let summary_cd =
-            layer.cure_depth_um_summary(&sim, resin.penetration_depth_um(), ec_t.value());
+        let summary_cd = sim
+            .cure_depth_summary_for_resin(layer.index, &resin)
+            .expect("voxel-mode sim must return Some for every in-bounds layer index");
         assert!(
             (summary_cd.value() - layer.cure_depth_um).abs() < 1e-2,
             "layer {}: dispatch summary ({}) must equal overwritten cache ({})",
