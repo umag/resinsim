@@ -1245,6 +1245,52 @@ fn cmd_report_health(in_path: &std::path::Path, json: bool) {
 
 /// Default output path: `<input-stem>.sim.json` in the input's parent dir.
 /// `<input-stem>` is whichever of `--stl` / `--file` is present.
+/// Dispatch the simulation run, routing through the voxel-aware entry
+/// point when `voxel_cure_mm` is `Some` AND the input format supports
+/// voxel mode (CTB only — STL inputs lack the per-layer masks the voxel
+/// path needs and silently fall back to Tier-1).
+#[allow(clippy::too_many_arguments)]
+fn run_simulation_with_optional_voxel(
+    input_path: &std::path::Path,
+    resin: &resinsim_core::entities::ResinProfile,
+    printer: &resinsim_core::entities::PrinterProfile,
+    supports: &resinsim_core::services::failure_predictor::SupportConfig,
+    plate: &resinsim_core::services::build_plate::PlateAdhesionProfile,
+    ambient: resinsim_core::values::AmbientTemperature,
+    initial_led_temp: Option<resinsim_core::values::InitialLedTemperature>,
+    voxel_cure_mm: Option<f32>,
+) -> Result<resinsim_core::simulation::PrintSimulation, String> {
+    use resinsim_core::app::SimulationRunner;
+
+    // Voxel mode is only meaningful when the input carries per-layer
+    // masks (CTB). For STL or no-voxel-flag runs, dispatch normally.
+    #[cfg(feature = "field-sim")]
+    if voxel_cure_mm.is_some() {
+        let fmt = resinsim_core::io::sliced::detect_format(input_path)
+            .ok_or_else(|| format!("unknown file format: {}", input_path.display()))?;
+        if fmt == "CTB" {
+            let (_info, layers) = resinsim_core::io::ctb::parse_ctb(input_path)?;
+            return SimulationRunner::run_from_layer_inputs_with_voxel(
+                &layers,
+                resin,
+                printer,
+                supports,
+                plate,
+                ambient,
+                initial_led_temp,
+                voxel_cure_mm,
+            );
+        }
+        eprintln!(
+            "note: --voxel-cure-mm is set but input is {fmt}, which has no per-layer masks; \
+             falling back to Tier-1 scalar mode"
+        );
+    }
+    // Tier-1 path: no voxel flag, or non-CTB input.
+    let _ = voxel_cure_mm;
+    SimulationRunner::run_auto(input_path, resin, printer, supports, plate, ambient, initial_led_temp)
+}
+
 fn default_sim_out_path(
     stl: Option<&std::path::Path>,
     file: Option<&std::path::Path>,
@@ -1279,9 +1325,10 @@ fn cmd_sim(
     out: Option<&std::path::Path>,
     // ADR-0017 / t2f1: Some(mm) ⇒ voxel cure mode at that resolution;
     // None ⇒ Tier-1 scalar mode. With feature off, this is always None
-    // because the CLI flag itself is gated. Consumed by SimulationRunner
-    // after task 18 wires the voxel path through PrintSimulation.
-    _voxel_cure_mm: Option<f32>,
+    // because the CLI flag itself is gated. Routed through the
+    // SimulationRunner voxel-aware entry point when the input is a CTB
+    // (voxel mode requires per-layer masks).
+    voxel_cure_mm: Option<f32>,
 ) {
     use resinsim_core::app::SimulationRunner;
     use resinsim_core::repositories::{save_with_provenance, Provenance};
@@ -1364,7 +1411,7 @@ fn cmd_sim(
     );
 
     let start = std::time::Instant::now();
-    let sim = match SimulationRunner::run_auto(
+    let sim_result = run_simulation_with_optional_voxel(
         input_path,
         &resolved.resin,
         &resolved.printer,
@@ -1372,7 +1419,9 @@ fn cmd_sim(
         &plate,
         ambient_typed,
         initial_led_temp_typed,
-    ) {
+        voxel_cure_mm,
+    );
+    let sim = match sim_result {
         Ok(s) => s,
         Err(e) => {
             eprintln!(

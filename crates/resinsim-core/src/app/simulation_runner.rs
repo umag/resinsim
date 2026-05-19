@@ -9,14 +9,41 @@ use crate::services::failure_predictor::{
 use crate::services::pairing_validator;
 use crate::services::suction_detector::SuctionDetector;
 use crate::simulation::PrintSimulation;
+#[cfg(feature = "field-sim")]
+use crate::services::VoxelCureCalculator;
 use crate::values::{
     AmbientTemperature, CrossSectionArea, InitialLedTemperature, LayerMask, LayerPhase,
 };
+#[cfg(feature = "field-sim")]
+use crate::values::{CureField, Energy, PenetrationDepth, PhotoinitiatorField};
 
 /// Application service: orchestrates a full simulation run.
 /// Loads geometry, slices it, runs FailurePredictor per layer,
 /// assembles the PrintSimulation aggregate.
 pub struct SimulationRunner;
+
+/// Internal per-run voxel state — built once by `run_inner_full` and
+/// mutated through `apply_voxel_cure_for_layer` per layer. Captures the
+/// invariants of t2f1's per-pixel exposure pass:
+///
+/// - `cure` and `pi` are dimension-locked at construction (set_voxel_fields
+///   enforces this on installation; we maintain it inside the runner).
+/// - `dp_um` / `ec_ref_mj_cm2` / `ref_temp_c` / `ea_cure_kj_mol` / `k_d` are
+///   snapshotted from the ResinProfile at run start; they don't change
+///   across layers within a single run.
+/// - `led_power_mw_cm2` is the printer's nominal LED intensity at the LCD
+///   plane; spatial uniformity variation (KB-120) is a t2f2 concern.
+#[cfg(feature = "field-sim")]
+struct VoxelState {
+    cure: CureField,
+    pi: PhotoinitiatorField,
+    dp_um: f32,
+    ec_ref_mj_cm2: f32,
+    ref_temp_c: f32,
+    ea_cure_kj_mol: f32,
+    k_d: f32,
+    led_power_mw_cm2: f32,
+}
 
 impl SimulationRunner {
     /// Run full simulation on an STL file.
@@ -185,6 +212,84 @@ impl SimulationRunner {
         )
     }
 
+    /// ADR-0017 / t2f1 voxel-cure-mode entry point. Identical to
+    /// [`Self::run_from_layer_inputs`] but with an additional
+    /// `voxel_cure_mm: Option<f32>` parameter:
+    ///
+    /// - `None` ⇒ Tier-1 scalar mode, identical to `run_from_layer_inputs`.
+    /// - `Some(_)` ⇒ Tier-2 voxel mode: builds `CureField` +
+    ///   `PhotoinitiatorField` from the layer masks, installs them on the
+    ///   returned `PrintSimulation`, and overwrites each layer's
+    ///   `cure_depth_um` / `worst_cure_depth_um` caches with the voxel
+    ///   field's per-layer summary.
+    ///
+    /// Only available with the `field-sim` Cargo feature. Default builds
+    /// don't see this method.
+    #[cfg(feature = "field-sim")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_from_layer_inputs_with_voxel(
+        layers: &[LayerInput],
+        resin: &ResinProfile,
+        printer: &PrinterProfile,
+        supports: &SupportConfig,
+        plate: &PlateAdhesionProfile,
+        ambient: AmbientTemperature,
+        initial_led_temp: Option<InitialLedTemperature>,
+        voxel_cure_mm: Option<f32>,
+    ) -> Result<PrintSimulation, String> {
+        resin.validate().map_err(|e| format!("resin: {e}"))?;
+        printer.validate().map_err(|e| format!("printer: {e}"))?;
+        pairing_validator::validate_pairing(printer, resin.recipe())
+            .map_err(|violations| format!("pairing: {}", violations.join("; ")))?;
+
+        let areas: Vec<CrossSectionArea> = layers
+            .iter()
+            .map(|li| {
+                CrossSectionArea::new(li.cross_section_area_mm2)
+                    .map_err(|e| format!("layer {}: {e}", li.index))
+            })
+            .collect::<Result<_, _>>()?;
+
+        let printer_voxel = printer.voxel_size_mm();
+        let carrying_voxel = layers
+            .iter()
+            .find_map(|li| li.mask.as_ref().map(|m| m.voxel_size_mm()))
+            .unwrap_or(printer_voxel);
+        let carrying_dims = layers
+            .iter()
+            .find_map(|li| {
+                li.mask
+                    .as_ref()
+                    .map(|m| (m.width_cells(), m.height_cells()))
+            })
+            .unwrap_or((1, 1));
+        let masks: Vec<LayerMask> = layers
+            .iter()
+            .map(|li| match &li.mask {
+                Some(m) => m.clone(),
+                None => LayerMask::new_all_solid(carrying_dims.0, carrying_dims.1, carrying_voxel)
+                    .expect("consistent dims + positive voxel_size yields valid all-solid mask"),
+            })
+            .collect();
+
+        let per_layer_overrides: Vec<(f32, f32)> = layers
+            .iter()
+            .map(|li| (li.exposure_sec, li.lift_speed_mm_min))
+            .collect();
+        Self::run_inner_full(
+            &areas,
+            &masks,
+            Some(&per_layer_overrides),
+            resin,
+            printer,
+            supports,
+            plate,
+            ambient,
+            initial_led_temp,
+            voxel_cure_mm,
+        )
+    }
+
     /// Internal: run the simulation given resolved areas + masks. Every public
     /// entry point converges here.
     #[allow(clippy::too_many_arguments)]
@@ -198,6 +303,49 @@ impl SimulationRunner {
         plate: &PlateAdhesionProfile,
         ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
+    ) -> Result<PrintSimulation, String> {
+        // Tier-1 scalar path: voxel mode disabled.
+        Self::run_inner_full(
+            areas,
+            masks,
+            per_layer_overrides,
+            resin,
+            printer,
+            supports,
+            plate,
+            ambient,
+            initial_led_temp,
+            None,
+        )
+    }
+
+    /// Internal: full run with optional voxel cure mode (ADR-0017 / t2f1).
+    /// `voxel_cure_mm: Some(_)` enables the Tier-2 path — a `CureField` and
+    /// `PhotoinitiatorField` are built sized to the layer masks + layer count
+    /// and installed on the returned aggregate. Each layer's predict_layer
+    /// result has its `cure_depth_um` and `worst_cure_depth_um` cache fields
+    /// overwritten with `LayerSummary.mean` / `LayerSummary.min` from the
+    /// voxel field after the per-pixel exposure pass.
+    ///
+    /// V1 simplification: the cure field uses the LayerMask's `voxel_size_mm`
+    /// for X/Y/Z. The CLI `--voxel-cure-mm` value is preserved on the call
+    /// chain and serves as a request — when it disagrees with the mask
+    /// resolution, the simulation runs anyway (mask wins for v1; t2f5 GPU
+    /// work will introduce resolution decoupling). The Z-voxel index equals
+    /// the layer index — one voxel slab per layer.
+    #[allow(clippy::too_many_arguments)]
+    fn run_inner_full(
+        areas: &[CrossSectionArea],
+        masks: &[LayerMask],
+        per_layer_overrides: Option<&[(f32, f32)]>,
+        resin: &ResinProfile,
+        printer: &PrinterProfile,
+        supports: &SupportConfig,
+        plate: &PlateAdhesionProfile,
+        ambient: AmbientTemperature,
+        initial_led_temp: Option<InitialLedTemperature>,
+        #[cfg_attr(not(feature = "field-sim"), allow(unused_variables))]
+        voxel_cure_mm: Option<f32>,
     ) -> Result<PrintSimulation, String> {
         let recipe = resin.recipe();
         let suction_map = Self::build_suction_map(masks)?;
@@ -214,6 +362,48 @@ impl SimulationRunner {
         let mut sim = PrintSimulation::new(recipe.clone(), printer.clone());
         let mut prev_area = CrossSectionArea::new(0.0).expect("zero is valid");
 
+        // ADR-0017 / t2f1: build the voxel state up-front when voxel mode is on.
+        // `voxel_state` is `Some` only when (a) the feature is compiled in AND
+        // (b) the caller passed `voxel_cure_mm: Some(_)` AND (c) masks/layers
+        // are non-empty (zero-layer prints have nothing to voxelize).
+        #[cfg(feature = "field-sim")]
+        let mut voxel_state: Option<VoxelState> =
+            if let Some(_requested_mm) = voxel_cure_mm {
+                if let Some(first) = masks.first() {
+                    let nx = first.width_cells();
+                    let ny = first.height_cells();
+                    let voxel_size_mm = first.voxel_size_mm();
+                    let nz = areas.len() as u32;
+                    if nx > 0 && ny > 0 && nz > 0 {
+                        let cure = CureField::new(nx, ny, nz, voxel_size_mm, [0.0, 0.0, 0.0])
+                            .map_err(|e| format!("voxel cure field: {e}"))?;
+                        let pi = PhotoinitiatorField::new(
+                            nx,
+                            ny,
+                            nz,
+                            resin.photoinitiator_concentration_initial(),
+                        )
+                        .map_err(|e| format!("photoinitiator field: {e}"))?;
+                        Some(VoxelState {
+                            cure,
+                            pi,
+                            dp_um: resin.penetration_depth_um(),
+                            ec_ref_mj_cm2: resin.critical_energy_mj_cm2(),
+                            ref_temp_c: resin.reference_temp_c(),
+                            ea_cure_kj_mol: resin.effective_cure_kinetics_ea_kj_mol(),
+                            k_d: resin.effective_photoinitiator_decay_constant_k_d(),
+                            led_power_mw_cm2: printer.led_power_mw_cm2(),
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
         for (i, &area) in areas.iter().enumerate() {
             let (exposure_override, lift_speed_override) = per_layer_overrides
                 .and_then(|pl| pl.get(i).copied())
@@ -225,16 +415,124 @@ impl SimulationRunner {
                 suction_force_n: suction_map.get(&(i as u32)).copied(),
                 is_raft: matches!(phases.get(i), Some(LayerPhase::Raft)),
             };
-            let (result, failures) = FailurePredictor::predict_layer(
+            #[allow(unused_mut)]
+            let (mut result, failures) = FailurePredictor::predict_layer(
                 i as u32, area, prev_area, &overrides, resin, printer, recipe, supports, plate,
                 &thermal,
             );
+
+            // ADR-0017 / t2f1: voxel cure pass for this layer.
+            #[cfg(feature = "field-sim")]
+            if let Some(state) = voxel_state.as_mut() {
+                Self::apply_voxel_cure_for_layer(
+                    state,
+                    i as u32,
+                    &masks[i],
+                    &thermal,
+                    recipe,
+                    printer,
+                    &overrides,
+                    &mut result,
+                )?;
+            }
+
             sim.add_layer(result, failures)
                 .map_err(|e| format!("simulation: {e}"))?;
             prev_area = area;
         }
 
+        #[cfg(feature = "field-sim")]
+        if let Some(state) = voxel_state {
+            sim.set_voxel_fields(state.cure, state.pi)
+                .map_err(|e| format!("install voxel fields: {e}"))?;
+        }
+
         Ok(sim)
+    }
+
+    /// Apply the per-layer voxel cure pass: iterate set pixels of the layer
+    /// mask, run `VoxelCureCalculator::apply_column_exposure` for each, then
+    /// overwrite the LayerResult's Tier-1 cache fields with `LayerSummary`
+    /// from the voxel field's Z-slab at this layer. v1 minimum-viable
+    /// implementation per ADR-0017.
+    #[cfg(feature = "field-sim")]
+    #[allow(clippy::too_many_arguments)]
+    fn apply_voxel_cure_for_layer(
+        state: &mut VoxelState,
+        layer: u32,
+        mask: &LayerMask,
+        thermal: &ThermalContext,
+        recipe: &crate::entities::Recipe,
+        printer: &PrinterProfile,
+        overrides: &LayerOverrides,
+        result: &mut crate::entities::LayerResult,
+    ) -> Result<(), String> {
+        let exposure_sec = overrides
+            .exposure_sec
+            .unwrap_or(if layer < recipe.bottom_layer_count() {
+                recipe.bottom_exposure_sec()
+            } else {
+                recipe.normal_exposure_sec()
+            });
+
+        // Average per-pixel intensity. Spatial uniformity variation is a
+        // t2f2 concern; v1 uses the LED nominal directly.
+        let intensity = state.led_power_mw_cm2;
+
+        let dp =
+            PenetrationDepth::new(state.dp_um).map_err(|e| format!("voxel dp: {e}"))?;
+
+        // Apply the column exposure for every set pixel in this layer mask.
+        for (ix, iy) in mask.iter_solid() {
+            VoxelCureCalculator::apply_column_exposure(
+                &mut state.cure,
+                &mut state.pi,
+                ix,
+                iy,
+                layer,
+                intensity,
+                exposure_sec,
+                dp,
+                state.k_d,
+            )
+            .map_err(|e| format!("voxel cure layer {layer}: {e}"))?;
+        }
+
+        // Recompute layer summary using KB-153 Ec(T) at the actual vat
+        // temperature for this layer (single-source-arrhenius-helper
+        // pattern — delegate to CureCalculator via VoxelCureCalculator).
+        let vat_temp = crate::services::ThermalCalculator::vat_temperature_at_layer_v2(
+            recipe,
+            printer,
+            thermal.ambient.value(),
+            thermal.initial_led_temp.map(|t| t.value()),
+            layer,
+        );
+        let ec_ref = Energy::new(state.ec_ref_mj_cm2)
+            .map_err(|e| format!("ec_ref: {e}"))?;
+        let ec_t = VoxelCureCalculator::ec_at_temp(
+            ec_ref,
+            state.ref_temp_c,
+            vat_temp,
+            state.ea_cure_kj_mol,
+        );
+
+        // Replace the Tier-1 scalar cache with the voxel-derived summary.
+        // LayerResult's `cure_depth_um` and `worst_cure_depth_um` stay as
+        // `pub f32` caches; the dispatch methods on LayerResult fall back
+        // to these when no aggregate cure_field is consulted, but here we
+        // promote the voxel result into the cache so that direct field
+        // readers (legacy callers) see the voxel-corrected number.
+        if let Ok(summary) = state.cure.layer_summary(layer, state.dp_um, ec_t.value()) {
+            if summary.mean.is_finite() && summary.mean >= 0.0 {
+                result.cure_depth_um = summary.mean;
+            }
+            if summary.min.is_finite() && summary.min >= 0.0 {
+                result.worst_cure_depth_um = summary.min;
+            }
+        }
+
+        Ok(())
     }
 
     /// Run SuctionDetector mask-based pre-pass and build a layer→force map.
