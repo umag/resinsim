@@ -302,6 +302,15 @@ mod tests {
         assert_eq!(s2.as_slice(), s.as_slice());
     }
 
+    /// Canonical serde-side NaN/non-positive regression guard
+    /// (harvest UAT-C, ctb-layer-height-authority). The
+    /// `#[serde(try_from = "Vec<f32>")]` attribute routes Deserialize
+    /// through the validating constructor — this test pins that
+    /// behaviour so a future drift (e.g. someone switching to a
+    /// derive-Deserialize that bypasses validation) panics loudly.
+    /// Production callers that arrive at LayerHeightSeq via Deserialize
+    /// (e.g. from a sim.json file) get the same invariant as
+    /// `try_from_vec` constructors.
     #[test]
     fn serde_deserialize_rejects_invalid_vec() {
         // try_from = "Vec<f32>" runs the validating constructor.

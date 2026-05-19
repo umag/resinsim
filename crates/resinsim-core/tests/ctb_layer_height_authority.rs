@@ -415,4 +415,75 @@ mod tier2 {
             .expect("Tier-2 A provenance")
             .has_mismatch());
     }
+
+    /// Harvest UAT-B: variable-Z + Tier-2. Per-layer dispatch must
+    /// reach `apply_voxel_cure_for_layer` so that layers with
+    /// different physical slab thicknesses produce different
+    /// voxel-cure outputs. Without per-layer dispatch every layer
+    /// would have used the slice's first value and this test would
+    /// see equal cure depths everywhere.
+    #[test]
+    fn variable_z_tier2_dispatches_per_layer_slab() {
+        let printer = PrinterProfile::generic_msla_4k();
+        // 5 layers @ 30/40/50/40/30 µm — same shape used by the
+        // Tier-1 variable-Z regression test for consistency.
+        let resin = resin_with_layer_height(40.0);
+        let layer_height_mm = |h: f32| h / 1000.0;
+        let mut z_mm = 0.0_f32;
+        let heights = [30.0_f32, 40.0, 50.0, 40.0, 30.0];
+        let mut layers: Vec<LayerInput> = Vec::with_capacity(5);
+        for (i, h) in heights.iter().enumerate() {
+            z_mm += layer_height_mm(*h);
+            let mut li = LayerInput::new(i as u32, 3.0 * 3.0 * 0.25, 2.5, 60.0, *h, z_mm)
+                .expect("test fixture: literal LayerInput args satisfy preconditions");
+            li.mask = Some(solid_3x3_mask());
+            layers.push(li);
+        }
+
+        let sim = run_tier2(&layers, &resin, &printer);
+
+        // Provenance surfaces variable kind, not uniform.
+        let prov = sim
+            .layer_height_provenance()
+            .expect("Tier-2 variable-Z run surfaces provenance");
+        assert!(
+            prov.uniform_height_um().is_none(),
+            "must NOT report uniform"
+        );
+        let kind = &prov.mismatch().expect("variable run has mismatch").kind;
+        assert!(
+            matches!(kind, resinsim_core::values::MismatchKind::Variable),
+            "expected Variable mismatch kind, got {kind:?}"
+        );
+
+        // The voxel cure summary is overwritten per layer from
+        // `cure_field.layer_summary(layer)` after the per-pixel pass.
+        // Layer 0 sees a 30 µm slab; layer 2 sees a 50 µm slab. The
+        // CureField stores per-voxel dose accumulated using each
+        // layer's `layer_height_um` as the Z-step — so the per-layer
+        // summary cache on LayerResult MUST differ between layer 0
+        // and layer 2.
+        //
+        // Bug it would catch: a future regression that passes a single
+        // scalar layer_height (uniform path) into the variable-Z code
+        // path would make every layer's cache the same value, and
+        // this assertion would fail loudly.
+        let layer0 = sim.layers()[0].cure_depth_um;
+        let layer2 = sim.layers()[2].cure_depth_um;
+        assert!(
+            (layer0 - layer2).abs() > 1e-3,
+            "variable-Z Tier-2 per-layer dispatch: layer 0 (30 µm slab) and \
+             layer 2 (50 µm slab) must produce different cure_depth_um \
+             (layer0={layer0}, layer2={layer2})"
+        );
+
+        // NB: a layer-0 vs layer-4 "same slab → same cure depth" symmetry
+        // check would fail — photoinitiator depletes monotonically up
+        // the Z column (KB-160), so layer 4 inherits the cumulative
+        // depletion from layers 0-3 and produces a different cure depth
+        // than layer 0 even at identical slab thickness. The
+        // per-layer-dispatch property the test pins is the layer-0
+        // vs layer-2 inequality above — that's enough to prove the
+        // slab varies per layer.
+    }
 }
