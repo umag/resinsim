@@ -30,10 +30,13 @@ degradation_temp_c = 50.0
 min_safe_temp_c = 15.0
 
 # Recipe (ADR-0005 Axis 2b) — ceramic-filled resin needs thinner layers + longer cure.
-# Sources: Elegoo vendor recommendation for ceramic-filled Mars-class resins; KB-100
-# penetration depth (145 µm) supports thinner layers; higher viscosity (KB-141) slows peel.
+# Sources: Mag's calibrated value (30 µm) — ceramic particles scatter UV and the
+# Dp=145 µm penetration depth supports thinner layers than the original 40 µm
+# estimate. Higher viscosity (KB-141) slows peel, so 30 µm + the longer cure
+# below is the calibrated operating point. Elegoo vendor recommendations for
+# ceramic-filled Mars-class resins.
 [recipe]
-layer_height_um = 40.0
+layer_height_um = 30.0
 bottom_layer_count = 8
 transition_layers = 4
 normal_exposure_sec = 3.2

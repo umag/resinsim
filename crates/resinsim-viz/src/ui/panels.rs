@@ -17,7 +17,6 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::CurrentLayer;
 use crate::screenshot::{default_screenshot_path, spawn_button_screenshot, LastScreenshot};
 use crate::sim::{loaded_basename, RunSimRequest, SimulationResult};
 use crate::slice::LoadedSliceStack;
@@ -25,6 +24,7 @@ use crate::ui::plots::{
     build_layer_chart_data, build_plot_data, render_layer_timeline, render_plots,
 };
 use crate::ui::state::{run_block_reason, BottomPanelState, PickerState};
+use crate::CurrentLayer;
 
 /// Toast lifetime for the "Captured: <basename>" label after the
 /// Capture-screenshot button is clicked. 3 s @ 60 Hz keeps the

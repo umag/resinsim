@@ -104,10 +104,8 @@ pub struct V2UiPlugin;
 
 impl Plugin for V2UiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<V2Dashboard>().add_systems(
-            EguiPrimaryContextPass,
-            draw_v2_dashboard,
-        );
+        app.init_resource::<V2Dashboard>()
+            .add_systems(EguiPrimaryContextPass, draw_v2_dashboard);
     }
 }
 
@@ -161,9 +159,8 @@ pub fn draw_v2_dashboard(
         let cursor_max = cursor.max;
         let sim_ref = loaded.simulation.as_ref();
         let source_path = loaded.source_path.as_deref();
-        let failures: &[resinsim_core::entities::FailureEvent] = sim_ref
-            .map(|s| s.failures())
-            .unwrap_or(&[]);
+        let failures: &[resinsim_core::entities::FailureEvent] =
+            sim_ref.map(|s| s.failures()).unwrap_or(&[]);
 
         bevy_egui::egui::TopBottomPanel::top("v2-summary")
             .resizable(false)
@@ -180,9 +177,7 @@ pub fn draw_v2_dashboard(
             .resizable(false)
             .default_height(scrubber::SCRUBBER_HEIGHT_PX)
             .show(ctx, |ui| {
-                if let Some(new_layer) =
-                    scrubber::render(ui, cursor_layer, cursor_max, failures)
-                {
+                if let Some(new_layer) = scrubber::render(ui, cursor_layer, cursor_max, failures) {
                     if new_layer != cursor.index {
                         cursor.index = new_layer;
                     }
@@ -194,9 +189,7 @@ pub fn draw_v2_dashboard(
             .default_width(failures_rail::FAILURES_WIDTH_DEFAULT)
             .min_width(failures_rail::FAILURES_WIDTH_MIN)
             .show(ctx, |ui| {
-                if let Some(new_layer) =
-                    failures_rail::render(ui, sim_ref, cursor.index)
-                {
+                if let Some(new_layer) = failures_rail::render(ui, sim_ref, cursor.index) {
                     if new_layer != cursor.index {
                         cursor.index = new_layer.min(cursor_max);
                     }

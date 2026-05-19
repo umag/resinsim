@@ -46,25 +46,22 @@ pub fn render(
         );
         separator(ui);
         ui.label(
-            egui::RichText::new(format!("total {}", format_total_time(total_time_seconds(sim))))
-                .monospace()
-                .color(theme::INK_MUTED),
+            egui::RichText::new(format!(
+                "total {}",
+                format_total_time(total_time_seconds(sim))
+            ))
+            .monospace()
+            .color(theme::INK_MUTED),
         );
         separator(ui);
         if let Some((layer, force)) = max_force_layer(sim) {
-            if chip(
-                ui,
-                &format!("max-force layer {layer:0>4} · {force:.1} N"),
-            ) {
+            if chip(ui, &format!("max-force layer {layer:0>4} · {force:.1} N")) {
                 jump_to = Some(layer);
             }
         }
         separator(ui);
         if let Some((layer, sf)) = min_safety_layer(sim) {
-            if chip(
-                ui,
-                &format!("min-safety layer {layer:0>4} · {sf:.2}"),
-            ) {
+            if chip(ui, &format!("min-safety layer {layer:0>4} · {sf:.2}")) {
                 jump_to = Some(layer);
             }
         }
@@ -92,13 +89,9 @@ pub fn render(
 
 fn chip(ui: &mut egui::Ui, label: &str) -> bool {
     let resp = ui.add(
-        egui::Button::new(
-            egui::RichText::new(label)
-                .monospace()
-                .color(theme::INK),
-        )
-        .fill(theme::SURFACE_HIGH)
-        .stroke(egui::Stroke::new(1.0_f32, theme::GRID_LINE)),
+        egui::Button::new(egui::RichText::new(label).monospace().color(theme::INK))
+            .fill(theme::SURFACE_HIGH)
+            .stroke(egui::Stroke::new(1.0_f32, theme::GRID_LINE)),
     );
     resp.clicked()
 }
@@ -174,10 +167,7 @@ pub fn min_safety_layer(sim: Option<&PrintSimulation>) -> Option<(u32, f32)> {
     layer_min_finite(s.layers(), |l| l.safety_factor)
 }
 
-fn layer_max<F: Fn(&LayerResult) -> f32>(
-    layers: &[LayerResult],
-    field: F,
-) -> Option<(u32, f32)> {
+fn layer_max<F: Fn(&LayerResult) -> f32>(layers: &[LayerResult], field: F) -> Option<(u32, f32)> {
     let mut best: Option<(u32, f32)> = None;
     for (i, l) in layers.iter().enumerate() {
         let v = field(l);
@@ -357,14 +347,8 @@ mod tests {
 
     #[test]
     fn filename_stem_falls_back_for_non_sim_json_extension() {
-        assert_eq!(
-            sim_filename_stem(Path::new("/x/foo.json")),
-            "foo"
-        );
-        assert_eq!(
-            sim_filename_stem(Path::new("/x/bar.ctb")),
-            "bar"
-        );
+        assert_eq!(sim_filename_stem(Path::new("/x/foo.json")), "foo");
+        assert_eq!(sim_filename_stem(Path::new("/x/bar.ctb")), "bar");
     }
 
     #[test]

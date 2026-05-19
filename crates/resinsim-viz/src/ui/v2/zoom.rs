@@ -244,8 +244,7 @@ mod tests {
         // Steady state at 5.0 (200 samples) plus a single 1e6 spike.
         let mut xs = vec![5.0; 200];
         xs.push(1_000_000.0);
-        let (lo, hi) = percentile_bounds(&xs, 0.0, 0.98, 0.0)
-            .expect("non-empty after filter");
+        let (lo, hi) = percentile_bounds(&xs, 0.0, 0.98, 0.0).expect("non-empty after filter");
         // p98 of 201 sorted values: idx = round(200 * 0.98) = 196.
         // Index 196 of [5.0×200, 1e6] is still 5.0 (the spike sits
         // at index 200). So hi = 5.0, no spike pulled in.
@@ -338,5 +337,4 @@ mod tests {
         assert!((lo - 1.0).abs() < 1e-9);
         assert!((hi - 5.0).abs() < 1e-9);
     }
-
 }

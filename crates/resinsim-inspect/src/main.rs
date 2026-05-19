@@ -78,15 +78,17 @@ enum Commands {
         /// silently (POSIX default; ADR-0015).
         #[arg(long)]
         out: Option<std::path::PathBuf>,
-        /// **Tier-2 voxel cure mode** (ADR-0017 / t2f1). Voxel edge length in
-        /// mm. Presence enables the voxel cure + photoinitiator depletion
-        /// path; absence runs the Tier-1 scalar path. Precedence:
-        /// (1) this flag value — highest;
-        /// (2) `PrinterProfile.voxel_cure_resolution_mm` — middle;
-        /// (3) workspace default 0.2 mm — lowest.
-        /// Validated finite > 0 at parse time. Only available in builds with
-        /// the `field-sim` Cargo feature; default builds reject this flag
-        /// with the standard clap unknown-flag error.
+        /// **Tier-2 voxel cure mode** (ADR-0017 / t2f1). Presence enables
+        /// the voxel cure + photoinitiator depletion path; absence runs the
+        /// Tier-1 scalar path. The flag VALUE is parsed and validated at
+        /// parse time (finite > 0, typical 0.05–0.5 mm) but is currently
+        /// **informational only** — v1 uses the slicer mask's voxel size
+        /// for X/Y and the recipe's layer_height_um for Z. CLI > profile
+        /// > workspace-default precedence is reserved for t2f5
+        /// (resolution decoupling); until then `PrinterProfile.voxel_cure_resolution_mm`
+        /// is parsed but not consulted at runtime. Only available in builds
+        /// with the `field-sim` Cargo feature; default builds reject this
+        /// flag with the standard clap unknown-flag error.
         #[cfg(feature = "field-sim")]
         #[arg(long, value_parser = parse_voxel_cure_mm)]
         voxel_cure_mm: Option<f32>,
@@ -1288,7 +1290,15 @@ fn run_simulation_with_optional_voxel(
     }
     // Tier-1 path: no voxel flag, or non-CTB input.
     let _ = voxel_cure_mm;
-    SimulationRunner::run_auto(input_path, resin, printer, supports, plate, ambient, initial_led_temp)
+    SimulationRunner::run_auto(
+        input_path,
+        resin,
+        printer,
+        supports,
+        plate,
+        ambient,
+        initial_led_temp,
+    )
 }
 
 fn default_sim_out_path(
@@ -1611,7 +1621,7 @@ mod tests {
     #[cfg(feature = "field-sim")]
     #[test]
     fn voxel_cure_mm_rejects_zero() {
-        let err = parse_voxel_cure_mm("0").unwrap_err();
+        let err = parse_voxel_cure_mm("0").expect_err("test fixture: '0' deliberately violates the > 0.0 constraint, so Err is the expected outcome");
         assert!(
             err.contains("finite and positive"),
             "error must explain the constraint: {err}"

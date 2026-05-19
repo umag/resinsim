@@ -37,13 +37,9 @@ use thiserror::Error;
 pub enum PhotoinitiatorFieldError {
     #[error("PhotoinitiatorField dimensions must all be positive, got {nx}×{ny}×{nz}")]
     InvalidDimensions { nx: u32, ny: u32, nz: u32 },
-    #[error(
-        "PhotoinitiatorField initial_concentration must be finite and in [0, 1], got {0}"
-    )]
+    #[error("PhotoinitiatorField initial_concentration must be finite and in [0, 1], got {0}")]
     InvalidInitialConcentration(f32),
-    #[error(
-        "PhotoinitiatorField index ({ix}, {iy}, {iz}) out of bounds for {nx}×{ny}×{nz}"
-    )]
+    #[error("PhotoinitiatorField index ({ix}, {iy}, {iz}) out of bounds for {nx}×{ny}×{nz}")]
     OutOfBounds {
         ix: u32,
         iy: u32,
@@ -85,9 +81,7 @@ impl PhotoinitiatorField {
             return Err(PhotoinitiatorFieldError::InvalidDimensions { nx, ny, nz });
         }
         // NaN-two-layer-defence: explicit is_finite first.
-        if !initial_concentration.is_finite()
-            || !(0.0..=1.0).contains(&initial_concentration)
-        {
+        if !initial_concentration.is_finite() || !(0.0..=1.0).contains(&initial_concentration) {
             return Err(PhotoinitiatorFieldError::InvalidInitialConcentration(
                 initial_concentration,
             ));
@@ -150,10 +144,7 @@ impl PhotoinitiatorField {
     ) -> Result<(), PhotoinitiatorFieldError> {
         self.check_bounds(ix, iy, iz)?;
         if !k_d.is_finite() || k_d < 0.0 || !delta_dose.is_finite() || delta_dose < 0.0 {
-            return Err(PhotoinitiatorFieldError::InvalidDepletionInput {
-                k_d,
-                delta_dose,
-            });
+            return Err(PhotoinitiatorFieldError::InvalidDepletionInput { k_d, delta_dose });
         }
         let idx = (ix as usize, iy as usize, iz as usize);
         let c_before = self.data[idx];
@@ -170,10 +161,7 @@ impl PhotoinitiatorField {
     /// Minimum concentration anywhere in the field. Useful for
     /// "is the resin fully cured?" checks.
     pub fn min_concentration(&self) -> f32 {
-        self.data
-            .iter()
-            .copied()
-            .fold(f32::INFINITY, f32::min)
+        self.data.iter().copied().fold(f32::INFINITY, f32::min)
     }
 
     /// Maximum concentration anywhere in the field. Should never exceed
@@ -182,12 +170,7 @@ impl PhotoinitiatorField {
         self.data.iter().copied().fold(0.0f32, f32::max)
     }
 
-    fn check_bounds(
-        &self,
-        ix: u32,
-        iy: u32,
-        iz: u32,
-    ) -> Result<(), PhotoinitiatorFieldError> {
+    fn check_bounds(&self, ix: u32, iy: u32, iz: u32) -> Result<(), PhotoinitiatorFieldError> {
         if ix >= self.nx || iy >= self.ny || iz >= self.nz {
             return Err(PhotoinitiatorFieldError::OutOfBounds {
                 ix,
@@ -207,8 +190,7 @@ mod tests {
     use super::*;
 
     fn make_2x2x2() -> PhotoinitiatorField {
-        PhotoinitiatorField::new(2, 2, 2, 1.0)
-            .expect("2×2×2 test fixture is valid")
+        PhotoinitiatorField::new(2, 2, 2, 1.0).expect("2×2×2 test fixture is valid")
     }
 
     #[test]
@@ -238,18 +220,18 @@ mod tests {
 
     #[test]
     fn new_accepts_zero_initial_concentration() {
-        let f = PhotoinitiatorField::new(2, 2, 2, 0.0).unwrap();
+        let f = PhotoinitiatorField::new(2, 2, 2, 0.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
         assert_eq!(f.initial_concentration(), 0.0);
-        assert_eq!(f.concentration_at(0, 0, 0).unwrap(), 0.0);
+        assert_eq!(f.concentration_at(0, 0, 0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])"), 0.0);
     }
 
     #[test]
     fn new_initialises_uniform_concentration() {
-        let f = PhotoinitiatorField::new(3, 3, 3, 0.85).unwrap();
+        let f = PhotoinitiatorField::new(3, 3, 3, 0.85).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
         for ix in 0..3 {
             for iy in 0..3 {
                 for iz in 0..3 {
-                    assert!((f.concentration_at(ix, iy, iz).unwrap() - 0.85).abs() < 1e-6);
+                    assert!((f.concentration_at(ix, iy, iz).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])") - 0.85).abs() < 1e-6);
                 }
             }
         }
@@ -260,9 +242,9 @@ mod tests {
         let mut f = make_2x2x2();
         // KB-160 analytical: C_after = C_before × exp(-k_d × delta_dose)
         //                  = 1.0 × exp(-0.05 × 50) = exp(-2.5) ≈ 0.0821
-        f.deplete(0, 0, 0, 0.05, 50.0).unwrap();
+        f.deplete(0, 0, 0, 0.05, 50.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
         let expected = (-2.5f32).exp();
-        let actual = f.concentration_at(0, 0, 0).unwrap();
+        let actual = f.concentration_at(0, 0, 0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
         assert!(
             (actual - expected).abs() < 1e-5,
             "kb-160 analytical: expected {expected}, got {actual}"
@@ -272,25 +254,25 @@ mod tests {
     #[test]
     fn deplete_with_zero_dose_is_noop() {
         let mut f = make_2x2x2();
-        f.deplete(0, 0, 0, 0.05, 0.0).unwrap();
-        assert_eq!(f.concentration_at(0, 0, 0).unwrap(), 1.0);
+        f.deplete(0, 0, 0, 0.05, 0.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
+        assert_eq!(f.concentration_at(0, 0, 0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])"), 1.0);
     }
 
     #[test]
     fn deplete_with_zero_k_d_is_noop() {
         let mut f = make_2x2x2();
-        f.deplete(0, 0, 0, 0.0, 100.0).unwrap();
-        assert_eq!(f.concentration_at(0, 0, 0).unwrap(), 1.0);
+        f.deplete(0, 0, 0, 0.0, 100.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
+        assert_eq!(f.concentration_at(0, 0, 0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])"), 1.0);
     }
 
     #[test]
     fn deplete_monotonically_non_increasing() {
         let mut f = make_2x2x2();
-        let before = f.concentration_at(0, 0, 0).unwrap();
-        f.deplete(0, 0, 0, 0.05, 10.0).unwrap();
-        let after_first = f.concentration_at(0, 0, 0).unwrap();
-        f.deplete(0, 0, 0, 0.05, 10.0).unwrap();
-        let after_second = f.concentration_at(0, 0, 0).unwrap();
+        let before = f.concentration_at(0, 0, 0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
+        f.deplete(0, 0, 0, 0.05, 10.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
+        let after_first = f.concentration_at(0, 0, 0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
+        f.deplete(0, 0, 0, 0.05, 10.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
+        let after_second = f.concentration_at(0, 0, 0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
         assert!(after_first < before);
         assert!(after_second < after_first);
         assert!(after_second > 0.0);
@@ -301,8 +283,8 @@ mod tests {
         let mut f = make_2x2x2();
         // 1000 × 50 = 50000 in the exponent ⇒ exp(-50000) underflows to 0.
         // Result must clamp to >= 0, never NaN or negative.
-        f.deplete(0, 0, 0, 1000.0, 50.0).unwrap();
-        let c = f.concentration_at(0, 0, 0).unwrap();
+        f.deplete(0, 0, 0, 1000.0, 50.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
+        let c = f.concentration_at(0, 0, 0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
         assert!(c >= 0.0);
         assert!(c.is_finite());
     }
@@ -340,8 +322,8 @@ mod tests {
     #[test]
     fn min_concentration_returns_smallest() {
         let mut f = make_2x2x2();
-        f.deplete(0, 0, 0, 0.05, 50.0).unwrap(); // ≈ 0.082
-        f.deplete(1, 1, 1, 0.05, 10.0).unwrap(); // ≈ 0.606
+        f.deplete(0, 0, 0, 0.05, 50.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])"); // ≈ 0.082
+        f.deplete(1, 1, 1, 0.05, 10.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])"); // ≈ 0.606
         let min = f.min_concentration();
         assert!((min - (-2.5f32).exp()).abs() < 1e-5);
     }
@@ -349,14 +331,14 @@ mod tests {
     #[test]
     fn max_concentration_never_exceeds_initial() {
         let mut f = make_2x2x2();
-        f.deplete(0, 0, 0, 0.05, 50.0).unwrap();
-        f.deplete(1, 1, 1, 0.05, 10.0).unwrap();
+        f.deplete(0, 0, 0, 0.05, 50.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
+        f.deplete(1, 1, 1, 0.05, 10.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
         assert!(f.max_concentration() <= f.initial_concentration());
     }
 
     #[test]
     fn voxel_count_and_bytes() {
-        let f = PhotoinitiatorField::new(10, 20, 30, 1.0).unwrap();
+        let f = PhotoinitiatorField::new(10, 20, 30, 1.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
         assert_eq!(f.voxel_count(), 6000);
         assert_eq!(f.total_bytes(), 24_000);
     }
@@ -368,8 +350,8 @@ mod tests {
         let mut f = make_2x2x2();
         let mut prev = 1.0;
         for _ in 0..50 {
-            f.deplete(0, 0, 0, 0.05, 1.0).unwrap();
-            let curr = f.concentration_at(0, 0, 0).unwrap();
+            f.deplete(0, 0, 0, 0.05, 1.0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
+            let curr = f.concentration_at(0, 0, 0).expect("test fixture: literal inputs satisfy PhotoinitiatorField constructor preconditions (positive dims + finite concentration in [0,1])");
             assert!(
                 curr <= prev,
                 "monotone non-increasing violated: prev={prev}, curr={curr}"

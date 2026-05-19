@@ -39,17 +39,24 @@ fn solid_3x3_mask() -> LayerMask {
 fn layer_inputs_with_mask(n: u32) -> Vec<LayerInput> {
     (0..n)
         .map(|i| {
-            // Mark every layer at the SAME bottom-section exposure so we
-            // get repeatable dose accumulation across layers.
+            // Normal-class exposure (3 s) at 50 µm layer height. After
+            // the Z-step fix (code review round 1 HIGH-correctness), Z-step
+            // is layer_height_um = 50 µm not voxel_size_mm × 1000 = 500 µm,
+            // so depth at iz=0 centre is 25 µm not 250 µm. With Dp ≈ 170 µm,
+            // attenuation = exp(-25/170) ≈ 0.864; surface dose 3 × 4 = 12
+            // mJ/cm² × 0.864 = 10.4 mJ/cm² ⇒ above ~5.7 mJ/cm² Ec(T) at
+            // ambient. This exposure level is the regression guard: any
+            // future regression of the Z-step bug pushes it back under Ec
+            // and breaks these tests loudly.
             let mut li = LayerInput::new(
                 i,
                 3.0 * 3.0 * 0.25, // area = 9 voxels × 0.25 mm² each = 2.25 mm²
-                2.5,              // exposure_sec
+                3.0,              // exposure_sec — normal-class
                 60.0,             // lift_speed
                 50.0,             // layer height 50 µm
                 (i as f32 + 1.0) * 0.05,
             )
-            .expect("valid LayerInput for factory recipe");
+            .expect("test fixture: literal LayerInput args satisfy LayerInput::new preconditions");
             li.mask = Some(solid_3x3_mask());
             li
         })
@@ -85,7 +92,7 @@ fn voxel_mode_installs_fields_on_aggregate() {
         sim.photoinitiator_field().is_some(),
         "voxel mode must install photoinitiator_field on the aggregate"
     );
-    let (nx, ny, nz) = sim.cure_field().unwrap().dimensions();
+    let (nx, ny, nz) = sim.cure_field().expect("test fixture: literal inputs satisfy the called function's preconditions (positive dims, validated profiles, finite f32 in domain)").dimensions();
     assert_eq!((nx, ny, nz), (3, 3, 5));
 }
 
@@ -135,9 +142,11 @@ fn voxel_mode_overwrites_layer_caches_with_summary() {
     )
     .expect("voxel-mode run must succeed");
 
-    // After the voxel pass, each layer's cache must reflect the voxel field's
-    // LayerSummary, not the original Tier-1 scalar. Both should be finite
-    // and positive (the synthesised exposure is well above Ec).
+    // After the voxel pass, each layer's cache must reflect the voxel
+    // field's LayerSummary, not the original Tier-1 scalar. With
+    // PrinterProfile::generic_msla_4k carrying lcd_uniformity_variation = 0.22
+    // (Saturn-2 class), `UniformityCalculator::intensity_factor` produces a
+    // ~±11% radial spread → mean > min strictly. Both must be finite > 0.
     for layer in sim.layers() {
         assert!(
             layer.cure_depth_um.is_finite() && layer.cure_depth_um >= 0.0,
@@ -151,11 +160,92 @@ fn voxel_mode_overwrites_layer_caches_with_summary() {
             layer.index,
             layer.worst_cure_depth_um
         );
-        // For a uniformly-exposed solid mask the min should equal the mean
-        // (no per-pixel variation yet — uniformity is t2f2).
+        // KB-120 spatial variation: with non-zero LCD uniformity_variation,
+        // edge pixels see less intensity than centre ⇒ shallower cure ⇒
+        // LayerSummary.min < LayerSummary.mean.
+        assert!(
+            layer.cure_depth_um > layer.worst_cure_depth_um,
+            "layer {}: KB-120 spatial uniformity should give mean > min, got mean={}, min={}",
+            layer.index,
+            layer.cure_depth_um,
+            layer.worst_cure_depth_um
+        );
+    }
+}
+
+/// Uniform printer (lcd_uniformity_variation = 0.0) ⇒ voxel pass produces
+/// mean == min, matching pre-uniformity-wiring legacy behaviour. Guards
+/// the precedence-chain collapse for ideal/test printers without LCD
+/// uniformity calibration data.
+#[test]
+fn voxel_mode_zero_uniformity_keeps_mean_equal_min() {
+    use resinsim_core::values::LayerMask;
+    let resin = ResinProfile::generic_standard();
+    // Construct a printer with uniformity 0.0 by serde-deserialising a
+    // hand-rolled TOML — fields are pub(crate) so external code (tests)
+    // can't construct directly. The TOML round-trip is the documented
+    // entry point per PrinterProfileRepository.
+    let toml = r#"
+name = "Test Uniform Printer"
+led_power_mw_cm2 = 4.0
+pixel_pitch_um = 50.0
+layer_height_range_um = { min = 20.0, max = 100.0 }
+exposure_range_sec = { min = 1.0, max = 60.0 }
+lift_speed_range_mm_min = { min = 10.0, max = 200.0 }
+bottom_layer_count_max = 15
+z_stiffness_n_per_mm = 460.0
+delta_t_steady_c = 10.0
+thermal_tau_sec = 1200.0
+lcd_uniformity_variation = 0.0
+"#;
+    let printer: PrinterProfile = toml::from_str(toml)
+        .expect("test fixture: hand-rolled TOML with all required PrinterProfile fields parses");
+    printer
+        .validate()
+        .expect("test fixture: TOML inputs satisfy PrinterProfile::validate");
+
+    let layers: Vec<LayerInput> = (0..3)
+        .map(|i| {
+            let mut li = LayerInput::new(
+                i,
+                3.0 * 3.0 * 0.25,
+                2.5,
+                60.0,
+                50.0,
+                (i as f32 + 1.0) * 0.05,
+            )
+            .expect("test fixture: layer_input literal args satisfy LayerInput::new preconditions");
+            li.mask = Some(
+                LayerMask::new_all_solid(3, 3, 0.5)
+                    .expect("test fixture: 3×3 all-solid mask at 0.5 mm is valid"),
+            );
+            li
+        })
+        .collect();
+
+    let sim = SimulationRunner::run_from_layer_inputs_with_voxel(
+        &layers,
+        &resin,
+        &printer,
+        &SupportConfig {
+            tip_radius_mm: 0.2,
+            n_supports: 20,
+        },
+        &PlateAdhesionProfile::default_textured(),
+        test_ambient(),
+        None,
+        Some(0.5),
+    )
+    .expect(
+        "test fixture: uniform-printer + ceramic-grey resin run satisfies validated-input \
+         preconditions of run_from_layer_inputs_with_voxel",
+    );
+
+    for layer in sim.layers() {
         assert!(
             (layer.cure_depth_um - layer.worst_cure_depth_um).abs() < 1e-3,
-            "layer {}: uniform-mask voxel pass should give mean == min, got mean={}, min={}",
+            "layer {}: uniformity=0.0 + uniform-mask voxel pass must give mean == min, \
+             got mean={}, min={}",
             layer.index,
             layer.cure_depth_um,
             layer.worst_cure_depth_um
@@ -224,18 +314,31 @@ fn dispatch_summary_matches_overwritten_cache() {
     )
     .expect("voxel-mode run must succeed");
 
-    // The dispatch method goes through the voxel field's layer_summary
-    // (mean) and should match the cache that run_inner_full just wrote
-    // from the same summary. Float equality within 1e-3 µm.
+    // The dispatch reads layer_summary on demand using whatever ec the
+    // caller passes. The cache was written using KB-153 Ec(T) at the
+    // layer's vat temperature — NOT the resin's reference Ec. To make
+    // dispatch and cache agree, the test must pass the SAME Ec(T) the
+    // runner used. Compute it here using the same helper:
+    use resinsim_core::services::{CureCalculator, ThermalCalculator};
+    use resinsim_core::values::Energy;
+    let ec_ref = Energy::new(resin.critical_energy_mj_cm2())
+        .expect("test fixture: ResinProfile factory guarantees critical_energy_mj_cm2 > 0");
     for layer in sim.layers() {
-        let summary_cd = layer.cure_depth_um_summary(
-            &sim,
-            resin.penetration_depth_um(),
-            resin.critical_energy_mj_cm2(),
+        let vat = ThermalCalculator::vat_temperature_at_layer_v2(
+            resin.recipe(),
+            &printer,
+            test_ambient().value(),
+            None,
+            layer.index,
         );
-        // Dispatch reads from the voxel field directly; cache reads from
-        // the Tier-1 scalar that run_inner_full wrote from the same
-        // summary. They should agree to within numerical noise.
+        let ec_t = CureCalculator::ec_at_temp(
+            ec_ref,
+            resin.reference_temp_c(),
+            vat,
+            resin.effective_cure_kinetics_ea_kj_mol(),
+        );
+        let summary_cd =
+            layer.cure_depth_um_summary(&sim, resin.penetration_depth_um(), ec_t.value());
         assert!(
             (summary_cd.value() - layer.cure_depth_um).abs() < 1e-2,
             "layer {}: dispatch summary ({}) must equal overwritten cache ({})",

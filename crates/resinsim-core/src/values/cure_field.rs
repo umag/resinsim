@@ -46,9 +46,7 @@ pub enum CureFieldError {
     InvalidVoxelSize(f32),
     #[error("CureField bbox_min_mm must be finite on all axes, got ({x}, {y}, {z})")]
     InvalidBboxMin { x: f32, y: f32, z: f32 },
-    #[error(
-        "CureField index ({ix}, {iy}, {iz}) out of bounds for {nx}×{ny}×{nz}"
-    )]
+    #[error("CureField index ({ix}, {iy}, {iz}) out of bounds for {nx}×{ny}×{nz}")]
     OutOfBounds {
         ix: u32,
         iy: u32,
@@ -121,9 +119,7 @@ impl CureField {
         if !voxel_size_mm.is_finite() || voxel_size_mm <= 0.0 {
             return Err(CureFieldError::InvalidVoxelSize(voxel_size_mm));
         }
-        if !bbox_min_mm[0].is_finite()
-            || !bbox_min_mm[1].is_finite()
-            || !bbox_min_mm[2].is_finite()
+        if !bbox_min_mm[0].is_finite() || !bbox_min_mm[1].is_finite() || !bbox_min_mm[2].is_finite()
         {
             return Err(CureFieldError::InvalidBboxMin {
                 x: bbox_min_mm[0],
@@ -319,55 +315,54 @@ mod tests {
     use super::*;
 
     fn make_2x2x2() -> CureField {
-        CureField::new(2, 2, 2, 0.5, [0.0, 0.0, 0.0])
-            .expect("2×2×2 test fixture is valid")
+        CureField::new(2, 2, 2, 0.5, [0.0, 0.0, 0.0]).expect("2×2×2 test fixture is valid")
     }
 
     #[test]
     fn new_rejects_zero_x() {
-        let err = CureField::new(0, 2, 2, 0.5, [0.0, 0.0, 0.0]).unwrap_err();
+        let err = CureField::new(0, 2, 2, 0.5, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
         matches!(err, CureFieldError::InvalidDimensions { nx: 0, .. });
     }
 
     #[test]
     fn new_rejects_zero_y() {
-        let err = CureField::new(2, 0, 2, 0.5, [0.0, 0.0, 0.0]).unwrap_err();
+        let err = CureField::new(2, 0, 2, 0.5, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
         matches!(err, CureFieldError::InvalidDimensions { ny: 0, .. });
     }
 
     #[test]
     fn new_rejects_zero_z() {
-        let err = CureField::new(2, 2, 0, 0.5, [0.0, 0.0, 0.0]).unwrap_err();
+        let err = CureField::new(2, 2, 0, 0.5, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
         matches!(err, CureFieldError::InvalidDimensions { nz: 0, .. });
     }
 
     #[test]
     fn new_rejects_nan_voxel_size() {
-        let err = CureField::new(2, 2, 2, f32::NAN, [0.0, 0.0, 0.0]).unwrap_err();
+        let err = CureField::new(2, 2, 2, f32::NAN, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
         matches!(err, CureFieldError::InvalidVoxelSize(_));
     }
 
     #[test]
     fn new_rejects_zero_voxel_size() {
-        let err = CureField::new(2, 2, 2, 0.0, [0.0, 0.0, 0.0]).unwrap_err();
+        let err = CureField::new(2, 2, 2, 0.0, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
         matches!(err, CureFieldError::InvalidVoxelSize(_));
     }
 
     #[test]
     fn new_rejects_negative_voxel_size() {
-        let err = CureField::new(2, 2, 2, -0.5, [0.0, 0.0, 0.0]).unwrap_err();
+        let err = CureField::new(2, 2, 2, -0.5, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
         matches!(err, CureFieldError::InvalidVoxelSize(_));
     }
 
     #[test]
     fn new_rejects_infinite_voxel_size() {
-        let err = CureField::new(2, 2, 2, f32::INFINITY, [0.0, 0.0, 0.0]).unwrap_err();
+        let err = CureField::new(2, 2, 2, f32::INFINITY, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
         matches!(err, CureFieldError::InvalidVoxelSize(_));
     }
 
     #[test]
     fn new_rejects_nan_bbox_min() {
-        let err = CureField::new(2, 2, 2, 0.5, [f32::NAN, 0.0, 0.0]).unwrap_err();
+        let err = CureField::new(2, 2, 2, 0.5, [f32::NAN, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
         matches!(err, CureFieldError::InvalidBboxMin { .. });
     }
 
@@ -377,7 +372,7 @@ mod tests {
         for ix in 0..2 {
             for iy in 0..2 {
                 for iz in 0..2 {
-                    assert_eq!(f.dose_at(ix, iy, iz).unwrap(), 0.0);
+                    assert_eq!(f.dose_at(ix, iy, iz).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)"), 0.0);
                 }
             }
         }
@@ -387,7 +382,7 @@ mod tests {
 
     #[test]
     fn dimensions_and_voxel_size_round_trip() {
-        let f = CureField::new(3, 5, 7, 0.1, [1.0, 2.0, 3.0]).unwrap();
+        let f = CureField::new(3, 5, 7, 0.1, [1.0, 2.0, 3.0]).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
         assert_eq!(f.dimensions(), (3, 5, 7));
         assert!((f.voxel_size_mm() - 0.1).abs() < 1e-6);
         assert_eq!(f.bbox_min_mm(), [1.0, 2.0, 3.0]);
@@ -397,18 +392,18 @@ mod tests {
 
     #[test]
     fn world_at_voxel_center_returns_voxel_centre() {
-        let f = CureField::new(2, 2, 2, 0.5, [0.0, 0.0, 0.0]).unwrap();
+        let f = CureField::new(2, 2, 2, 0.5, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
         // Voxel [0, 0, 0] center = (0.25, 0.25, 0.25)
-        assert_eq!(f.world_at_voxel_center(0, 0, 0).unwrap(), [0.25, 0.25, 0.25]);
+        assert_eq!(f.world_at_voxel_center(0, 0, 0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)"), [0.25, 0.25, 0.25]);
         // Voxel [1, 1, 1] center = (0.75, 0.75, 0.75)
-        assert_eq!(f.world_at_voxel_center(1, 1, 1).unwrap(), [0.75, 0.75, 0.75]);
+        assert_eq!(f.world_at_voxel_center(1, 1, 1).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)"), [0.75, 0.75, 0.75]);
     }
 
     #[test]
     fn world_at_voxel_center_with_bbox_offset_applies_offset() {
-        let f = CureField::new(2, 2, 2, 0.5, [10.0, 20.0, 30.0]).unwrap();
+        let f = CureField::new(2, 2, 2, 0.5, [10.0, 20.0, 30.0]).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
         assert_eq!(
-            f.world_at_voxel_center(0, 0, 0).unwrap(),
+            f.world_at_voxel_center(0, 0, 0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)"),
             [10.25, 20.25, 30.25]
         );
     }
@@ -422,18 +417,18 @@ mod tests {
     #[test]
     fn add_dose_then_dose_at_round_trips() {
         let mut f = make_2x2x2();
-        f.add_dose(0, 0, 0, 12.5).unwrap();
-        assert!((f.dose_at(0, 0, 0).unwrap() - 12.5).abs() < 1e-6);
+        f.add_dose(0, 0, 0, 12.5).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+        assert!((f.dose_at(0, 0, 0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)") - 12.5).abs() < 1e-6);
         // Other voxels remain zero.
-        assert_eq!(f.dose_at(1, 1, 1).unwrap(), 0.0);
+        assert_eq!(f.dose_at(1, 1, 1).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)"), 0.0);
     }
 
     #[test]
     fn add_dose_accumulates() {
         let mut f = make_2x2x2();
-        f.add_dose(0, 0, 0, 3.0).unwrap();
-        f.add_dose(0, 0, 0, 2.5).unwrap();
-        assert!((f.dose_at(0, 0, 0).unwrap() - 5.5).abs() < 1e-6);
+        f.add_dose(0, 0, 0, 3.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+        f.add_dose(0, 0, 0, 2.5).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+        assert!((f.dose_at(0, 0, 0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)") - 5.5).abs() < 1e-6);
     }
 
     #[test]
@@ -444,7 +439,7 @@ mod tests {
             Err(CureFieldError::InvalidDose(_))
         ));
         // Field stays untouched.
-        assert_eq!(f.dose_at(0, 0, 0).unwrap(), 0.0);
+        assert_eq!(f.dose_at(0, 0, 0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)"), 0.0);
     }
 
     #[test]
@@ -469,7 +464,7 @@ mod tests {
     fn add_dose_accepts_zero() {
         let mut f = make_2x2x2();
         assert!(f.add_dose(0, 0, 0, 0.0).is_ok());
-        assert_eq!(f.dose_at(0, 0, 0).unwrap(), 0.0);
+        assert_eq!(f.dose_at(0, 0, 0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)"), 0.0);
     }
 
     #[test]
@@ -483,9 +478,9 @@ mod tests {
     #[test]
     fn total_dose_sums_all_voxels() {
         let mut f = make_2x2x2();
-        f.add_dose(0, 0, 0, 1.0).unwrap();
-        f.add_dose(1, 0, 0, 2.0).unwrap();
-        f.add_dose(0, 1, 0, 3.0).unwrap();
+        f.add_dose(0, 0, 0, 1.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+        f.add_dose(1, 0, 0, 2.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+        f.add_dose(0, 1, 0, 3.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
         // Float-mode sum stored as f64.
         assert!((f.total_dose() - 6.0).abs() < 1e-6);
     }
@@ -493,9 +488,9 @@ mod tests {
     #[test]
     fn max_dose_returns_largest() {
         let mut f = make_2x2x2();
-        f.add_dose(0, 0, 0, 1.0).unwrap();
-        f.add_dose(1, 1, 1, 7.5).unwrap();
-        f.add_dose(0, 1, 0, 3.0).unwrap();
+        f.add_dose(0, 0, 0, 1.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+        f.add_dose(1, 1, 1, 7.5).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+        f.add_dose(0, 1, 0, 3.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
         assert!((f.max_dose() - 7.5).abs() < 1e-6);
     }
 
@@ -503,7 +498,7 @@ mod tests {
     fn layer_summary_undercured_returns_zero_for_all() {
         // All voxels at dose = 0 < Ec ⇒ Cd = 0 everywhere.
         let f = make_2x2x2();
-        let s = f.layer_summary(0, 100.0, 5.0).unwrap();
+        let s = f.layer_summary(0, 100.0, 5.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
         assert_eq!(s.mean, 0.0);
         assert_eq!(s.min, 0.0);
     }
@@ -511,13 +506,14 @@ mod tests {
     #[test]
     fn layer_summary_uniform_dose_matches_kb103_scalar() {
         // Fill layer 0 with uniform dose 5×Ec; Cd = Dp × ln(5) ≈ 100 × 1.609 = 160.9.
-        let mut f = CureField::new(2, 2, 1, 0.5, [0.0, 0.0, 0.0]).unwrap();
+        let mut f = CureField::new(2, 2, 1, 0.5, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
         for ix in 0..2 {
             for iy in 0..2 {
-                f.add_dose(ix, iy, 0, 25.0).unwrap(); // dose = 25, Ec = 5 ⇒ ratio 5
+                f.add_dose(ix, iy, 0, 25.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+                // dose = 25, Ec = 5 ⇒ ratio 5
             }
         }
-        let s = f.layer_summary(0, 100.0, 5.0).unwrap();
+        let s = f.layer_summary(0, 100.0, 5.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
         let expected = 100.0 * 5.0f32.ln();
         assert!(
             (s.mean - expected).abs() < 0.01,
@@ -531,12 +527,12 @@ mod tests {
     #[test]
     fn layer_summary_min_picks_worst_voxel() {
         // One voxel under-exposed, three above ⇒ min < mean.
-        let mut f = CureField::new(2, 2, 1, 0.5, [0.0, 0.0, 0.0]).unwrap();
-        f.add_dose(0, 0, 0, 25.0).unwrap(); // ratio 5
-        f.add_dose(1, 0, 0, 25.0).unwrap();
-        f.add_dose(0, 1, 0, 25.0).unwrap();
-        f.add_dose(1, 1, 0, 7.0).unwrap(); // ratio 1.4 — much shallower
-        let s = f.layer_summary(0, 100.0, 5.0).unwrap();
+        let mut f = CureField::new(2, 2, 1, 0.5, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+        f.add_dose(0, 0, 0, 25.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)"); // ratio 5
+        f.add_dose(1, 0, 0, 25.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+        f.add_dose(0, 1, 0, 25.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+        f.add_dose(1, 1, 0, 7.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)"); // ratio 1.4 — much shallower
+        let s = f.layer_summary(0, 100.0, 5.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
         let cd_5 = 100.0 * 5.0f32.ln();
         let cd_1_4 = 100.0 * 1.4f32.ln();
         assert!((s.min - cd_1_4).abs() < 0.01);
@@ -564,8 +560,8 @@ mod tests {
         // ⇒ Cd = 100 × ln(5) ≈ 160.9 µm. Same as CureCalculator::cure_depth
         // (KB-103) when the column resolves to a single voxel.
         let mut f = make_2x2x2();
-        f.add_dose(0, 0, 0, 25.0).unwrap();
-        let cd = f.cure_depth_at(0, 0, 0, 100.0, 5.0).unwrap();
+        f.add_dose(0, 0, 0, 25.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
+        let cd = f.cure_depth_at(0, 0, 0, 100.0, 5.0).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
         let expected = 100.0 * 5.0f32.ln();
         assert!(
             (cd.value() - expected).abs() < 0.01,
@@ -577,7 +573,7 @@ mod tests {
     #[test]
     fn memory_footprint_formula() {
         // 100×100×500 = 5M voxels × 4 bytes = 20 MB.
-        let f = CureField::new(100, 100, 500, 0.2, [0.0, 0.0, 0.0]).unwrap();
+        let f = CureField::new(100, 100, 500, 0.2, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy CureField constructor preconditions (positive dims + finite voxel_size > 0 + finite bbox_min)");
         assert_eq!(f.voxel_count(), 5_000_000);
         assert_eq!(f.total_bytes(), 20_000_000);
     }

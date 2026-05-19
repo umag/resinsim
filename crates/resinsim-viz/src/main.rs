@@ -52,7 +52,7 @@ use crate::slice::{
     cumulative_z_mm, slice_stack_bounding_box, slice_stack_to_bevy_mesh, LoadedSliceStack,
 };
 use crate::ui::panels::{bottom_panel, left_panel, right_panel};
-use crate::ui::state::{BottomPanelState, PickerState, refresh_listings, refresh_loaded_profiles};
+use crate::ui::state::{refresh_listings, refresh_loaded_profiles, BottomPanelState, PickerState};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -1207,10 +1207,7 @@ fn handle_layer_keys(
             apply_layer_delta(&mut current, delta);
             repeat.held.insert(key, (now, now));
         } else if keys.pressed(key) {
-            let entry = repeat
-                .held
-                .entry(key)
-                .or_insert((now, now));
+            let entry = repeat.held.entry(key).or_insert((now, now));
             let (first, last) = *entry;
             if should_repeat(
                 now,
@@ -1271,10 +1268,7 @@ fn clear_orphan_slice_masks(
 /// computed max differs from the resource. Preserves the user's
 /// cursor.index unless it would exceed the new max (in which case
 /// it clamps).
-fn sync_cursor_max_from_sim(
-    loaded: Res<LoadedSimulation>,
-    mut current: ResMut<CurrentLayer>,
-) {
+fn sync_cursor_max_from_sim(loaded: Res<LoadedSimulation>, mut current: ResMut<CurrentLayer>) {
     if !loaded.is_changed() {
         return;
     }

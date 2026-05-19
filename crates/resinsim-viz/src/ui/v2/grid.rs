@@ -140,13 +140,7 @@ impl PaneGrid {
             row_fracs: [0.2; ROWS],
             // LayerMask2d at (4, 0) spans both columns; the cell at
             // (4, 1) is the continuation and never renders.
-            col_spans: [
-                [1, 1],
-                [1, 1],
-                [1, 1],
-                [1, 1],
-                [2, 0],
-            ],
+            col_spans: [[1, 1], [1, 1], [1, 1], [1, 1], [2, 0]],
             dirty_at: None,
             pending_reset_zoom: None,
         }
@@ -159,9 +153,8 @@ impl PaneGrid {
     /// cells so a corrupt persisted layout doesn't leave the grid
     /// in a state that can't render.
     pub fn from_layout(layout: PaneGridLayout) -> Self {
-        let cells: [[Pane; COLS]; ROWS] = std::array::from_fn(|r| {
-            std::array::from_fn(|c| Pane::from_id(layout.cells[r][c]))
-        });
+        let cells: [[Pane; COLS]; ROWS] =
+            std::array::from_fn(|r| std::array::from_fn(|c| Pane::from_id(layout.cells[r][c])));
         Self {
             cells,
             column_split: layout.column_split,
@@ -220,8 +213,7 @@ impl PaneGrid {
         // Stake the full rect upfront so the parent's layout advances
         // by the right amount and any subsequent UI lands below.
         let avail = ui.available_size();
-        let (grid_rect, _) =
-            ui.allocate_exact_size(avail, egui::Sense::hover());
+        let (grid_rect, _) = ui.allocate_exact_size(avail, egui::Sense::hover());
 
         let total_w = grid_rect.width();
         let total_h = grid_rect.height();
@@ -257,8 +249,7 @@ impl PaneGrid {
         ];
         let col_starts = [0.0_f32, col_widths[0]];
 
-        let row_heights: [f32; ROWS] =
-            std::array::from_fn(|i| self.row_fracs[i] * total_h);
+        let row_heights: [f32; ROWS] = std::array::from_fn(|i| self.row_fracs[i] * total_h);
         let row_starts = cumulative_starts(&row_heights);
 
         let link_group = egui::Id::new("v2-shared-cursor");
@@ -274,8 +265,8 @@ impl PaneGrid {
         // reorder is in progress. Resolved before cell rendering so
         // every cell can pick the correct cursor icon and so the
         // post-pass overlay knows which cell to highlight.
-        let drag_source: Option<DragPayload> = egui::DragAndDrop::payload::<DragPayload>(ui.ctx())
-            .map(|p| *p);
+        let drag_source: Option<DragPayload> =
+            egui::DragAndDrop::payload::<DragPayload>(ui.ctx()).map(|p| *p);
         let pointer_pos = ui.ctx().pointer_latest_pos();
 
         // Render cells. col_span == 0 means "continuation of a wide
@@ -293,15 +284,13 @@ impl PaneGrid {
                 } else {
                     col_widths[col]
                 };
-                let cell_min = grid_rect.min
-                    + egui::vec2(col_starts[col], row_starts[row]);
+                let cell_min = grid_rect.min + egui::vec2(col_starts[col], row_starts[row]);
                 let cell_size = egui::vec2(width, row_heights[row]);
                 let cell_rect = egui::Rect::from_min_size(cell_min, cell_size);
 
                 let pane = &mut self.cells[row][col];
                 let state = resolve_state_for(pane, sim, &base_state);
-                let reset_zoom =
-                    self.pending_reset_zoom.is_some_and(|p| p == (row, col));
+                let reset_zoom = self.pending_reset_zoom.is_some_and(|p| p == (row, col));
                 let ctx = PaneCtx {
                     sim,
                     cursor_layer,
@@ -312,8 +301,7 @@ impl PaneGrid {
                     slice_masks,
                 };
 
-                let action =
-                    draw_cell(ui, cell_rect, row, col, pane, &ctx, drag_source.is_some());
+                let action = draw_cell(ui, cell_rect, row, col, pane, &ctx, drag_source.is_some());
                 match action {
                     CellAction::None => {}
                     CellAction::ResetZoom => {
@@ -362,10 +350,9 @@ impl PaneGrid {
                 &self.row_fracs,
             ) {
                 if (target_row, target_col) != (source.source_row, source.source_col) {
-                    let target_min = grid_rect.min
-                        + egui::vec2(col_starts[target_col], row_starts[target_row]);
-                    let target_size =
-                        egui::vec2(col_widths[target_col], row_heights[target_row]);
+                    let target_min =
+                        grid_rect.min + egui::vec2(col_starts[target_col], row_starts[target_row]);
+                    let target_size = egui::vec2(col_widths[target_col], row_heights[target_row]);
                     let target_rect = egui::Rect::from_min_size(target_min, target_size);
                     ui.painter().rect_stroke(
                         target_rect.shrink(1.0),
@@ -390,11 +377,7 @@ impl PaneGrid {
                 .on_hover_cursor(egui::CursorIcon::ResizeColumn);
             if resp.dragged() {
                 let dx_frac = resp.drag_delta().x / total_w;
-                apply_column_split_delta(
-                    &mut self.column_split,
-                    dx_frac,
-                    min_w_frac,
-                );
+                apply_column_split_delta(&mut self.column_split, dx_frac, min_w_frac);
                 self.dirty_at = Some(Instant::now());
             }
             paint_splitter_line(
@@ -421,12 +404,7 @@ impl PaneGrid {
                 .on_hover_cursor(egui::CursorIcon::ResizeRow);
             if resp.dragged() {
                 let dy_frac = resp.drag_delta().y / total_h;
-                apply_row_splitter_delta(
-                    &mut self.row_fracs,
-                    i,
-                    dy_frac,
-                    min_h_frac,
-                );
+                apply_row_splitter_delta(&mut self.row_fracs, i, dy_frac, min_h_frac);
                 self.dirty_at = Some(Instant::now());
             }
             paint_splitter_line(
@@ -446,9 +424,7 @@ impl PaneGrid {
         // and the next frame sees no drag.
         let released = ui.ctx().input(|i| i.pointer.any_released());
         if released {
-            if let Some(payload) =
-                egui::DragAndDrop::take_payload::<DragPayload>(ui.ctx())
-            {
+            if let Some(payload) = egui::DragAndDrop::take_payload::<DragPayload>(ui.ctx()) {
                 if let Some(pos) = pointer_pos {
                     let local_x = pos.x - grid_rect.min.x;
                     let local_y = pos.y - grid_rect.min.y;
@@ -460,9 +436,7 @@ impl PaneGrid {
                         self.column_split,
                         &self.row_fracs,
                     ) {
-                        if (target_row, target_col)
-                            != (payload.source_row, payload.source_col)
-                        {
+                        if (target_row, target_col) != (payload.source_row, payload.source_col) {
                             swap_cells(
                                 &mut self.cells,
                                 (payload.source_row, payload.source_col),
@@ -731,7 +705,11 @@ pub fn cell_at_pos(
     if !(0.0..=total_w).contains(&local_x) || !(0.0..=total_h).contains(&local_y) {
         return None;
     }
-    let col = if local_x < column_split * total_w { 0 } else { 1 };
+    let col = if local_x < column_split * total_w {
+        0
+    } else {
+        1
+    };
     let mut accum = 0.0_f32;
     for (i, frac) in row_fracs.iter().enumerate() {
         accum += frac * total_h;
@@ -799,7 +777,10 @@ mod tests {
         for row in 0..ROWS {
             for col in 0..COLS {
                 let id = grid.cells[row][col].id();
-                assert!(ids.insert(id), "duplicate pane id at ({row}, {col}): {id:?}");
+                assert!(
+                    ids.insert(id),
+                    "duplicate pane id at ({row}, {col}): {id:?}"
+                );
             }
         }
         assert_eq!(ids.len(), 10);
@@ -1026,18 +1007,9 @@ mod tests {
     #[test]
     fn cell_at_pos_outside_grid_is_none() {
         let fracs = [0.2; ROWS];
-        assert_eq!(
-            cell_at_pos(-1.0, 50.0, 1000.0, 500.0, 0.5, &fracs),
-            None
-        );
-        assert_eq!(
-            cell_at_pos(50.0, 600.0, 1000.0, 500.0, 0.5, &fracs),
-            None
-        );
-        assert_eq!(
-            cell_at_pos(1500.0, 50.0, 1000.0, 500.0, 0.5, &fracs),
-            None
-        );
+        assert_eq!(cell_at_pos(-1.0, 50.0, 1000.0, 500.0, 0.5, &fracs), None);
+        assert_eq!(cell_at_pos(50.0, 600.0, 1000.0, 500.0, 0.5, &fracs), None);
+        assert_eq!(cell_at_pos(1500.0, 50.0, 1000.0, 500.0, 0.5, &fracs), None);
     }
 
     #[test]

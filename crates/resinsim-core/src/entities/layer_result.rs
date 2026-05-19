@@ -86,20 +86,19 @@ impl LayerResult {
         dp_um: f32,
         ec_mj_cm2: f32,
     ) -> CureDepth {
-        if let Some(cf) = sim.cure_field() {
-            // Voxel mode: dispatch through the field's layer summary so
-            // the answer reflects the actual per-voxel dose distribution
-            // rather than a pre-computed scalar that may drift on long
-            // prints (KB-160 photoinitiator depletion).
-            if let Ok(summary) = cf.layer_summary(self.index, dp_um, ec_mj_cm2) {
-                return CureDepth::new(summary.mean).unwrap_or_else(|_| {
-                    CureDepth::new(self.cure_depth_um)
-                        .expect("LayerResult.cure_depth_um is validated finite on construction")
-                });
-            }
-            // Fall through to the cached scalar if the layer index is
-            // out-of-bounds on the field (defensive — should not happen
-            // for a well-constructed aggregate).
+        // Voxel mode: dispatch through the field's layer summary so the
+        // answer reflects the actual per-voxel dose distribution rather
+        // than a pre-computed scalar that may drift on long prints
+        // (KB-160 photoinitiator depletion). Fall through to the cached
+        // scalar if the layer index is out-of-bounds on the field
+        // (defensive — should not happen for a well-constructed aggregate).
+        if let Some(cf) = sim.cure_field()
+            && let Ok(summary) = cf.layer_summary(self.index, dp_um, ec_mj_cm2)
+        {
+            return CureDepth::new(summary.mean).unwrap_or_else(|_| {
+                CureDepth::new(self.cure_depth_um)
+                    .expect("LayerResult.cure_depth_um is validated finite on construction")
+            });
         }
         CureDepth::new(self.cure_depth_um)
             .expect("LayerResult.cure_depth_um is validated finite on construction")
@@ -117,14 +116,14 @@ impl LayerResult {
         dp_um: f32,
         ec_mj_cm2: f32,
     ) -> CureDepth {
-        if let Some(cf) = sim.cure_field() {
-            if let Ok(summary) = cf.layer_summary(self.index, dp_um, ec_mj_cm2) {
-                return CureDepth::new(summary.min).unwrap_or_else(|_| {
-                    CureDepth::new(self.worst_cure_depth_um).expect(
-                        "LayerResult.worst_cure_depth_um is validated finite on construction",
-                    )
-                });
-            }
+        if let Some(cf) = sim.cure_field()
+            && let Ok(summary) = cf.layer_summary(self.index, dp_um, ec_mj_cm2)
+        {
+            return CureDepth::new(summary.min).unwrap_or_else(|_| {
+                CureDepth::new(self.worst_cure_depth_um).expect(
+                    "LayerResult.worst_cure_depth_um is validated finite on construction",
+                )
+            });
         }
         CureDepth::new(self.worst_cure_depth_um)
             .expect("LayerResult.worst_cure_depth_um is validated finite on construction")

@@ -33,17 +33,10 @@ pub const SCRUBBER_HEIGHT_PX: f32 = 64.0;
 /// failure's layer position. The cursor line is painted after the
 /// ticks so the active cursor is always visible even when it sits
 /// on a failure layer.
-pub fn render(
-    ui: &mut egui::Ui,
-    current: u32,
-    max: u32,
-    failures: &[FailureEvent],
-) -> Option<u32> {
+pub fn render(ui: &mut egui::Ui, current: u32, max: u32, failures: &[FailureEvent]) -> Option<u32> {
     let avail = ui.available_size();
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(avail.x, avail.y),
-        egui::Sense::click_and_drag(),
-    );
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(avail.x, avail.y), egui::Sense::click_and_drag());
 
     paint_chrome(ui, rect);
 
@@ -67,7 +60,12 @@ pub fn render(
     // the cursor; drag follows. Pointer coords are screen-space.
     if resp.clicked() || resp.dragged() {
         if let Some(pos) = resp.interact_pointer_pos() {
-            return Some(screen_x_to_layer(pos.x, axis_rect.min.x, axis_rect.width(), max));
+            return Some(screen_x_to_layer(
+                pos.x,
+                axis_rect.min.x,
+                axis_rect.width(),
+                max,
+            ));
         }
     }
 
@@ -230,12 +228,7 @@ pub fn failure_tick_positions(
     failures
         .iter()
         .filter(|f| f.layer <= max)
-        .map(|f| {
-            (
-                layer_to_screen_x(f.layer, origin_x, width, max),
-                f.severity,
-            )
-        })
+        .map(|f| (layer_to_screen_x(f.layer, origin_x, width, max), f.severity))
         .collect()
 }
 

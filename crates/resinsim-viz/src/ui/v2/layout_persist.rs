@@ -107,8 +107,7 @@ impl std::fmt::Display for LoadError {
 /// degenerate Linux without HOME / XDG_CONFIG_HOME). Callers fall
 /// back to in-memory state in that case — no fatal error.
 pub fn default_layout_path() -> Option<PathBuf> {
-    ProjectDirs::from("io", "aopab", "resinsim")
-        .map(|p| p.config_dir().join("v2-layout.json"))
+    ProjectDirs::from("io", "aopab", "resinsim").map(|p| p.config_dir().join("v2-layout.json"))
 }
 
 /// Load a [`PaneGridLayout`] from disk. Returns `Err(NotFound)` for

@@ -50,15 +50,14 @@ fn draw_loaded(ui: &mut egui::Ui, sim: &PrintSimulation, ctx: &PaneCtx<'_>) {
     // the steady-state variation in both series reads at default
     // zoom.
     let combined: Vec<f64> = area.iter().chain(delta.iter()).map(|p| p[1]).collect();
-    let (lo, hi) = percentile_bounds(&combined, 0.02, 0.98, 0.08)
-        .unwrap_or((-100.0, 1000.0));
+    let (lo, hi) = percentile_bounds(&combined, 0.02, 0.98, 0.08).unwrap_or((-100.0, 1000.0));
 
     configure_plot(PaneId::AreaDelta, "Layer", "mm²", ctx.link_group)
         .default_y_bounds(lo, hi)
         .show(ui, |plot_ui| {
-        consume_plot_inputs(plot_ui, ctx);
-        plot_ui.line(Line::new("area", PlotPoints::from(area)).color(theme::SERIES_YELLOW));
-        plot_ui.line(Line::new("Δarea", PlotPoints::from(delta)).color(theme::SERIES_CYAN));
-        plot_ui.vline(cursor_vline(ctx.cursor_layer));
-    });
+            consume_plot_inputs(plot_ui, ctx);
+            plot_ui.line(Line::new("area", PlotPoints::from(area)).color(theme::SERIES_YELLOW));
+            plot_ui.line(Line::new("Δarea", PlotPoints::from(delta)).color(theme::SERIES_CYAN));
+            plot_ui.vline(cursor_vline(ctx.cursor_layer));
+        });
 }

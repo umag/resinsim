@@ -40,10 +40,9 @@ fn draw_loaded(ui: &mut egui::Ui, sim: &PrintSimulation, ctx: &PaneCtx<'_>) {
     configure_plot(PaneId::Viscosity, "Layer", "mPa·s", ctx.link_group)
         .default_y_bounds(lo, hi)
         .show(ui, |plot_ui| {
-        consume_plot_inputs(plot_ui, ctx);
-        plot_ui.line(
-            Line::new("viscosity", PlotPoints::from(points)).color(theme::SERIES_PURPLE),
-        );
-        plot_ui.vline(cursor_vline(ctx.cursor_layer));
-    });
+            consume_plot_inputs(plot_ui, ctx);
+            plot_ui
+                .line(Line::new("viscosity", PlotPoints::from(points)).color(theme::SERIES_PURPLE));
+            plot_ui.vline(cursor_vline(ctx.cursor_layer));
+        });
 }

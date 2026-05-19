@@ -110,12 +110,7 @@ pub fn render(ui: &mut egui::Ui, sim: Option<&PrintSimulation>, cursor_layer: u3
                 "mm²",
             );
             row(ui, "Δarea", &fmt_signed(layer.area_delta_mm2, 2), "mm²");
-            row(
-                ui,
-                "vat_temp",
-                &fmt_float(layer.vat_temperature_c, 1),
-                "°C",
-            );
+            row(ui, "vat_temp", &fmt_float(layer.vat_temperature_c, 1), "°C");
             row(
                 ui,
                 "viscosity",
@@ -127,17 +122,10 @@ pub fn render(ui: &mut egui::Ui, sim: Option<&PrintSimulation>, cursor_layer: u3
 }
 
 fn row(ui: &mut egui::Ui, label: &str, value: &str, unit: &str) {
-    ui.label(
-        egui::RichText::new(label)
-            .small()
-            .color(theme::INK_MUTED),
-    );
-    ui.with_layout(
-        egui::Layout::right_to_left(egui::Align::Center),
-        |ui| {
-            ui.label(egui::RichText::new(value).monospace().color(theme::INK));
-        },
-    );
+    ui.label(egui::RichText::new(label).small().color(theme::INK_MUTED));
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.label(egui::RichText::new(value).monospace().color(theme::INK));
+    });
     ui.label(egui::RichText::new(unit).weak().monospace());
     ui.end_row();
 }
@@ -170,7 +158,11 @@ pub fn fmt_float<F: Into<f64>>(v: F, decimals: usize) -> String {
         return "NaN".to_string();
     }
     if v.is_infinite() {
-        return if v > 0.0 { "∞".to_string() } else { "-∞".to_string() };
+        return if v > 0.0 {
+            "∞".to_string()
+        } else {
+            "-∞".to_string()
+        };
     }
     format!("{v:.decimals$}")
 }

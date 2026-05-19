@@ -44,8 +44,7 @@ fn draw_loaded(ui: &mut egui::Ui, sim: &PrintSimulation, ctx: &PaneCtx<'_>) {
     // include the 1.0 fail threshold so the brief's "trouble layers
     // earn weight" rule reads at default zoom.
     let values: Vec<f64> = points.iter().map(|p| p[1]).collect();
-    let (data_lo, data_hi) =
-        percentile_bounds(&values, 0.02, 0.98, 0.08).unwrap_or((0.0, 5.0));
+    let (data_lo, data_hi) = percentile_bounds(&values, 0.02, 0.98, 0.08).unwrap_or((0.0, 5.0));
     let lo = data_lo.min(0.0);
     let hi = data_hi.max(1.5);
 
@@ -54,8 +53,7 @@ fn draw_loaded(ui: &mut egui::Ui, sim: &PrintSimulation, ctx: &PaneCtx<'_>) {
         .show(ui, |plot_ui| {
             consume_plot_inputs(plot_ui, ctx);
             plot_ui.line(
-                Line::new("safety_factor", PlotPoints::from(points))
-                    .color(theme::SERIES_GREEN),
+                Line::new("safety_factor", PlotPoints::from(points)).color(theme::SERIES_GREEN),
             );
             plot_ui.hline(
                 HLine::new("fail_threshold", 1.0_f64)

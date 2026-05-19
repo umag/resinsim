@@ -19,6 +19,19 @@ use resinsim_core::simulation::PrintSimulation;
 /// On empty / all-NaN / all-equal input, emits one `warn!` with the
 /// reason and returns the sentinel domain `(0.0, 1.0)` so [`ramp`] can
 /// still produce a sensible mid-domain colour without dividing by zero.
+///
+/// # Voxel-mode behaviour (ADR-0017 / t2f1)
+///
+/// When the simulation was run with `--voxel-cure-mm`,
+/// `SimulationRunner::apply_voxel_cure_for_layer` overwrites
+/// `layer.cure_depth_um` with `LayerSummary.mean` from the voxel field
+/// before `sim.add_layer` lands the LayerResult on the aggregate. The
+/// domain computed here therefore reflects voxel-derived means in voxel
+/// mode and the Tier-1 scalar in Tier-1 mode — same call shape, correct
+/// numbers in either branch. Callers that need PER-VOXEL granularity
+/// (e.g. a future heatmap-at-pixel view) should consult
+/// `layer.cure_depth_um_at_voxel(&sim, x, y, dp, ec)` directly instead of
+/// this layer-level helper.
 pub fn cure_depth_domain(sim: &PrintSimulation) -> (f32, f32) {
     let mut min = f32::INFINITY;
     let mut max = f32::NEG_INFINITY;

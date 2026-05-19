@@ -689,9 +689,9 @@ pub(crate) mod tests {
     fn set_voxel_fields_installs_both() {
         use crate::values::{CureField, PhotoinitiatorField};
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        let cure = CureField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0]).unwrap();
-        let pi = PhotoinitiatorField::new(4, 4, 4, 1.0).unwrap();
-        sim.set_voxel_fields(cure, pi).unwrap();
+        let cure = CureField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let pi = PhotoinitiatorField::new(4, 4, 4, 1.0).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        sim.set_voxel_fields(cure, pi).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
         assert!(sim.cure_field().is_some());
         assert!(sim.photoinitiator_field().is_some());
     }
@@ -701,9 +701,9 @@ pub(crate) mod tests {
     fn set_voxel_fields_rejects_dimension_mismatch() {
         use crate::values::{CureField, PhotoinitiatorField};
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        let cure = CureField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0]).unwrap();
-        let pi = PhotoinitiatorField::new(4, 4, 5, 1.0).unwrap();
-        let err = sim.set_voxel_fields(cure, pi).unwrap_err();
+        let cure = CureField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let pi = PhotoinitiatorField::new(4, 4, 5, 1.0).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let err = sim.set_voxel_fields(cure, pi).expect_err("test fixture: dimension mismatch deliberately injected, so Err is the expected outcome");
         matches!(err, AggregateError::VoxelFieldDimensionMismatch { .. });
     }
 
@@ -712,16 +712,16 @@ pub(crate) mod tests {
     fn set_voxel_fields_overwrites_previous() {
         use crate::values::{CureField, PhotoinitiatorField};
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        let cure_a = CureField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0]).unwrap();
-        let pi_a = PhotoinitiatorField::new(4, 4, 4, 1.0).unwrap();
-        sim.set_voxel_fields(cure_a, pi_a).unwrap();
-        let (nx_a, _, _) = sim.cure_field().unwrap().dimensions();
+        let cure_a = CureField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let pi_a = PhotoinitiatorField::new(4, 4, 4, 1.0).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        sim.set_voxel_fields(cure_a, pi_a).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let (nx_a, _, _) = sim.cure_field().expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)").dimensions();
         assert_eq!(nx_a, 4);
 
-        let cure_b = CureField::new(8, 8, 8, 0.1, [0.0, 0.0, 0.0]).unwrap();
-        let pi_b = PhotoinitiatorField::new(8, 8, 8, 1.0).unwrap();
-        sim.set_voxel_fields(cure_b, pi_b).unwrap();
-        let (nx_b, _, _) = sim.cure_field().unwrap().dimensions();
+        let cure_b = CureField::new(8, 8, 8, 0.1, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let pi_b = PhotoinitiatorField::new(8, 8, 8, 1.0).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        sim.set_voxel_fields(cure_b, pi_b).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let (nx_b, _, _) = sim.cure_field().expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)").dimensions();
         assert_eq!(nx_b, 8);
     }
 
@@ -730,17 +730,17 @@ pub(crate) mod tests {
     fn voxel_fields_mut_borrow_works() {
         use crate::values::{CureField, PhotoinitiatorField};
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        let cure = CureField::new(2, 2, 2, 0.2, [0.0, 0.0, 0.0]).unwrap();
-        let pi = PhotoinitiatorField::new(2, 2, 2, 1.0).unwrap();
-        sim.set_voxel_fields(cure, pi).unwrap();
+        let cure = CureField::new(2, 2, 2, 0.2, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let pi = PhotoinitiatorField::new(2, 2, 2, 1.0).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        sim.set_voxel_fields(cure, pi).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
         // Mutate through the &mut accessor — SimulationRunner's usage shape.
-        sim.cure_field_mut().unwrap().add_dose(0, 0, 0, 5.0).unwrap();
-        assert_eq!(sim.cure_field().unwrap().dose_at(0, 0, 0).unwrap(), 5.0);
+        sim.cure_field_mut().expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)").add_dose(0, 0, 0, 5.0).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        assert_eq!(sim.cure_field().expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)").dose_at(0, 0, 0).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)"), 5.0);
         sim.photoinitiator_field_mut()
-            .unwrap()
+            .expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)")
             .deplete(0, 0, 0, 0.05, 5.0)
-            .unwrap();
-        let c = sim.photoinitiator_field().unwrap().concentration_at(0, 0, 0).unwrap();
+            .expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let c = sim.photoinitiator_field().expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)").concentration_at(0, 0, 0).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
         assert!(c < 1.0 && c > 0.0);
     }
 
@@ -751,8 +751,8 @@ pub(crate) mod tests {
         // `cure_field` or `photoinitiator_field` keys, preserving the
         // shape for Tier-1 sim.json consumers.
         let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
-        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![]).unwrap();
-        let json = serde_json::to_string(&sim).unwrap();
+        sim.add_layer(make_layer(0, 5.0, 3.0, 22.0), vec![]).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let json = serde_json::to_string(&sim).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
         assert!(
             !json.contains("cure_field"),
             "Tier-1 sim.json must omit cure_field when None; got: {json}"

@@ -197,15 +197,18 @@ pub struct PrinterProfile {
     pub(crate) build_envelope_mm: Option<BuildEnvelope>,
 
     /// Voxel cure resolution (mm) for the t2f1 voxel cure path (ADR-0017).
-    /// **Optional** — the resolution precedence chain is:
-    ///   1. CLI `--voxel-cure-mm <FLOAT>` value (highest)
-    ///   2. This per-printer override
-    ///   3. [`DEFAULT_VOXEL_CURE_RESOLUTION_MM`] (0.2 mm, lowest)
+    /// **Optional** + **forward-compat reservation only** in v1.
     ///
-    /// Profile authors only set this when they have a printer-specific reason
-    /// (e.g. extremely fine pixel pitch wanting 0.05 mm voxels, or known
-    /// memory pressure wanting coarser 0.5 mm voxels). Default-leaving (None)
-    /// inherits the workspace default. Validated as finite > 0 when Some.
+    /// The plan called for a CLI > profile > default 0.2 mm precedence
+    /// chain, but the v1 implementation uses the slicer mask's voxel size
+    /// for X/Y and `recipe.layer_height_um` for Z unconditionally. This
+    /// field is parsed and validated (finite > 0 when Some) so existing
+    /// profile TOMLs forward-compat; it is NOT read by `SimulationRunner`
+    /// at runtime. t2f5 (GPU acceleration + resolution decoupling) will
+    /// activate it.
+    ///
+    /// Profile authors can leave this `None` for v1; setting it documents
+    /// intent for future calibration but has no current effect.
     #[serde(default)]
     pub(crate) voxel_cure_resolution_mm: Option<f32>,
 }
@@ -820,7 +823,8 @@ lcd_uniformity_variation = 0.22
         assert_eq!(p.voxel_cure_resolution_mm(), None);
         // The effective value is the workspace default.
         assert!(
-            (p.effective_voxel_cure_resolution_mm() - DEFAULT_VOXEL_CURE_RESOLUTION_MM).abs() < 1e-6
+            (p.effective_voxel_cure_resolution_mm() - DEFAULT_VOXEL_CURE_RESOLUTION_MM).abs()
+                < 1e-6
         );
     }
 
@@ -829,7 +833,8 @@ lcd_uniformity_variation = 0.22
         let p = PrinterProfile::generic_msla_4k();
         assert_eq!(p.voxel_cure_resolution_mm(), None);
         assert!(
-            (p.effective_voxel_cure_resolution_mm() - DEFAULT_VOXEL_CURE_RESOLUTION_MM).abs() < 1e-6
+            (p.effective_voxel_cure_resolution_mm() - DEFAULT_VOXEL_CURE_RESOLUTION_MM).abs()
+                < 1e-6
         );
     }
 

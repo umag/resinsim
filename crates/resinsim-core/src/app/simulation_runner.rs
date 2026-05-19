@@ -8,9 +8,11 @@ use crate::services::failure_predictor::{
 };
 use crate::services::pairing_validator;
 use crate::services::suction_detector::SuctionDetector;
-use crate::simulation::PrintSimulation;
 #[cfg(feature = "field-sim")]
-use crate::services::VoxelCureCalculator;
+use crate::services::uniformity_calculator::UniformityProfile;
+#[cfg(feature = "field-sim")]
+use crate::services::{UniformityCalculator, VoxelCureCalculator};
+use crate::simulation::PrintSimulation;
 use crate::values::{
     AmbientTemperature, CrossSectionArea, InitialLedTemperature, LayerMask, LayerPhase,
 };
@@ -32,7 +34,9 @@ pub struct SimulationRunner;
 ///   snapshotted from the ResinProfile at run start; they don't change
 ///   across layers within a single run.
 /// - `led_power_mw_cm2` is the printer's nominal LED intensity at the LCD
-///   plane; spatial uniformity variation (KB-120) is a t2f2 concern.
+///   plane; per-pixel intensity is `led_power_mw_cm2 × uniformity_factor(x,y)`
+///   per KB-120 / `UniformityCalculator::intensity_factor`. Lateral light
+///   crosstalk (Gaussian pixel bleed) stays out — that is t2f2's scope.
 #[cfg(feature = "field-sim")]
 struct VoxelState {
     cure: CureField,
@@ -43,6 +47,14 @@ struct VoxelState {
     ea_cure_kj_mol: f32,
     k_d: f32,
     led_power_mw_cm2: f32,
+    /// LCD non-uniformity profile (KB-120). Derived from
+    /// `printer.lcd_uniformity_variation` plus `printer.build_envelope_mm()`
+    /// at run start. When the printer has no build envelope, a nominal
+    /// Saturn-class fallback (192 × 120 mm) is used and a one-shot warn
+    /// surfaces. With `variation == 0.0` the profile produces factor 1.0
+    /// at every position — voxel-mode then matches pre-uniformity behaviour
+    /// per-pixel.
+    uniformity: UniformityProfile,
 }
 
 impl SimulationRunner {
@@ -344,8 +356,7 @@ impl SimulationRunner {
         plate: &PlateAdhesionProfile,
         ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
-        #[cfg_attr(not(feature = "field-sim"), allow(unused_variables))]
-        voxel_cure_mm: Option<f32>,
+        #[cfg_attr(not(feature = "field-sim"), allow(unused_variables))] voxel_cure_mm: Option<f32>,
     ) -> Result<PrintSimulation, String> {
         let recipe = resin.recipe();
         let suction_map = Self::build_suction_map(masks)?;
@@ -367,42 +378,58 @@ impl SimulationRunner {
         // (b) the caller passed `voxel_cure_mm: Some(_)` AND (c) masks/layers
         // are non-empty (zero-layer prints have nothing to voxelize).
         #[cfg(feature = "field-sim")]
-        let mut voxel_state: Option<VoxelState> =
-            if let Some(_requested_mm) = voxel_cure_mm {
-                if let Some(first) = masks.first() {
-                    let nx = first.width_cells();
-                    let ny = first.height_cells();
-                    let voxel_size_mm = first.voxel_size_mm();
-                    let nz = areas.len() as u32;
-                    if nx > 0 && ny > 0 && nz > 0 {
-                        let cure = CureField::new(nx, ny, nz, voxel_size_mm, [0.0, 0.0, 0.0])
-                            .map_err(|e| format!("voxel cure field: {e}"))?;
-                        let pi = PhotoinitiatorField::new(
-                            nx,
-                            ny,
-                            nz,
-                            resin.photoinitiator_concentration_initial(),
-                        )
-                        .map_err(|e| format!("photoinitiator field: {e}"))?;
-                        Some(VoxelState {
-                            cure,
-                            pi,
-                            dp_um: resin.penetration_depth_um(),
-                            ec_ref_mj_cm2: resin.critical_energy_mj_cm2(),
-                            ref_temp_c: resin.reference_temp_c(),
-                            ea_cure_kj_mol: resin.effective_cure_kinetics_ea_kj_mol(),
-                            k_d: resin.effective_photoinitiator_decay_constant_k_d(),
-                            led_power_mw_cm2: printer.led_power_mw_cm2(),
-                        })
-                    } else {
-                        None
-                    }
+        let mut voxel_state: Option<VoxelState> = if let Some(_requested_mm) = voxel_cure_mm {
+            if let Some(first) = masks.first() {
+                let nx = first.width_cells();
+                let ny = first.height_cells();
+                let voxel_size_mm = first.voxel_size_mm();
+                let nz = areas.len() as u32;
+                if nx > 0 && ny > 0 && nz > 0 {
+                    let cure = CureField::new(nx, ny, nz, voxel_size_mm, [0.0, 0.0, 0.0])
+                        .map_err(|e| format!("voxel cure field: {e}"))?;
+                    let pi = PhotoinitiatorField::new(
+                        nx,
+                        ny,
+                        nz,
+                        resin.photoinitiator_concentration_initial(),
+                    )
+                    .map_err(|e| format!("photoinitiator field: {e}"))?;
+                    // KB-120 LCD non-uniformity profile. Sized to the cure
+                    // field's lateral extent (nx × ny at voxel_size_mm) so
+                    // the UniformityCalculator's radial cosine model centres
+                    // on the mask's geometric centre. When the printer's
+                    // build envelope is present and matches the mask span
+                    // (typical CTB → mask path), the two are consistent.
+                    // Variation 0.0 (or printer profile with no LCD
+                    // uniformity data) collapses the per-pixel factor to
+                    // 1.0 everywhere — identical-pixel behaviour preserved.
+                    let plate_width_mm = nx as f32 * voxel_size_mm;
+                    let plate_depth_mm = ny as f32 * voxel_size_mm;
+                    let uniformity = UniformityProfile {
+                        variation: printer.lcd_uniformity_variation(),
+                        plate_width_mm,
+                        plate_depth_mm,
+                    };
+                    Some(VoxelState {
+                        cure,
+                        pi,
+                        dp_um: resin.penetration_depth_um(),
+                        ec_ref_mj_cm2: resin.critical_energy_mj_cm2(),
+                        ref_temp_c: resin.reference_temp_c(),
+                        ea_cure_kj_mol: resin.effective_cure_kinetics_ea_kj_mol(),
+                        k_d: resin.effective_photoinitiator_decay_constant_k_d(),
+                        led_power_mw_cm2: printer.led_power_mw_cm2(),
+                        uniformity,
+                    })
                 } else {
                     None
                 }
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
 
         for (i, &area) in areas.iter().enumerate() {
             let (exposure_override, lift_speed_override) = per_layer_overrides
@@ -467,33 +494,47 @@ impl SimulationRunner {
         overrides: &LayerOverrides,
         result: &mut crate::entities::LayerResult,
     ) -> Result<(), String> {
-        let exposure_sec = overrides
-            .exposure_sec
-            .unwrap_or(if layer < recipe.bottom_layer_count() {
-                recipe.bottom_exposure_sec()
-            } else {
-                recipe.normal_exposure_sec()
-            });
+        let exposure_sec =
+            overrides
+                .exposure_sec
+                .unwrap_or(if layer < recipe.bottom_layer_count() {
+                    recipe.bottom_exposure_sec()
+                } else {
+                    recipe.normal_exposure_sec()
+                });
 
-        // Average per-pixel intensity. Spatial uniformity variation is a
-        // t2f2 concern; v1 uses the LED nominal directly.
-        let intensity = state.led_power_mw_cm2;
+        let dp = PenetrationDepth::new(state.dp_um).map_err(|e| format!("voxel dp: {e}"))?;
 
-        let dp =
-            PenetrationDepth::new(state.dp_um).map_err(|e| format!("voxel dp: {e}"))?;
-
-        // Apply the column exposure for every set pixel in this layer mask.
+        // KB-120 spatial LCD non-uniformity. Per-pixel intensity is the
+        // nominal LED density scaled by `UniformityCalculator::intensity_factor`
+        // at the pixel's world position. With `state.uniformity.variation == 0.0`
+        // the factor collapses to 1.0 and all pixels see identical intensity
+        // (legacy behaviour). Lateral light crosstalk (Gaussian bleed)
+        // remains out — that is t2f2's scope.
+        let voxel_size_mm = mask.voxel_size_mm();
+        // Apply the column exposure for every set pixel in this layer mask,
+        // each at its uniformity-adjusted intensity. Z-step depth is
+        // `recipe.layer_height_um` (the actual print layer thickness),
+        // NOT the LATERAL mask voxel size — Z-voxel index represents one
+        // layer slab. ADR-0017 §6 "Coordinates" + voxel_cure_calculator
+        // doc comment.
+        let layer_height_um = recipe.layer_height_um();
         for (ix, iy) in mask.iter_solid() {
+            let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
+            let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
+            let factor = UniformityCalculator::intensity_factor(x_mm, y_mm, &state.uniformity);
+            let pixel_intensity = state.led_power_mw_cm2 * factor;
             VoxelCureCalculator::apply_column_exposure(
                 &mut state.cure,
                 &mut state.pi,
                 ix,
                 iy,
                 layer,
-                intensity,
+                pixel_intensity,
                 exposure_sec,
                 dp,
                 state.k_d,
+                layer_height_um,
             )
             .map_err(|e| format!("voxel cure layer {layer}: {e}"))?;
         }
@@ -508,8 +549,7 @@ impl SimulationRunner {
             thermal.initial_led_temp.map(|t| t.value()),
             layer,
         );
-        let ec_ref = Energy::new(state.ec_ref_mj_cm2)
-            .map_err(|e| format!("ec_ref: {e}"))?;
+        let ec_ref = Energy::new(state.ec_ref_mj_cm2).map_err(|e| format!("ec_ref: {e}"))?;
         let ec_t = VoxelCureCalculator::ec_at_temp(
             ec_ref,
             state.ref_temp_c,

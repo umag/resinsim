@@ -23,11 +23,7 @@ pub const FAILURES_WIDTH_MIN: f32 = 180.0;
 
 /// Render the failures rail. Returns `Some(layer)` if the user
 /// clicked a row, signalling the parent to jump the cursor.
-pub fn render(
-    ui: &mut egui::Ui,
-    sim: Option<&PrintSimulation>,
-    cursor: u32,
-) -> Option<u32> {
+pub fn render(ui: &mut egui::Ui, sim: Option<&PrintSimulation>, cursor: u32) -> Option<u32> {
     ui.add_space(4.0);
     ui.label(
         egui::RichText::new("Failures")
@@ -103,17 +99,10 @@ fn render_row(ui: &mut egui::Ui, event: &FailureEvent, cursor: u32) -> bool {
                         .small()
                         .color(theme::INK_MUTED),
                 );
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        let dot = severity_dot(event.severity);
-                        ui.label(
-                            egui::RichText::new(dot.glyph)
-                                .strong()
-                                .color(dot.color),
-                        );
-                    },
-                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let dot = severity_dot(event.severity);
+                    ui.label(egui::RichText::new(dot.glyph).strong().color(dot.color));
+                });
             });
         })
         .response;

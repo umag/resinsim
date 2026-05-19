@@ -400,7 +400,11 @@ fn cursor_label_top_y(data: &LayerChartData, state: &BottomPanelState) -> f64 {
     if state.show_safety {
         consider(&data.safety);
     }
-    if max_y.is_finite() { max_y } else { 1.0 }
+    if max_y.is_finite() {
+        max_y
+    } else {
+        1.0
+    }
 }
 
 /// Render the layer-axis chart into `ui` and return `Some(layer)` when
@@ -463,11 +467,7 @@ pub fn render_layer_timeline(
         .label_formatter(|name, value: &PlotPoint| {
             // Tooltip carries unit per series via the leading `name`
             // (egui_plot uses the series name we passed to `Line::new`).
-            format!(
-                "{name}\nlayer {}\n{:.3}",
-                value.x.round() as i64,
-                value.y
-            )
+            format!("{name}\nlayer {}\n{:.3}", value.x.round() as i64, value.y)
         })
         .show(ui, |plot_ui| {
             if force_refit {
@@ -501,8 +501,7 @@ pub fn render_layer_timeline(
                 plot_ui.text(Text::new(
                     "layer-cursor-label",
                     PlotPoint::new(cur_x, label_top_y),
-                    egui::RichText::new(format!("Layer {}", current.saturating_add(1)))
-                        .small(),
+                    egui::RichText::new(format!("Layer {}", current.saturating_add(1))).small(),
                 ));
             }
 
@@ -841,8 +840,7 @@ mod tests {
 
         let d = build_layer_chart_data(&sim, true);
         // Only positive + finite SFs survive log mode.
-        let surviving: Vec<(f64, f64)> =
-            d.safety.points.iter().map(|p| (p[0], p[1])).collect();
+        let surviving: Vec<(f64, f64)> = d.safety.points.iter().map(|p| (p[0], p[1])).collect();
         assert_eq!(surviving.len(), 2, "got {surviving:?}");
         assert_eq!(surviving[0].0, 0.0);
         assert!((surviving[0].1 - 1.0).abs() < 1e-9, "log10(10) ≈ 1");
@@ -873,7 +871,10 @@ mod tests {
         let sim = cube_sim(2);
         let linear = build_layer_chart_data(&sim, false);
         let log = build_layer_chart_data(&sim, true);
-        assert!(linear.safety.name.contains("(×)"), "linear name carries unit");
+        assert!(
+            linear.safety.name.contains("(×)"),
+            "linear name carries unit"
+        );
         assert!(log.safety.name.contains("log10"), "log name carries log10");
     }
 

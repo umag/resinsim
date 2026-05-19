@@ -96,8 +96,7 @@ impl LayerMask2dPane {
             let avail = ui.available_size();
             let texture_size = texture.size_vec2();
             if texture_size.x > 0.0 && texture_size.y > 0.0 {
-                let scale =
-                    (avail.x / texture_size.x).min(avail.y / texture_size.y);
+                let scale = (avail.x / texture_size.x).min(avail.y / texture_size.y);
                 let render_size = texture_size * scale;
                 ui.add(egui::Image::new((texture.id(), render_size)));
             }
@@ -185,11 +184,7 @@ mod tests {
     #[test]
     fn all_solid_mask_paints_all_on_color() {
         let mask = solid_mask(4, 3);
-        let img = mask_to_color_image(
-            &mask,
-            egui::Color32::RED,
-            egui::Color32::BLUE,
-        );
+        let img = mask_to_color_image(&mask, egui::Color32::RED, egui::Color32::BLUE);
         assert_eq!(img.size, [4, 3]);
         assert_eq!(img.pixels.len(), 12);
         for p in &img.pixels {
@@ -200,11 +195,7 @@ mod tests {
     #[test]
     fn empty_mask_paints_all_off_color() {
         let mask = empty_mask(4, 3);
-        let img = mask_to_color_image(
-            &mask,
-            egui::Color32::RED,
-            egui::Color32::BLUE,
-        );
+        let img = mask_to_color_image(&mask, egui::Color32::RED, egui::Color32::BLUE);
         assert_eq!(img.size, [4, 3]);
         for p in &img.pixels {
             assert_eq!(*p, egui::Color32::BLUE);
@@ -215,11 +206,7 @@ mod tests {
     fn single_cell_mask_round_trips() {
         let mut mask = empty_mask(2, 2);
         mask.set(0, 0).expect("set (0,0)");
-        let img = mask_to_color_image(
-            &mask,
-            egui::Color32::RED,
-            egui::Color32::BLUE,
-        );
+        let img = mask_to_color_image(&mask, egui::Color32::RED, egui::Color32::BLUE);
         // Row 0: (0,0) on, (1,0) off
         // Row 1: (0,1) off, (1,1) off
         assert_eq!(img.pixels[0], egui::Color32::RED);

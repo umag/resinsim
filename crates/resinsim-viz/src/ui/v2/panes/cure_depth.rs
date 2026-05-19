@@ -54,13 +54,8 @@ fn draw_loaded(ui: &mut egui::Ui, sim: &PrintSimulation, ctx: &PaneCtx<'_>) {
     // toward threshold" story lives. p2..p98 keeps the spike
     // offscreen at default zoom; the layer-height threshold is
     // always pulled into view so the FAIL boundary is visible.
-    let combined: Vec<f64> = cure
-        .iter()
-        .chain(worst.iter())
-        .map(|p| p[1])
-        .collect();
-    let (data_lo, data_hi) =
-        percentile_bounds(&combined, 0.02, 0.98, 0.08).unwrap_or((0.0, 200.0));
+    let combined: Vec<f64> = cure.iter().chain(worst.iter()).map(|p| p[1]).collect();
+    let (data_lo, data_hi) = percentile_bounds(&combined, 0.02, 0.98, 0.08).unwrap_or((0.0, 200.0));
     let lo = match height_threshold {
         Some(t) => data_lo.min(t).min(0.0),
         None => data_lo.min(0.0),
@@ -73,23 +68,21 @@ fn draw_loaded(ui: &mut egui::Ui, sim: &PrintSimulation, ctx: &PaneCtx<'_>) {
     configure_plot(PaneId::CureDepth, "Layer", "µm", ctx.link_group)
         .default_y_bounds(lo, hi)
         .show(ui, |plot_ui| {
-        consume_plot_inputs(plot_ui, ctx);
-        plot_ui.line(
-            Line::new("cure_depth", PlotPoints::from(cure)).color(theme::SERIES_GREEN),
-        );
-        plot_ui.line(
-            Line::new("worst_cure_depth", PlotPoints::from(worst))
-                .color(theme::SERIES_YELLOW),
-        );
-        if let Some(threshold) = height_threshold {
-            plot_ui.hline(
-                HLine::new("layer_height", threshold)
-                    .color(theme::THRESHOLD_AMBER)
-                    .width(1.0_f32),
+            consume_plot_inputs(plot_ui, ctx);
+            plot_ui
+                .line(Line::new("cure_depth", PlotPoints::from(cure)).color(theme::SERIES_GREEN));
+            plot_ui.line(
+                Line::new("worst_cure_depth", PlotPoints::from(worst)).color(theme::SERIES_YELLOW),
             );
-        }
-        plot_ui.vline(cursor_vline(ctx.cursor_layer));
-    });
+            if let Some(threshold) = height_threshold {
+                plot_ui.hline(
+                    HLine::new("layer_height", threshold)
+                        .color(theme::THRESHOLD_AMBER)
+                        .width(1.0_f32),
+                );
+            }
+            plot_ui.vline(cursor_vline(ctx.cursor_layer));
+        });
 }
 
 fn median_finite(values: &[f64]) -> Option<f64> {

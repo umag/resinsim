@@ -39,10 +39,9 @@ fn draw_loaded(ui: &mut egui::Ui, sim: &PrintSimulation, ctx: &PaneCtx<'_>) {
     configure_plot(PaneId::VatTemp, "Layer", "°C", ctx.link_group)
         .default_y_bounds(lo, hi)
         .show(ui, |plot_ui| {
-        consume_plot_inputs(plot_ui, ctx);
-        plot_ui.line(
-            Line::new("vat_temp", PlotPoints::from(points)).color(theme::SERIES_ORANGE),
-        );
-        plot_ui.vline(cursor_vline(ctx.cursor_layer));
-    });
+            consume_plot_inputs(plot_ui, ctx);
+            plot_ui
+                .line(Line::new("vat_temp", PlotPoints::from(points)).color(theme::SERIES_ORANGE));
+            plot_ui.vline(cursor_vline(ctx.cursor_layer));
+        });
 }

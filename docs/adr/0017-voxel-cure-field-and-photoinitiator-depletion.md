@@ -68,9 +68,9 @@ masks the underlying physics and produces wrong behaviour when intensity
 varies spatially within a layer (which is exactly the LCD-uniformity
 case `t2f1` is meant to capture).
 
-### 2. Variable voxel resolution, single CLI flag
+### 2. Variable voxel resolution — v1 scope cut
 
-Resolution is controlled by precedence chain:
+**Planned shape.** Resolution controlled by precedence chain:
 
 | Priority | Source | Default |
 |----------|--------|---------|
@@ -78,21 +78,29 @@ Resolution is controlled by precedence chain:
 | 2 | `PrinterProfile.voxel_cure_resolution_mm: Option<f32>` | None ⇒ fallthrough |
 | 3 (lowest) | Workspace default | **0.2 mm** |
 
-The single CLI flag's *presence* enables voxel mode; its *value* sets
-the resolution. Absence ⇒ Tier-1 scalar mode (no field allocation).
+**v1 implementation** (descoped during Phase 5 code review):
 
-The default 0.2 mm was chosen as the Pareto point: finer than 0.5 mm
-(used by `LayerMask` for cavity detection) catches typical thin-wall
-features, coarser than the Mars 5 Ultra slicer pixel pitch
-(~0.019 mm) avoids redundant fidelity, and a ~2 GB dense field for a
-typical 50×50×100 mm part fits inside the user's accepted ~18 GB peak
-memory budget (per project memory `feedback_memory_tradeoffs.md`,
-2026-04-21).
+- CLI `--voxel-cure-mm <FLOAT>`'s PRESENCE enables voxel mode; its VALUE
+  is parsed + validated (finite > 0) but **not consumed at runtime**.
+- `PrinterProfile.voxel_cure_resolution_mm` is parsed + validated but
+  **not read** by `SimulationRunner`.
+- The cure field's X-Y resolution is the slicer `LayerMask`'s
+  `voxel_size_mm` (typically 0.5 mm for cavity-detection-class masks,
+  0.05 mm for the build-simulation path).
+- The cure field's Z-step is `recipe.layer_height_um` (the actual print
+  layer thickness — independent of the LATERAL voxel size).
 
-Rejected: pinning a per-printer-class fixed resolution. Different
-geometries genuinely want different resolutions (a 30 mm
-miniature wants 0.05 mm; a 100 mm production part wants 0.2 mm); the
-override chain lets the user pick.
+**Why deferred.** Decoupling the X-Y resolution from the slicer mask
+requires a resampling pass (different bbox dimensions + a mapping
+function). The plumbing for this lives in `t2f5-gpu-acceleration-wgpu`
+since GPU dispatch tightly constrains the resolution-vs-memory trade.
+The flag value + profile field stay in the public API for forward-
+compat.
+
+**Workspace default `DEFAULT_VOXEL_CURE_RESOLUTION_MM = 0.2 mm`** is
+reserved for the same future activation. It is referenced by tests
+that pin the constant's value; it is not currently consulted at
+runtime.
 
 ### 3. Dense `ndarray::Array3<f32>` over part bbox; sparse deferred
 

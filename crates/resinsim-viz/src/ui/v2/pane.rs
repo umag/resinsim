@@ -245,9 +245,15 @@ mod field_missing_tests {
                 "data pane {id:?} must declare at least one required field"
             );
         }
-        assert!(Pane::from_id(PaneId::LayerMask2d).required_fields().is_empty());
-        assert!(Pane::from_id(PaneId::EmptySlot1).required_fields().is_empty());
-        assert!(Pane::from_id(PaneId::EmptySlot2).required_fields().is_empty());
+        assert!(Pane::from_id(PaneId::LayerMask2d)
+            .required_fields()
+            .is_empty());
+        assert!(Pane::from_id(PaneId::EmptySlot1)
+            .required_fields()
+            .is_empty());
+        assert!(Pane::from_id(PaneId::EmptySlot2)
+            .required_fields()
+            .is_empty());
     }
 }
 

@@ -9,6 +9,29 @@ The `resinsim` command-line binary. Hosts three top-level subcommands:
 - **`resinsim inspect`** — single-domain inspection commands (cure,
   force, thermal, zaxis, athena, layers).
 
+## Tier-2 voxel cure mode (ADR-0017 / t2f1)
+
+Available only in builds with the `field-sim` Cargo feature
+(`cargo build --features field-sim`). The `resinsim sim` subcommand
+accepts an additional `--voxel-cure-mm <FLOAT>` flag whose presence
+enables the Tier-2 voxel-resolved cure path with KB-160 photoinitiator
+depletion. The flag value (mm) is reserved for future resolution
+decoupling; v1 uses the input mask's voxel size.
+
+```sh
+cargo build --features resinsim-inspect/field-sim
+target/debug/resinsim sim --file model.ctb \
+    --resin generic_standard --printer elegoo_mars5_ultra \
+    --voxel-cure-mm 0.2 --out model.sim.json
+```
+
+The produced sim.json carries optional `cure_field` and
+`photoinitiator_field` blocks alongside the Tier-1 fields. Default
+builds (no `--features field-sim`) reject `--voxel-cure-mm` with a clap
+unknown-flag error; STL inputs in voxel-mode emit a `note:` and fall
+back to Tier-1 because STL has no per-layer masks. See ADR-0017 and
+KB-160 for design + physics references.
+
 ## ADR-0015 pipeline
 
 `sim.json` is the canonical interchange between simulation producer and
