@@ -14,6 +14,11 @@ ref_lift_speed_mm_min = 60.0       # measurement speed for peel_adhesion_kpa (KB
 # Shrinkage — KB-142: Elegoo ABS-Like V2
 linear_shrinkage_pct = 2.4  # ~7.1% volumetric / 3
 
+# Linear elasticity (post-cure) — KB-163. ABS-like resins are tougher
+# (Elegoo published spec ~2200–2400 MPa); ν slightly higher than standard.
+youngs_modulus_mpa = 2300.0
+poissons_ratio = 0.38
+
 # Thermal/Viscosity — KB-141
 viscosity_mpa_s = 175.0     # KB-141: 150-200 mPa·s
 reference_temp_c = 25.0

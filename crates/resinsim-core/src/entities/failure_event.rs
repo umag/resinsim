@@ -17,6 +17,15 @@ pub enum FailureType {
     SuctionCup,
     /// LCD non-uniformity causes insufficient cure at plate edges.
     NonUniformCure,
+    /// High accumulated tensile von-Mises stress at part boundaries —
+    /// the cured part is expected to warp on release. ADR-0018 / t2f3.
+    /// Producer: `FailurePredictor::predict_strain_failures` (only
+    /// active under `#[cfg(feature = "field-sim")]`).
+    WarpingRisk,
+    /// High strain gradient `|∇ε|` between adjacent voxels — micro-
+    /// crack risk along the gradient direction (cohesive failure).
+    /// ADR-0018 / t2f3. Producer: `predict_strain_failures`.
+    CohesiveFailure,
 }
 
 /// Severity level.

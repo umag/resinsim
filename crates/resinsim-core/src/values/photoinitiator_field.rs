@@ -32,6 +32,8 @@ use ndarray::Array3;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::values::field_budget::{enforce_field_budget, FieldAllocationError};
+
 /// Errors from `PhotoinitiatorField` construction and access.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum PhotoinitiatorFieldError {
@@ -52,6 +54,10 @@ pub enum PhotoinitiatorFieldError {
         "PhotoinitiatorField deplete: k_d × delta_dose must be finite and >= 0 (got k_d={k_d}, delta_dose={delta_dose})"
     )]
     InvalidDepletionInput { k_d: f32, delta_dose: f32 },
+    /// ADR-0018 budget guard — requested allocation exceeds the
+    /// configured per-field budget. Behaviour change from pre-t2f3.
+    #[error("PhotoinitiatorField allocation exceeds budget: {0}")]
+    ExceedsBudget(FieldAllocationError),
 }
 
 /// Dense 3D voxel field of photoinitiator concentration (dimensionless
@@ -86,6 +92,20 @@ impl PhotoinitiatorField {
                 initial_concentration,
             ));
         }
+        // ADR-0018 budget guard. PhotoinitiatorField has no voxel_size_mm
+        // of its own (it's dimension-locked to CureField in VoxelState);
+        // pass a sentinel 1.0 mm for the suggested-voxel-size inversion —
+        // callers that hit this branch should be reading the parallel
+        // CureField error to find the real per-mm suggestion.
+        enforce_field_budget(
+            "PhotoinitiatorField",
+            nx,
+            ny,
+            nz,
+            std::mem::size_of::<f32>() as u64,
+            1.0,
+        )
+        .map_err(PhotoinitiatorFieldError::ExceedsBudget)?;
         let data = Array3::<f32>::from_elem(
             (nx as usize, ny as usize, nz as usize),
             initial_concentration,

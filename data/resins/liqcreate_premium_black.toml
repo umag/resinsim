@@ -14,6 +14,14 @@ ref_lift_speed_mm_min = 60.0       # measurement speed for peel_adhesion_kpa (KB
 # Shrinkage — KB-142
 linear_shrinkage_pct = 1.5
 
+# Linear elasticity (post-cure) — KB-163. INTENTIONALLY OMITTED — no
+# vendor-published E or ν for this formulation. The strain/stress predictor
+# will use the KB-163 literature midpoints (E = 2000 MPa, ν = 0.35) and
+# disclose the uncalibrated-moduli caveat (±50% E, ±0.05 ν) in every
+# emitted FailureEvent. TODO: calibrate via Athena II tensile measurement.
+# youngs_modulus_mpa = ?
+# poissons_ratio = ?
+
 # Thermal/Viscosity — KB-141
 viscosity_mpa_s = 300.0
 reference_temp_c = 25.0

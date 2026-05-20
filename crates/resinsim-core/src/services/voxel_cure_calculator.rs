@@ -837,6 +837,7 @@ mod tests {
     // Without this test the refactor is load-bearing on faith. With it,
     // any future change that diverges the two forms breaks loudly.
 
+    #[allow(clippy::too_many_arguments)]
     fn run_parity_pair(
         nx: u32,
         ny: u32,

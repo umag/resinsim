@@ -43,6 +43,10 @@ fn make_layer(index: u32, force_n: f32, safety_factor: f32, vat_temp_c: f32) -> 
         z_deflection_um: 2.0,
         effective_layer_height_um: 48.0,
         worst_cure_depth_um: 100.0,
+        strain_magnitude_max: None,
+        stress_von_mises_max_mpa: None,
+        strain_gradient_max_frac: None,
+        voxel_yield_fraction: None,
     }
 }
 

@@ -50,6 +50,10 @@ fn dummy_layer(index: u32) -> LayerResult {
         z_deflection_um: 2.0,
         effective_layer_height_um: 48.0,
         worst_cure_depth_um: 100.0,
+        strain_magnitude_max: None,
+        stress_von_mises_max_mpa: None,
+        strain_gradient_max_frac: None,
+        voxel_yield_fraction: None,
     }
 }
 

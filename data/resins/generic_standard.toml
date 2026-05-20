@@ -15,6 +15,11 @@ ref_lift_speed_mm_min = 60.0  # measurement speed for peel_adhesion_kpa (KB-112,
 # Shrinkage — KB-142
 linear_shrinkage_pct = 1.5
 
+# Linear elasticity (post-cure) — KB-163. Literature-midpoint values for a
+# Premium-Black-class photopolymer; ν strictly < 0.5 (incompressible limit).
+youngs_modulus_mpa = 2000.0
+poissons_ratio = 0.35
+
 # Thermal/Viscosity — KB-141
 viscosity_mpa_s = 200.0
 reference_temp_c = 25.0

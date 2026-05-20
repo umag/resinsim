@@ -144,6 +144,11 @@ fn failure_type_label(event: &FailureEvent) -> &'static str {
         RapidAreaIncrease => "area spike",
         SuctionCup => "suction cup",
         NonUniformCure => "edge cure",
+        // ADR-0018 / t2f3 — strain/stress-driven failures from the
+        // feature-gated voxel path. Labels follow the existing
+        // brevity convention (≤ 20 chars).
+        WarpingRisk => "warping risk",
+        CohesiveFailure => "cohesive failure",
     }
 }
 
@@ -259,6 +264,11 @@ mod tests {
             RapidAreaIncrease,
             SuctionCup,
             NonUniformCure,
+            // ADR-0018 / t2f3 — anti-pattern non-exhaustive-on-single-
+            // variant-enum specifically warns about this hand-rolled
+            // array. Keep in lockstep with the match arms above.
+            WarpingRisk,
+            CohesiveFailure,
         ] {
             let event = FailureEvent {
                 layer: 0,

@@ -37,6 +37,39 @@ pub const DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL: f32 = 1.0;
 /// `photoinitiator_decay_constant_k_d` field as measurements arrive.
 pub const DEFAULT_PHOTOINITIATOR_DECAY_CONSTANT_K_D: f32 = 0.05;
 
+/// KB-163 literature-midpoint estimate for photopolymer Young's modulus
+/// (post-cure, fully-cured). Applied when a `ResinProfile` has
+/// `youngs_modulus_mpa = None`; callers (CLI, reports, strain/stress
+/// failures) MUST emit a LOUD warning with the ±50 % uncertainty band so
+/// users know the mechanical analysis is running on an ESTIMATE. Per-resin
+/// calibration (cured-vs-green dimensions + tensile measurement) updates
+/// the TOML field as measurements arrive.
+pub const DEFAULT_YOUNGS_MODULUS_MPA: f32 = 2000.0;
+
+/// KB-163 literature-midpoint estimate for photopolymer Poisson's ratio
+/// (post-cure thermoset). Applied when a `ResinProfile` has
+/// `poissons_ratio = None`; callers MUST emit a LOUD warning (±0.05 band).
+/// Constrained to (-1.0, 0.5) by validate() — 0.5 would make the linear-
+/// elasticity stiffness matrix singular (incompressible limit).
+pub const DEFAULT_POISSONS_RATIO: f32 = 0.35;
+
+/// KB-164 literature-midpoint estimate for the Z/XY shrinkage anisotropy
+/// ratio in DLP / SLA photopolymers. Per-layer cure mechanics constrain
+/// XY shrinkage (cured layer below holds the new layer in plane) while
+/// leaving Z free to deform; the cured part therefore shrinks more in Z
+/// than in XY. Direct shrinkage measurements are sparse in the literature
+/// but mechanical-modulus anisotropy from `PMC5344561` (E_z/E_xy = 1.27
+/// for Castable Blend, 1.39 for Visijet FTX Green, untreated) supports
+/// a ratio in the 1.3–1.5 range. v1 default: 1.5 with ±0.3 band; calibrate
+/// via Athena II tensile + DIC follow-on.
+///
+/// Mapping: with `ε_iso = -L · C` the per-axis components are
+/// `ε_zz = factor_z · ε_iso`, `ε_xx = ε_yy = factor_xy · ε_iso` where
+/// `factor_z / factor_xy = z_ratio` and `2·factor_xy + factor_z = 3`
+/// (volume-conserving so that `linear_shrinkage_pct` keeps its
+/// vendor-data-sheet meaning).
+pub const DEFAULT_SHRINKAGE_ANISOTROPY_Z_RATIO: f32 = 1.5;
+
 /// serde-default returning [`DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL`].
 /// Used so legacy resin TOMLs without the field parse to the convention
 /// default (1.0) rather than erroring at deserialise.
@@ -143,6 +176,42 @@ pub struct ResinProfile {
     #[serde(default)]
     pub(crate) photoinitiator_decay_constant_k_d: Option<f32>,
 
+    /// Young's modulus (linear-elastic stiffness). Unit: MPa. KB-163.
+    /// **Optional** — when `None`, the t2f3 strain/stress path uses
+    /// [`DEFAULT_YOUNGS_MODULUS_MPA`] (2000 MPa literature midpoint with
+    /// ±50 % uncertainty) and `FailurePredictor::predict_strain_failures`
+    /// MUST disclose the uncalibrated-moduli caveat in any emitted
+    /// `FailureEvent.message`. Per-resin calibration via measured tensile
+    /// data replaces the default. Consumed by `StressAccumulator` when the
+    /// runtime `--voxel-cure-mm` flag is active; the Tier-1 scalar path
+    /// does not read this field.
+    #[serde(default)]
+    pub(crate) youngs_modulus_mpa: Option<f32>,
+
+    /// Poisson's ratio (post-cure thermoset). Dimensionless. KB-163.
+    /// **Optional** — when `None`, the t2f3 strain/stress path uses
+    /// [`DEFAULT_POISSONS_RATIO`] (0.35 literature midpoint with ±0.05
+    /// uncertainty band) and MUST disclose the uncalibrated-moduli caveat
+    /// in emitted FailureEvent messages. Range when present: strictly
+    /// in (-1.0, 0.5) — ν = 0.5 corresponds to incompressible material
+    /// and makes the closed-form linear-elasticity stiffness singular,
+    /// so the validator rejects ν >= 0.5.
+    #[serde(default)]
+    pub(crate) poissons_ratio: Option<f32>,
+
+    /// Z / XY shrinkage anisotropy ratio. KB-164. Dimensionless.
+    /// **Optional** — when `None`, the t2f3 strain/stress path uses
+    /// [`DEFAULT_SHRINKAGE_ANISOTROPY_Z_RATIO`] (1.5, literature-midpoint
+    /// engineering estimate). Value > 1.0 means Z shrinkage exceeds XY
+    /// shrinkage (the physical norm for layer-by-layer cure — XY is
+    /// constrained by adhesion to the cured layer below, Z is free to
+    /// deform). The mapping preserves `linear_shrinkage_pct`'s vendor
+    /// meaning: `2·factor_xy + factor_z = 3`, so an isotropic resin
+    /// (ratio = 1.0) produces the legacy uniform ε field.
+    /// Range when present: strictly > 0 (validate() enforces).
+    #[serde(default)]
+    pub(crate) shrinkage_anisotropy_z_ratio: Option<f32>,
+
     /// Concrete operating point for this resin (ADR-0005 Axis 2b).
     /// **Required** — no serde default. A legacy resin TOML missing `[recipe]` fails
     /// to deserialise, surfacing the migration loudly per ADR-0005 Consequences.
@@ -223,6 +292,47 @@ impl ResinProfile {
     pub fn effective_photoinitiator_decay_constant_k_d(&self) -> f32 {
         self.photoinitiator_decay_constant_k_d
             .unwrap_or(DEFAULT_PHOTOINITIATOR_DECAY_CONSTANT_K_D)
+    }
+    /// Young's modulus if the TOML carries a measured value (None ⇒
+    /// uncalibrated). See [`DEFAULT_YOUNGS_MODULUS_MPA`] for the fallback.
+    pub fn youngs_modulus_mpa(&self) -> Option<f32> {
+        self.youngs_modulus_mpa
+    }
+    /// Effective Young's modulus: TOML value if present, otherwise the
+    /// KB-163 default (2000 MPa with ±50 % uncertainty). Callers SHOULD
+    /// check [`youngs_modulus_mpa`](Self::youngs_modulus_mpa) and warn /
+    /// annotate emitted failures when it is None.
+    pub fn effective_youngs_modulus_mpa(&self) -> f32 {
+        self.youngs_modulus_mpa.unwrap_or(DEFAULT_YOUNGS_MODULUS_MPA)
+    }
+    /// Poisson's ratio if the TOML carries a measured value (None ⇒
+    /// uncalibrated). See [`DEFAULT_POISSONS_RATIO`] for the fallback.
+    pub fn poissons_ratio(&self) -> Option<f32> {
+        self.poissons_ratio
+    }
+    /// Effective Poisson's ratio: TOML value if present, otherwise the
+    /// KB-163 default (0.35 with ±0.05 band).
+    pub fn effective_poissons_ratio(&self) -> f32 {
+        self.poissons_ratio.unwrap_or(DEFAULT_POISSONS_RATIO)
+    }
+    /// Z / XY shrinkage anisotropy ratio if the TOML carries a measured
+    /// value. See [`DEFAULT_SHRINKAGE_ANISOTROPY_Z_RATIO`] for fallback.
+    pub fn shrinkage_anisotropy_z_ratio(&self) -> Option<f32> {
+        self.shrinkage_anisotropy_z_ratio
+    }
+    /// Effective Z/XY shrinkage anisotropy ratio: TOML value if present,
+    /// otherwise KB-164 default (1.5 with ±0.3 band).
+    pub fn effective_shrinkage_anisotropy_z_ratio(&self) -> f32 {
+        self.shrinkage_anisotropy_z_ratio
+            .unwrap_or(DEFAULT_SHRINKAGE_ANISOTROPY_Z_RATIO)
+    }
+    /// Whether the mechanical moduli used by the t2f3 strain/stress path
+    /// are calibrated (both fields populated). When false, the predictor
+    /// MUST disclose the uncalibrated-moduli caveat in any emitted
+    /// `FailureEvent.message` per the round-2 plan-review folded
+    /// finding (planV=2 r2 MEDIUM correctness, 2026-05-20).
+    pub fn has_calibrated_moduli(&self) -> bool {
+        self.youngs_modulus_mpa.is_some() && self.poissons_ratio.is_some()
     }
     /// The concrete operating point (Recipe VO) for this resin.
     pub fn recipe(&self) -> &Recipe {
@@ -319,6 +429,43 @@ impl ResinProfile {
                  finite and > 0.0 (got {k_d})"
             ));
         }
+        // KB-163: Young's modulus is a stiffness, strictly positive when
+        // present. Anti-pattern rust-nan-positive-validation-gap — finite
+        // check FIRST so NaN doesn't pass the > 0.0 comparison.
+        if let Some(e) = self.youngs_modulus_mpa
+            && (!e.is_finite() || e <= 0.0)
+        {
+            return Err(format!(
+                "youngs_modulus_mpa, when present, must be finite and > 0.0 \
+                 (got {e})"
+            ));
+        }
+        // KB-163: Poisson's ratio is dimensionless in the physical range
+        // (-1.0, 0.5). ν = 0.5 is the incompressible limit and makes the
+        // closed-form linear-elasticity stiffness matrix
+        // (D = E·(1−ν)/((1+ν)(1−2ν))) singular — divide-by-zero in
+        // StressTensor::from_strain_linear_elastic. Strict upper bound.
+        if let Some(nu) = self.poissons_ratio
+            && (!nu.is_finite() || nu <= -1.0 || nu >= 0.5)
+        {
+            return Err(format!(
+                "poissons_ratio, when present, must be finite and strictly \
+                 in (-1.0, 0.5) (got {nu})"
+            ));
+        }
+        // KB-164: Z/XY shrinkage anisotropy ratio is dimensionless and
+        // strictly positive. ratio = 1.0 is isotropic (legacy behaviour);
+        // > 1.0 is the physical norm (Z shrinks more); < 1.0 is unusual
+        // but allowed (e.g. ceramic-filled formulations with reinforcement
+        // patterns).
+        if let Some(r) = self.shrinkage_anisotropy_z_ratio
+            && (!r.is_finite() || r <= 0.0)
+        {
+            return Err(format!(
+                "shrinkage_anisotropy_z_ratio, when present, must be finite \
+                 and > 0.0 (got {r})"
+            ));
+        }
         // Both fields are validated finite above, so `>=` is safe on f32.
         if self.min_safe_temp_c >= self.degradation_temp_c {
             return Err(format!(
@@ -362,6 +509,9 @@ impl ResinProfile {
             cure_kinetics_ea_kj_mol: None, // KB-153: no measured value — uses default 30 kJ/mol w/ loud warning
             photoinitiator_concentration_initial: DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL,
             photoinitiator_decay_constant_k_d: None, // KB-160: no measured value — uses default 0.05 w/ ±50 % loud warning
+            youngs_modulus_mpa: None, // KB-163: deliberately uncalibrated — see data/resins/elegoo_ceramic_grey_v2.toml comment
+            poissons_ratio: None,     // KB-163: deliberately uncalibrated
+            shrinkage_anisotropy_z_ratio: None, // KB-164: uncalibrated; falls back to 1.5
             recipe: Recipe::elegoo_ceramic_grey(),
         }
     }
@@ -385,6 +535,9 @@ impl ResinProfile {
             cure_kinetics_ea_kj_mol: None, // KB-153: no measured value — uses default 30 kJ/mol w/ loud warning
             photoinitiator_concentration_initial: DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL,
             photoinitiator_decay_constant_k_d: None, // KB-160: no measured value — uses default 0.05 w/ ±50 % loud warning
+            youngs_modulus_mpa: Some(2000.0), // KB-163: literature-midpoint photopolymer modulus (Premium-Black-class)
+            poissons_ratio: Some(0.35),       // KB-163: standard thermoset
+            shrinkage_anisotropy_z_ratio: Some(1.5), // KB-164: layer-by-layer Z constraint
             recipe: Recipe::generic_standard(),
         }
     }
@@ -676,6 +829,225 @@ mod tests {
         assert_eq!(
             p.effective_photoinitiator_decay_constant_k_d(),
             DEFAULT_PHOTOINITIATOR_DECAY_CONSTANT_K_D
+        );
+    }
+
+    // --- KB-163 Young's modulus + Poisson's ratio fields tests (t2f3) ---
+
+    #[test]
+    fn youngs_modulus_mpa_some_on_generic_standard() {
+        // generic_standard ships with explicit KB-163 midpoints so the
+        // common test fixture exercises the calibrated path, not the
+        // default-with-warn path. has_calibrated_moduli() must agree.
+        let p = ResinProfile::generic_standard();
+        assert_eq!(p.youngs_modulus_mpa(), Some(2000.0));
+        assert_eq!(p.poissons_ratio(), Some(0.35));
+        assert!(p.has_calibrated_moduli());
+    }
+
+    #[test]
+    fn youngs_modulus_mpa_defaults_to_none_on_elegoo() {
+        // Elegoo Ceramic Grey V2 is deliberately uncalibrated until
+        // Athena II measurements arrive.
+        let p = ResinProfile::elegoo_ceramic_grey_v2();
+        assert!(p.youngs_modulus_mpa().is_none());
+        assert!(p.poissons_ratio().is_none());
+        assert!(!p.has_calibrated_moduli());
+    }
+
+    #[test]
+    fn effective_youngs_modulus_uses_default_when_none() {
+        let mut p = ResinProfile::generic_standard();
+        p.youngs_modulus_mpa = None;
+        assert_eq!(p.effective_youngs_modulus_mpa(), DEFAULT_YOUNGS_MODULUS_MPA);
+        assert_eq!(p.effective_youngs_modulus_mpa(), 2000.0);
+    }
+
+    #[test]
+    fn effective_youngs_modulus_uses_measured_when_some() {
+        let mut p = ResinProfile::generic_standard();
+        p.youngs_modulus_mpa = Some(2750.0);
+        assert_eq!(p.effective_youngs_modulus_mpa(), 2750.0);
+    }
+
+    #[test]
+    fn effective_poissons_ratio_uses_default_when_none() {
+        let mut p = ResinProfile::generic_standard();
+        p.poissons_ratio = None;
+        assert_eq!(p.effective_poissons_ratio(), DEFAULT_POISSONS_RATIO);
+        assert_eq!(p.effective_poissons_ratio(), 0.35);
+    }
+
+    #[test]
+    fn youngs_modulus_zero_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.youngs_modulus_mpa = Some(0.0);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn youngs_modulus_negative_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.youngs_modulus_mpa = Some(-1.0);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn youngs_modulus_nan_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.youngs_modulus_mpa = Some(f32::NAN);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn youngs_modulus_none_accepted() {
+        let mut p = ResinProfile::generic_standard();
+        p.youngs_modulus_mpa = None;
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn poissons_ratio_nan_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.poissons_ratio = Some(f32::NAN);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn poissons_ratio_at_incompressible_limit_rejected() {
+        // ν = 0.5 makes the closed-form 6×6 stiffness singular —
+        // FailurePredictor / StressAccumulator would divide by zero.
+        let mut p = ResinProfile::generic_standard();
+        p.poissons_ratio = Some(0.5);
+        let err = p
+            .validate()
+            .expect_err("ν = 0.5 must be rejected (incompressible limit)");
+        assert!(
+            err.contains("poissons_ratio"),
+            "error names the field: {err}"
+        );
+    }
+
+    #[test]
+    fn poissons_ratio_above_half_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.poissons_ratio = Some(0.6);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn poissons_ratio_at_minus_one_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.poissons_ratio = Some(-1.0);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn poissons_ratio_below_minus_one_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.poissons_ratio = Some(-1.5);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn poissons_ratio_zero_accepted_rod_like() {
+        // ν = 0 is physical (rod-like, no lateral contraction).
+        let mut p = ResinProfile::generic_standard();
+        p.poissons_ratio = Some(0.0);
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn poissons_ratio_near_incompressible_accepted() {
+        let mut p = ResinProfile::generic_standard();
+        p.poissons_ratio = Some(0.49);
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn poissons_ratio_none_accepted() {
+        let mut p = ResinProfile::generic_standard();
+        p.poissons_ratio = None;
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn has_calibrated_moduli_requires_both() {
+        let mut p = ResinProfile::generic_standard();
+        assert!(p.has_calibrated_moduli());
+        p.poissons_ratio = None;
+        assert!(!p.has_calibrated_moduli());
+        p.poissons_ratio = Some(0.35);
+        p.youngs_modulus_mpa = None;
+        assert!(!p.has_calibrated_moduli());
+    }
+
+    #[test]
+    fn legacy_toml_without_mechanical_moduli_applies_defaults() {
+        let toml_str = legacy_toml_without_thermal_thresholds();
+        let p: ResinProfile = toml::from_str(&toml_str)
+            .expect("legacy TOML without youngs_modulus_mpa / poissons_ratio must parse");
+        assert_eq!(p.youngs_modulus_mpa(), None);
+        assert_eq!(p.poissons_ratio(), None);
+        assert!(!p.has_calibrated_moduli());
+        assert_eq!(p.effective_youngs_modulus_mpa(), DEFAULT_YOUNGS_MODULUS_MPA);
+        assert_eq!(p.effective_poissons_ratio(), DEFAULT_POISSONS_RATIO);
+        p.validate()
+            .expect("defaulted mechanical moduli must satisfy validate()");
+    }
+
+    #[test]
+    fn toml_with_explicit_mechanical_moduli_round_trips() {
+        let toml_str = format!(
+            "{}\nyoungs_modulus_mpa = 2500.0\npoissons_ratio = 0.32\n{}",
+            legacy_toml_root_without_thermal_thresholds(),
+            valid_recipe_table()
+        );
+        let p: ResinProfile = toml::from_str(&toml_str)
+            .expect("explicit youngs_modulus_mpa + poissons_ratio TOML must parse");
+        assert_eq!(p.youngs_modulus_mpa(), Some(2500.0));
+        assert_eq!(p.poissons_ratio(), Some(0.32));
+        assert!(p.has_calibrated_moduli());
+        assert_eq!(p.effective_youngs_modulus_mpa(), 2500.0);
+        assert_eq!(p.effective_poissons_ratio(), 0.32);
+        p.validate()
+            .expect("explicit mechanical moduli values must satisfy validate()");
+    }
+
+    #[test]
+    fn toml_with_nan_youngs_modulus_rejected_by_validate() {
+        let toml_str = format!(
+            "{}\nyoungs_modulus_mpa = nan\n{}",
+            legacy_toml_root_without_thermal_thresholds(),
+            valid_recipe_table()
+        );
+        let p: ResinProfile =
+            toml::from_str(&toml_str).expect("TOML parse succeeds; validate() is the gate");
+        let err = p
+            .validate()
+            .expect_err("NaN youngs_modulus_mpa must fail validate()");
+        assert!(
+            err.contains("youngs_modulus_mpa"),
+            "error must name the field: {err}"
+        );
+    }
+
+    #[test]
+    fn toml_with_singular_poissons_ratio_rejected_by_validate() {
+        // ν = 0.5 is the incompressible limit — stiffness matrix singular.
+        let toml_str = format!(
+            "{}\npoissons_ratio = 0.5\n{}",
+            legacy_toml_root_without_thermal_thresholds(),
+            valid_recipe_table()
+        );
+        let p: ResinProfile =
+            toml::from_str(&toml_str).expect("TOML parse succeeds; validate() is the gate");
+        let err = p
+            .validate()
+            .expect_err("ν = 0.5 must fail validate() (incompressible limit)");
+        assert!(
+            err.contains("poissons_ratio"),
+            "error must name the field: {err}"
         );
     }
 

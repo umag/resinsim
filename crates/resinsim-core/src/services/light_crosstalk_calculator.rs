@@ -137,6 +137,10 @@ impl LightCrosstalkCalculator {
     ///
     /// For identity kernel `[1.0]` (length 1, σ ≤ 0), this is a no-op
     /// (X-pass copies intensity → scratch; Y-pass copies scratch → intensity).
+    // needless_range_loop: kernel + intensity grids accessed by index
+    // for clarity in the convolution math; rewriting via iterators
+    // would obscure the offset arithmetic.
+    #[allow(clippy::needless_range_loop)]
     pub fn apply_separable_2d(
         intensity: &mut Array2<f32>,
         kernel: &[f32],
@@ -201,6 +205,8 @@ impl LightCrosstalkCalculator {
     /// samples contribute zero; in-bounds output is NOT renormalised.
     ///
     /// For identity kernel `[1.0]` (length 1, σ ≤ 0), this is a no-op.
+    // needless_range_loop: same rationale as `apply_separable_2d`.
+    #[allow(clippy::needless_range_loop)]
     pub fn apply_separable_1d_z(
         column: &mut [f32],
         kernel: &[f32],
@@ -484,6 +490,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn z_impulse_matches_kernel_shape() {
         // Place impulse at index 5 of length-11 column; σ = 1 → length 7 kernel.
         // Output at index iz = k[iz - 5 + 3] for iz in [2..=8], else 0.

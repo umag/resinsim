@@ -17,6 +17,16 @@ ref_lift_speed_mm_min = 60.0       # measurement speed for peel_adhesion_kpa (KB
 # Shrinkage — ceramic-constrained
 linear_shrinkage_pct = 0.9
 
+# Linear elasticity (post-cure) — KB-163. INTENTIONALLY OMITTED — ceramic-
+# filled formulations diverge significantly from the photopolymer literature
+# midpoint (E ≈ 2000 MPa) because ceramic filler reinforces the matrix.
+# Without measured data the conservative path is to let the strain/stress
+# predictor surface the "uncalibrated moduli (±50% E, ±0.05 ν)" caveat in
+# every emitted FailureEvent rather than encode a guess here. TODO: calibrate
+# via Athena II tensile measurement on a printed test bar.
+# youngs_modulus_mpa = ?
+# poissons_ratio = ?
+
 # Thermal/Viscosity — higher viscosity from ceramic filler
 viscosity_mpa_s = 350.0
 reference_temp_c = 25.0

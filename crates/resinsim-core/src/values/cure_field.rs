@@ -35,6 +35,7 @@ use ndarray::Array3;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::values::field_budget::{enforce_field_budget, FieldAllocationError};
 use crate::values::CureDepth;
 
 /// Errors from `CureField` construction and access.
@@ -57,6 +58,14 @@ pub enum CureFieldError {
     },
     #[error("CureField dose values must be finite and >= 0, got {0}")]
     InvalidDose(f32),
+    /// ADR-0018 budget guard: requested allocation exceeds the configured
+    /// per-field budget (default 4 GB; override via
+    /// `RESINSIM_MAX_FIELD_BYTES`). Behaviour change from pre-t2f3: the
+    /// constructor previously allocated unconditionally; existing tests
+    /// that constructed CureFields above 4 GB must either downsize, set
+    /// the env override, or accept the new failure mode.
+    #[error("CureField allocation exceeds budget: {0}")]
+    ExceedsBudget(FieldAllocationError),
 }
 
 /// Per-layer summary of a `CureField` slab. KB-160 / ADR-0017.
@@ -127,6 +136,16 @@ impl CureField {
                 z: bbox_min_mm[2],
             });
         }
+        // ADR-0018 budget guard — fail BEFORE `Array3::zeros` allocates.
+        enforce_field_budget(
+            "CureField",
+            nx,
+            ny,
+            nz,
+            std::mem::size_of::<f32>() as u64,
+            voxel_size_mm,
+        )
+        .map_err(CureFieldError::ExceedsBudget)?;
         let data = Array3::<f32>::zeros((nx as usize, ny as usize, nz as usize));
         Ok(Self {
             nx,

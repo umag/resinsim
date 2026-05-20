@@ -83,12 +83,13 @@ enum Commands {
         /// Tier-1 scalar path. The flag VALUE is parsed and validated at
         /// parse time (finite > 0, typical 0.05–0.5 mm) but is currently
         /// **informational only** — v1 uses the slicer mask's voxel size
-        /// for X/Y and the recipe's layer_height_um for Z. CLI > profile
-        /// > workspace-default precedence is reserved for t2f5
-        /// (resolution decoupling); until then `PrinterProfile.voxel_cure_resolution_mm`
-        /// is parsed but not consulted at runtime. Only available in builds
-        /// with the `field-sim` Cargo feature; default builds reject this
-        /// flag with the standard clap unknown-flag error.
+        /// for X/Y and the recipe's layer_height_um for Z. The CLI ⇒
+        /// profile ⇒ workspace-default precedence chain is reserved for
+        /// t2f5 (resolution decoupling); until then
+        /// `PrinterProfile.voxel_cure_resolution_mm` is parsed but not
+        /// consulted at runtime. Only available in builds with the
+        /// `field-sim` Cargo feature; default builds reject this flag
+        /// with the standard clap unknown-flag error.
         #[cfg(feature = "field-sim")]
         #[arg(long, value_parser = parse_voxel_cure_mm)]
         voxel_cure_mm: Option<f32>,

@@ -13,6 +13,10 @@ pub mod uniformity_calculator;
 pub mod voxel_cure_calculator;
 #[cfg(feature = "field-sim")]
 pub mod light_crosstalk_calculator;
+#[cfg(feature = "field-sim")]
+pub mod shrinkage_calculator;
+#[cfg(feature = "field-sim")]
+pub mod stress_accumulator;
 pub mod z_axis_compensator;
 
 pub use build_plate::BuildPlate;
@@ -29,4 +33,8 @@ pub use uniformity_calculator::UniformityCalculator;
 pub use voxel_cure_calculator::{VoxelCureCalculator, VoxelCureError};
 #[cfg(feature = "field-sim")]
 pub use light_crosstalk_calculator::{CrosstalkError, LightCrosstalkCalculator};
+#[cfg(feature = "field-sim")]
+pub use shrinkage_calculator::ShrinkageCalculator;
+#[cfg(feature = "field-sim")]
+pub use stress_accumulator::StressAccumulator;
 pub use z_axis_compensator::ZAxisCompensator;

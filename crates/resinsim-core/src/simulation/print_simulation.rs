@@ -9,7 +9,9 @@ use crate::services::CureCalculator;
 use crate::services::LayerTimingCalculator;
 use crate::values::LayerHeightProvenance;
 #[cfg(feature = "field-sim")]
-use crate::values::{CureDepth, CureField, Energy, PhotoinitiatorField, VatTemperature};
+use crate::values::{
+    CureDepth, CureField, Energy, PhotoinitiatorField, StrainField, StressField, VatTemperature,
+};
 
 /// Errors returned by [`PrintSimulation`] mutators.
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -29,6 +31,24 @@ pub enum AggregateError {
         cure_dims: (u32, u32, u32),
         pi_dims: (u32, u32, u32),
     },
+    /// `set_strain_stress_fields` was called with a StrainField and
+    /// StressField whose dimensions disagree, or without a previously-
+    /// installed `cure_field` whose dimensions they should mirror. ADR-
+    /// 0018 invariant: strain ⇔ stress ⇔ cure all share `(nx, ny, nz)`.
+    #[error(
+        "strain/stress field dimensions must match cure field: strain={strain_dims:?}, \
+         stress={stress_dims:?}, cure={cure_dims:?}"
+    )]
+    StrainStressFieldDimensionMismatch {
+        strain_dims: (u32, u32, u32),
+        stress_dims: (u32, u32, u32),
+        cure_dims: Option<(u32, u32, u32)>,
+    },
+    /// `set_strain_stress_fields` was called before `set_voxel_fields`.
+    /// ADR-0018 says strain is a downstream of cure: you cannot install
+    /// strain/stress without first installing cure.
+    #[error("set_strain_stress_fields requires a previously-installed cure_field")]
+    StrainStressWithoutCureField,
 }
 
 /// Aggregate root: a complete simulation run for one geometry + resin + printer.
@@ -69,6 +89,28 @@ pub struct PrintSimulation {
     #[cfg(feature = "field-sim")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     photoinitiator_field: Option<PhotoinitiatorField>,
+    /// Per-voxel cure-driven shrinkage strain (ADR-0018 / t2f3).
+    /// Populated only when voxel-cure mode is active (full Tier-2);
+    /// dimension-locked to `cure_field` and `stress_field`.
+    ///
+    /// **In-memory only** for v1 — `#[serde(skip)]` on the heavy field.
+    /// At 24 bytes/voxel binary the JSON expansion (12 bytes per f32
+    /// literal plus structural overhead) puts a typical 1.6 G-voxel
+    /// Mars 5 Ultra strain field at ~100 GB on disk, exceeding any
+    /// reasonable workstation budget. Per-layer aggregates on
+    /// `LayerResult` (`strain_magnitude_max`, etc.) ARE serialised and
+    /// give consumers a compact projection. A future schema_version bump
+    /// with a sparse / quantised serialiser can revisit this.
+    #[cfg(feature = "field-sim")]
+    #[serde(default, skip)]
+    strain_field: Option<StrainField>,
+    /// Per-voxel residual stress in MPa (ADR-0018 / t2f3). Populated
+    /// only when voxel-cure mode is active; dimension-locked to
+    /// `cure_field` and `strain_field`. **In-memory only** — same
+    /// rationale as `strain_field` above.
+    #[cfg(feature = "field-sim")]
+    #[serde(default, skip)]
+    stress_field: Option<StressField>,
     /// Reconciliation between the CTB's embedded layer-height (file-axis,
     /// runtime authority) and the resin recipe's `layer_height_um`
     /// (recipe-axis, authoring metadata). Per ADR-0005 Consequences
@@ -118,6 +160,10 @@ impl PrintSimulation {
             cure_field: None,
             #[cfg(feature = "field-sim")]
             photoinitiator_field: None,
+            #[cfg(feature = "field-sim")]
+            strain_field: None,
+            #[cfg(feature = "field-sim")]
+            stress_field: None,
             layer_height_provenance: None,
         }
     }
@@ -210,6 +256,63 @@ impl PrintSimulation {
         }
         self.cure_field = Some(cure);
         self.photoinitiator_field = Some(photoinitiator);
+        Ok(())
+    }
+
+    /// Per-voxel shrinkage strain field (ADR-0018 / t2f3).
+    #[cfg(feature = "field-sim")]
+    pub fn strain_field(&self) -> Option<&StrainField> {
+        self.strain_field.as_ref()
+    }
+
+    /// Per-voxel residual stress field (ADR-0018 / t2f3).
+    #[cfg(feature = "field-sim")]
+    pub fn stress_field(&self) -> Option<&StressField> {
+        self.stress_field.as_ref()
+    }
+
+    /// Mutable borrow of the strain field. Symmetric with
+    /// [`Self::cure_field_mut`] — only used by SimulationRunner.
+    #[cfg(feature = "field-sim")]
+    pub fn strain_field_mut(&mut self) -> Option<&mut StrainField> {
+        self.strain_field.as_mut()
+    }
+
+    /// Mutable borrow of the stress field. Symmetric with
+    /// [`Self::strain_field_mut`].
+    #[cfg(feature = "field-sim")]
+    pub fn stress_field_mut(&mut self) -> Option<&mut StressField> {
+        self.stress_field.as_mut()
+    }
+
+    /// Install strain + stress fields onto the aggregate (ADR-0018 / t2f3).
+    /// Parallel to `set_voxel_fields(cure, pi)` — preserves the existing
+    /// 2-arg setter signature unchanged. Both must be set together; their
+    /// dimensions must match each other AND the previously-installed
+    /// `cure_field`. Returns
+    /// `Err(AggregateError::StrainStressWithoutCureField)` if no
+    /// cure_field is yet set (the t2f3 invariant: strain is downstream
+    /// of cure).
+    #[cfg(feature = "field-sim")]
+    pub fn set_strain_stress_fields(
+        &mut self,
+        strain: StrainField,
+        stress: StressField,
+    ) -> Result<(), AggregateError> {
+        let cure_dims = self
+            .cure_field
+            .as_ref()
+            .map(|c| c.dimensions())
+            .ok_or(AggregateError::StrainStressWithoutCureField)?;
+        if strain.dimensions() != stress.dimensions() || strain.dimensions() != cure_dims {
+            return Err(AggregateError::StrainStressFieldDimensionMismatch {
+                strain_dims: strain.dimensions(),
+                stress_dims: stress.dimensions(),
+                cure_dims: Some(cure_dims),
+            });
+        }
+        self.strain_field = Some(strain);
+        self.stress_field = Some(stress);
         Ok(())
     }
 
@@ -517,6 +620,10 @@ pub(crate) mod tests {
             z_deflection_um: force / 0.46, // k=460
             effective_layer_height_um: 50.0 - force / 0.46,
             worst_cure_depth_um: 100.0,
+            strain_magnitude_max: None,
+            stress_von_mises_max_mpa: None,
+            strain_gradient_max_frac: None,
+            voxel_yield_fraction: None,
         }
     }
 

@@ -292,11 +292,149 @@ impl FailurePredictor {
             z_deflection_um: z_deflection,
             effective_layer_height_um: effective_height,
             worst_cure_depth_um: worst_cure_depth,
+            // ADR-0018 / t2f3 — Tier-1 path never populates these; the
+            // SimulationRunner voxel pass overwrites them when active.
+            strain_magnitude_max: None,
+            stress_von_mises_max_mpa: None,
+            strain_gradient_max_frac: None,
+            voxel_yield_fraction: None,
         };
 
         (result, failures)
     }
+
+    /// Predict strain- and stress-driven failures for one layer (t2f3 /
+    /// ADR-0018). Co-exists with [`predict_layer`] — the SimulationRunner
+    /// invokes both per layer and merges their failure vectors before
+    /// `sim.add_layer(...)`.
+    ///
+    /// Detection rules (KB-162 / KB-161):
+    /// - `WarpingRisk` — emitted when the layer's per-voxel **yield
+    ///   fraction** exceeds [`YIELD_FRACTION_WARN_THRESHOLD`] (warning)
+    ///   or [`YIELD_FRACTION_CRIT_THRESHOLD`] (critical). The yield
+    ///   fraction is the share of cured voxels in the slab whose
+    ///   von Mises stress exceeds `resin.tensile_strength_mpa()` —
+    ///   i.e. the share that have crossed the multi-axial yield
+    ///   surface (KB-162). This is the physically correct yield
+    ///   criterion: tensile_strength IS the uniaxial yield stress; von
+    ///   Mises generalises uniaxial yield to multi-axial. No arbitrary
+    ///   safety factor.
+    /// - `CohesiveFailure` — emitted when the layer's maximum interior
+    ///   strain gradient `|∇ε|` exceeds [`GRADIENT_THRESHOLD_FRAC`]
+    ///   (warning). Cured-vs-empty pairs (part-surface boundaries)
+    ///   are filtered out per the post-t2f3 calibration finding.
+    ///
+    /// When the resin's mechanical moduli are uncalibrated
+    /// (`resin.has_calibrated_moduli() == false`), the
+    /// `FailureEvent.message` is suffixed with a
+    /// "(uncalibrated moduli — magnitude has ±50% uncertainty)" caveat
+    /// so users can distinguish calibration-artefact emissions from
+    /// real physics.
+    ///
+    /// **Model-gap caveat (ADR-0018 §9, KB-162):** the per-voxel σ_vm
+    /// value used here reflects free-shrinkage stress only — it does
+    /// NOT include the cumulative residual stress that builds up as
+    /// later layers cure against already-cured layers below. Real
+    /// MSLA prints warp because of the latter. With the v1 free-
+    /// shrinkage model, `voxel_yield_fraction` reads 0 on most prints
+    /// even though the threshold (tensile_strength_mpa) is physically
+    /// correct. The fraction becomes a useful early-warning signal
+    /// once the Tier-3 compatibility-violation residual stress model
+    /// lands.
+    #[cfg(feature = "field-sim")]
+    pub fn predict_strain_failures(
+        layer: u32,
+        strain_field: &crate::values::StrainField,
+        stress_field: &crate::values::StressField,
+        resin: &ResinProfile,
+    ) -> Vec<FailureEvent> {
+        let mut failures: Vec<FailureEvent> = Vec::new();
+
+        let calibration_caveat: &str = if resin.has_calibrated_moduli() {
+            ""
+        } else {
+            " (uncalibrated moduli — magnitude has ±50% uncertainty, see KB-163)"
+        };
+
+        // WarpingRisk — per-voxel yield-fraction signal ----------------
+        let tensile_mpa = resin.tensile_strength_mpa();
+        let yield_fraction = match stress_field.yield_fraction(layer, tensile_mpa) {
+            Ok(v) => v,
+            // Out-of-bounds layer index — typically programmer error;
+            // surface as no detection rather than panic to keep the
+            // strain pass advisory rather than fatal.
+            Err(_) => return failures,
+        };
+        if yield_fraction >= YIELD_FRACTION_CRIT_THRESHOLD {
+            failures.push(FailureEvent {
+                layer,
+                failure_type: FailureType::WarpingRisk,
+                severity: Severity::Critical,
+                message: format!(
+                    "Layer yield fraction {yield_pct:.1}% exceeds {crit_pct:.0}% \
+                     critical threshold against tensile strength {tensile_mpa:.1} MPa \
+                     — large share of cured voxels predicted to yield{calibration_caveat}",
+                    yield_pct = 100.0 * yield_fraction,
+                    crit_pct = 100.0 * YIELD_FRACTION_CRIT_THRESHOLD,
+                ),
+            });
+        } else if yield_fraction >= YIELD_FRACTION_WARN_THRESHOLD {
+            failures.push(FailureEvent {
+                layer,
+                failure_type: FailureType::WarpingRisk,
+                severity: Severity::Warning,
+                message: format!(
+                    "Layer yield fraction {yield_pct:.2}% exceeds {warn_pct:.1}% \
+                     warning threshold against tensile strength {tensile_mpa:.1} MPa \
+                     — local hotspots predicted to yield{calibration_caveat}",
+                    yield_pct = 100.0 * yield_fraction,
+                    warn_pct = 100.0 * YIELD_FRACTION_WARN_THRESHOLD,
+                ),
+            });
+        }
+
+        // Strain-gradient CohesiveFailure ------------------------------
+        let grad_max = match strain_field.gradient_layer_max(layer) {
+            Ok(v) => v,
+            Err(_) => return failures,
+        };
+        if grad_max >= GRADIENT_THRESHOLD_FRAC {
+            failures.push(FailureEvent {
+                layer,
+                failure_type: FailureType::CohesiveFailure,
+                severity: Severity::Warning,
+                message: format!(
+                    "Layer strain gradient {grad_max:.4} exceeds threshold \
+                     {GRADIENT_THRESHOLD_FRAC:.4} — micro-crack risk along the \
+                     gradient direction{calibration_caveat}",
+                ),
+            });
+        }
+
+        failures
+    }
 }
+
+/// Strain-gradient threshold for `CohesiveFailure` emission (KB-161).
+/// Dimensionless `|∇ε|` per-voxel-pair. Literature midpoint: 0.005
+/// (0.5% strain step between adjacent voxels) — calibrate via Athena II
+/// in a follow-on issue.
+#[cfg(feature = "field-sim")]
+pub const GRADIENT_THRESHOLD_FRAC: f32 = 0.005;
+
+/// Yield fraction at which `WarpingRisk` emits at `Severity::Warning`.
+/// 0.1% of cured voxels yielded — even a small share of yielded voxels
+/// inside a layer is worth surfacing because it signals a hotspot the
+/// printer is approaching the tensile limit somewhere. (KB-162.)
+#[cfg(feature = "field-sim")]
+pub const YIELD_FRACTION_WARN_THRESHOLD: f32 = 0.001;
+
+/// Yield fraction at which `WarpingRisk` emits at `Severity::Critical`.
+/// 5% of cured voxels yielded — a substantial fraction of the layer is
+/// past the multi-axial yield surface; the part is expected to deform
+/// plastically or crack at this layer. (KB-162.)
+#[cfg(feature = "field-sim")]
+pub const YIELD_FRACTION_CRIT_THRESHOLD: f32 = 0.05;
 
 #[cfg(test)]
 mod tests {
@@ -659,5 +797,213 @@ mod tests {
                 .any(|f| f.failure_type == FailureType::NonUniformCure),
             "expected NonUniformCure, got: {failures:?}"
         );
+    }
+
+    // --- predict_strain_failures (t2f3 / ADR-0018) -------------------
+
+    #[cfg(feature = "field-sim")]
+    mod predict_strain_failures {
+        use super::*;
+        use crate::values::{StrainField, StrainTensor, StressField, StressTensor};
+
+        fn fields_2x2x1() -> (StrainField, StressField) {
+            (
+                StrainField::new(2, 2, 1, 0.5, [0.0; 3]).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions"),
+                StressField::new(2, 2, 1, 0.5, [0.0; 3]).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions"),
+            )
+        }
+
+        #[test]
+        fn no_failures_for_zero_fields() {
+            let (strain, stress) = fields_2x2x1();
+            let resin = ResinProfile::generic_standard();
+            let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
+            assert!(f.is_empty(), "zero fields must produce no failures, got {f:?}");
+        }
+
+        #[test]
+        fn warping_warning_at_small_yield_fraction() {
+            // 2×2 = 4 cured voxels; ONE yielded → fraction = 0.25 > 0.05
+            // critical threshold → emits Critical. To test Warning, use
+            // a larger grid where fraction lands in [0.001, 0.05).
+            let mut strain = StrainField::new(40, 40, 1, 0.5, [0.0; 3]).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let mut stress = StressField::new(40, 40, 1, 0.5, [0.0; 3]).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let resin = ResinProfile::generic_standard();
+            // Fill all 1600 voxels with sub-tensile stress (cured but
+            // not yielded), then mark 5 of them as yielded
+            // → 5/1600 = 0.3% > 0.1% warn but < 5% crit.
+            let sub = StressTensor::new(5.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let yielded =
+                StressTensor::new(50.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            // tensile = 35, so vm=50 > 35 yields, vm=5 < 35 doesn't.
+            let placeholder = StrainTensor::from_isotropic(-0.001).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            for ix in 0..40 {
+                for iy in 0..40 {
+                    strain.lock_strain_at(ix, iy, 0, placeholder).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+                    stress.accumulate_at(ix, iy, 0, sub).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+                }
+            }
+            for k in 0..5 {
+                stress.accumulate_at(k, 0, 0, yielded).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            }
+            let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
+            // Expect a single WarpingRisk emission at Warning severity.
+            // (CohesiveFailure may also emit because the small/large
+            // strain difference is zero — all cells are placeholder, so
+            // grad_max == 0; thus single emission.)
+            let warpings: Vec<_> = f.iter().filter(|e| e.failure_type == FailureType::WarpingRisk).collect();
+            assert_eq!(warpings.len(), 1, "expected exactly one WarpingRisk; got {f:?}");
+            assert_eq!(warpings[0].severity, Severity::Warning);
+        }
+
+        #[test]
+        fn warping_critical_at_high_yield_fraction() {
+            // 4 cured voxels, 1 yielded → fraction = 0.25 > 0.05 → Critical.
+            let (mut strain, mut stress) = fields_2x2x1();
+            let resin = ResinProfile::generic_standard();
+            let sub = StressTensor::new(5.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let yielded = StressTensor::new(50.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let placeholder = StrainTensor::from_isotropic(-0.001).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            for ix in 0..2 {
+                for iy in 0..2 {
+                    strain.lock_strain_at(ix, iy, 0, placeholder).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+                    stress.accumulate_at(ix, iy, 0, sub).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+                }
+            }
+            stress.accumulate_at(0, 0, 0, yielded).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
+            let warpings: Vec<_> = f.iter().filter(|e| e.failure_type == FailureType::WarpingRisk).collect();
+            assert_eq!(warpings.len(), 1);
+            assert_eq!(warpings[0].severity, Severity::Critical);
+        }
+
+        #[test]
+        fn no_warping_when_no_voxel_yields() {
+            // All 4 voxels well below tensile (35 MPa) → no emission.
+            let (mut strain, mut stress) = fields_2x2x1();
+            let resin = ResinProfile::generic_standard();
+            let sub = StressTensor::new(10.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let placeholder = StrainTensor::from_isotropic(-0.001).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            for ix in 0..2 {
+                for iy in 0..2 {
+                    strain.lock_strain_at(ix, iy, 0, placeholder).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+                    stress.accumulate_at(ix, iy, 0, sub).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+                }
+            }
+            let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
+            assert!(
+                !f.iter().any(|e| e.failure_type == FailureType::WarpingRisk),
+                "no voxel yielded → no WarpingRisk; got {f:?}"
+            );
+        }
+
+        #[test]
+        fn cohesive_failure_for_high_interior_gradient() {
+            // Post-t2f3-calibration: gradient_layer_max now skips
+            // cured-vs-empty pairs (part-surface noise). Test the
+            // intended signal: two ADJACENT CURED voxels with very
+            // different magnitudes (thick-thin interior step). The
+            // Frobenius diff between isotropic ε = -0.005 and -0.02 is
+            // |Δε|·√3 = 0.015·√3 ≈ 0.026 > GRADIENT_THRESHOLD_FRAC.
+            let (mut strain, stress) = fields_2x2x1();
+            let resin = ResinProfile::generic_standard();
+            let small = StrainTensor::from_isotropic(-0.005).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let large = StrainTensor::from_isotropic(-0.02).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            strain.lock_strain_at(0, 0, 0, small).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            strain.lock_strain_at(1, 0, 0, large).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
+            assert!(
+                f.iter().any(|e| e.failure_type == FailureType::CohesiveFailure),
+                "interior strain step must surface CohesiveFailure: {f:?}"
+            );
+        }
+
+        #[test]
+        fn no_cohesive_failure_for_cured_vs_empty_only() {
+            // Single cured voxel surrounded by empty — used to trip the
+            // detector before t2f3.1 because the surface boundary
+            // produced a Frobenius diff of L·√3. New filter rejects
+            // these pairs entirely.
+            let (mut strain, stress) = fields_2x2x1();
+            let resin = ResinProfile::generic_standard();
+            let t = StrainTensor::from_isotropic(-0.02).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            strain.lock_strain_at(0, 0, 0, t).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
+            assert!(
+                !f.iter().any(|e| e.failure_type == FailureType::CohesiveFailure),
+                "cured-vs-empty must NOT emit CohesiveFailure: {f:?}"
+            );
+        }
+
+        #[test]
+        fn no_cohesive_failure_for_uniform_layer() {
+            let (mut strain, stress) = fields_2x2x1();
+            let resin = ResinProfile::generic_standard();
+            let t = StrainTensor::from_isotropic(-0.005).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            for ix in 0..2 {
+                for iy in 0..2 {
+                    strain.lock_strain_at(ix, iy, 0, t).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+                }
+            }
+            let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
+            assert!(!f.iter().any(|e| e.failure_type == FailureType::CohesiveFailure));
+        }
+
+        #[test]
+        fn message_discloses_uncalibrated_moduli_for_unset_resin() {
+            // elegoo_ceramic_grey_v2 deliberately omits both E and ν.
+            let (mut strain, mut stress) = fields_2x2x1();
+            let resin = ResinProfile::elegoo_ceramic_grey_v2();
+            assert!(!resin.has_calibrated_moduli());
+            // tensile_strength_mpa = 38 → vm = 50 yields.
+            let sub = StressTensor::new(5.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let yielded = StressTensor::new(50.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let placeholder = StrainTensor::from_isotropic(-0.001).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            for ix in 0..2 {
+                for iy in 0..2 {
+                    strain.lock_strain_at(ix, iy, 0, placeholder).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+                    stress.accumulate_at(ix, iy, 0, sub).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+                }
+            }
+            stress.accumulate_at(0, 0, 0, yielded).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
+            let warping = f
+                .iter()
+                .find(|e| e.failure_type == FailureType::WarpingRisk)
+                .expect("expected WarpingRisk emission");
+            assert!(
+                warping.message.contains("uncalibrated moduli"),
+                "message must disclose uncalibrated moduli; got: {}",
+                warping.message
+            );
+        }
+
+        #[test]
+        fn message_no_caveat_for_calibrated_resin() {
+            // generic_standard ships with explicit E + ν.
+            let (mut strain, mut stress) = fields_2x2x1();
+            let resin = ResinProfile::generic_standard();
+            assert!(resin.has_calibrated_moduli());
+            let sub = StressTensor::new(5.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let yielded = StressTensor::new(50.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let placeholder = StrainTensor::from_isotropic(-0.001).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            for ix in 0..2 {
+                for iy in 0..2 {
+                    strain.lock_strain_at(ix, iy, 0, placeholder).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+                    stress.accumulate_at(ix, iy, 0, sub).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+                }
+            }
+            stress.accumulate_at(0, 0, 0, yielded).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
+            let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
+            let warping = f
+                .iter()
+                .find(|e| e.failure_type == FailureType::WarpingRisk)
+                .expect("expected WarpingRisk emission");
+            assert!(
+                !warping.message.contains("uncalibrated moduli"),
+                "calibrated resin must NOT show caveat; got: {}",
+                warping.message
+            );
+        }
     }
 }

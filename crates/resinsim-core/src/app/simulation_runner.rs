@@ -11,14 +11,19 @@ use crate::services::suction_detector::SuctionDetector;
 #[cfg(feature = "field-sim")]
 use crate::services::uniformity_calculator::UniformityProfile;
 #[cfg(feature = "field-sim")]
-use crate::services::{LightCrosstalkCalculator, UniformityCalculator, VoxelCureCalculator};
+use crate::services::{
+    LightCrosstalkCalculator, ShrinkageCalculator, StressAccumulator, UniformityCalculator,
+    VoxelCureCalculator,
+};
 use crate::simulation::PrintSimulation;
 use crate::values::{
     AmbientTemperature, CrossSectionArea, InitialLedTemperature, LayerHeightProvenance,
     LayerHeightSeq, LayerMask, LayerPhase,
 };
 #[cfg(feature = "field-sim")]
-use crate::values::{CureField, Energy, PenetrationDepth, PhotoinitiatorField};
+use crate::values::{
+    CureField, Energy, PenetrationDepth, PhotoinitiatorField, StrainField, StressField,
+};
 
 /// Application service: orchestrates a full simulation run.
 /// Loads geometry, slices it, runs FailurePredictor per layer,
@@ -46,11 +51,30 @@ pub struct SimulationRunner;
 struct VoxelState {
     cure: CureField,
     pi: PhotoinitiatorField,
+    /// t2f3 / ADR-0018 — per-voxel shrinkage strain. Dimension-locked to
+    /// `cure` + `pi` at construction; written once per voxel during the
+    /// `apply_voxel_shrinkage_for_layer` pass via `lock_strain_at`.
+    strain: StrainField,
+    /// t2f3 / ADR-0018 — per-voxel residual stress (MPa). Same
+    /// dimensions as `strain`; written by `accumulate_layer_stress`.
+    stress: StressField,
     dp_um: f32,
     ec_ref_mj_cm2: f32,
     ref_temp_c: f32,
     ea_cure_kj_mol: f32,
     k_d: f32,
+    /// t2f3 — `ResinProfile::linear_shrinkage_pct() / 100`, dimensionless
+    /// fraction. Snapshotted once at construction so per-layer iteration
+    /// doesn't reread the profile.
+    linear_shrinkage_frac: f32,
+    /// t2f3 — `ResinProfile::effective_youngs_modulus_mpa()`. KB-163
+    /// literature midpoint when uncalibrated.
+    youngs_modulus_mpa: f32,
+    /// t2f3 — `ResinProfile::effective_poissons_ratio()`.
+    poissons_ratio: f32,
+    /// t2f3 / KB-164 — `ResinProfile::effective_shrinkage_anisotropy_z_ratio()`.
+    /// Default 1.5 (Z shrinks 50% more than XY) when uncalibrated.
+    shrinkage_anisotropy_z_ratio: f32,
     led_power_mw_cm2: f32,
     /// LCD non-uniformity profile (KB-120). Derived from
     /// `printer.lcd_uniformity_variation` plus `printer.build_envelope_mm()`
@@ -526,6 +550,18 @@ impl SimulationRunner {
                         resin.photoinitiator_concentration_initial(),
                     )
                     .map_err(|e| format!("photoinitiator field: {e}"))?;
+                    // ADR-0018 / t2f3 — strain + stress fields are
+                    // dimension-locked to (cure, pi) and allocated
+                    // together. Their constructors honour the
+                    // MAX_FIELD_ALLOCATION_BYTES budget — out-of-budget
+                    // configurations fail BEFORE the per-layer loop
+                    // begins (no silent kernel OOM).
+                    let strain =
+                        StrainField::new(nx, ny, nz, voxel_size_mm, [0.0, 0.0, 0.0])
+                            .map_err(|e| format!("strain field: {e}"))?;
+                    let stress =
+                        StressField::new(nx, ny, nz, voxel_size_mm, [0.0, 0.0, 0.0])
+                            .map_err(|e| format!("stress field: {e}"))?;
                     // KB-120 LCD non-uniformity profile. Sized to the cure
                     // field's lateral extent (nx × ny at voxel_size_mm) so
                     // the UniformityCalculator's radial cosine model centres
@@ -545,11 +581,18 @@ impl SimulationRunner {
                     Some(VoxelState {
                         cure,
                         pi,
+                        strain,
+                        stress,
                         dp_um: resin.penetration_depth_um(),
                         ec_ref_mj_cm2: resin.critical_energy_mj_cm2(),
                         ref_temp_c: resin.reference_temp_c(),
                         ea_cure_kj_mol: resin.effective_cure_kinetics_ea_kj_mol(),
                         k_d: resin.effective_photoinitiator_decay_constant_k_d(),
+                        linear_shrinkage_frac: resin.linear_shrinkage_pct() / 100.0,
+                        youngs_modulus_mpa: resin.effective_youngs_modulus_mpa(),
+                        poissons_ratio: resin.effective_poissons_ratio(),
+                        shrinkage_anisotropy_z_ratio: resin
+                            .effective_shrinkage_anisotropy_z_ratio(),
                         led_power_mw_cm2: printer.led_power_mw_cm2(),
                         uniformity,
                     })
@@ -578,7 +621,7 @@ impl SimulationRunner {
             // adaptive (variable-Z) slicing transparently.
             let layer_height_um_i = layer_heights_um[i];
             #[allow(unused_mut)]
-            let (mut result, failures) = FailurePredictor::predict_layer(
+            let (mut result, mut failures) = FailurePredictor::predict_layer(
                 i as u32,
                 area,
                 prev_area,
@@ -593,6 +636,7 @@ impl SimulationRunner {
             );
 
             // ADR-0017 / t2f1: voxel cure pass for this layer.
+            // ADR-0018 / t2f3: strain + stress passes follow.
             #[cfg(feature = "field-sim")]
             if let Some(state) = voxel_state.as_mut() {
                 Self::apply_voxel_cure_for_layer(
@@ -606,6 +650,54 @@ impl SimulationRunner {
                     &overrides,
                     &mut result,
                 )?;
+
+                // t2f3 — per-voxel shrinkage strain from the cure field
+                // we just populated. Locks each voxel exactly once for
+                // the layer (cured-layer-locks-strain invariant).
+                Self::apply_voxel_shrinkage_for_layer(
+                    state,
+                    i as u32,
+                    layer_height_um_i,
+                    &thermal,
+                    recipe,
+                    printer,
+                )?;
+
+                // t2f3 — per-voxel linear-elastic stress from the strain
+                // we just locked.
+                Self::accumulate_layer_stress(state, i as u32)?;
+
+                // t2f3 — populate the LayerResult per-layer aggregate
+                // caches BEFORE the failure detector runs (the detector
+                // reads from the live fields but consumers downstream
+                // of sim.json need the cached scalars since the heavy
+                // strain/stress fields are #[serde(skip)] per the
+                // t2f3.5 follow-up). The Options are populated even
+                // when zero — the presence of Some(_) is the signal
+                // that the run was field-sim-enabled.
+                result.strain_magnitude_max =
+                    state.strain.magnitude_layer_max(i as u32).ok();
+                result.stress_von_mises_max_mpa =
+                    state.stress.von_mises_layer_max(i as u32).ok();
+                result.strain_gradient_max_frac =
+                    state.strain.gradient_layer_max(i as u32).ok();
+                result.voxel_yield_fraction = state
+                    .stress
+                    .yield_fraction(i as u32, resin.tensile_strength_mpa())
+                    .ok();
+
+                // t2f3 — strain/stress-driven failure detection. Appends
+                // any emitted WarpingRisk + CohesiveFailure events to
+                // the per-layer failures vector BEFORE `add_layer`, so
+                // they are persisted on the aggregate alongside the
+                // Tier-1 failures from `predict_layer`.
+                let strain_failures = FailurePredictor::predict_strain_failures(
+                    i as u32,
+                    &state.strain,
+                    &state.stress,
+                    resin,
+                );
+                failures.extend(strain_failures);
             }
 
             sim.add_layer(result, failures)
@@ -617,6 +709,13 @@ impl SimulationRunner {
         if let Some(state) = voxel_state {
             sim.set_voxel_fields(state.cure, state.pi)
                 .map_err(|e| format!("install voxel fields: {e}"))?;
+            // ADR-0018 / t2f3 — parallel setter for the t2f3 fields.
+            // Preserves the existing `set_voxel_fields(cure, pi)`
+            // signature unchanged; the aggregate's `set_strain_stress_fields`
+            // enforces the invariant that strain/stress dimensions match
+            // the already-installed cure_field.
+            sim.set_strain_stress_fields(state.strain, state.stress)
+                .map_err(|e| format!("install strain/stress fields: {e}"))?;
         }
 
         // Install layer-height reconciliation on the aggregate. Present only
@@ -763,6 +862,118 @@ impl SimulationRunner {
             }
         }
 
+        Ok(())
+    }
+
+    /// ADR-0018 / t2f3 — per-layer shrinkage strain pass.
+    ///
+    /// Walks every voxel of the layer's Z-slab, reads the cumulative
+    /// absorbed dose from `state.cure` (populated by the upstream
+    /// `apply_voxel_cure_for_layer` pass), converts dose → cure-extent
+    /// via Beer-Lambert (KB-103) with Arrhenius Ec(T) (KB-153), and
+    /// locks the resulting `StrainTensor` into `state.strain` exactly
+    /// once. The cured-layer-locks-strain invariant is enforced by
+    /// `StrainField::lock_strain_at`.
+    ///
+    /// Voxels with sub-threshold cure (dose ≤ Ec(T)) get
+    /// `StrainTensor::zero()` — uncured liquid undergoes no
+    /// shrinkage strain (KB-161).
+    #[cfg(feature = "field-sim")]
+    #[allow(clippy::too_many_arguments)]
+    fn apply_voxel_shrinkage_for_layer(
+        state: &mut VoxelState,
+        layer: u32,
+        layer_height_um: f32,
+        thermal: &ThermalContext,
+        recipe: &crate::entities::Recipe,
+        printer: &PrinterProfile,
+    ) -> Result<(), String> {
+        // Snapshot temperature-dependent Ec(T) once per layer; the same
+        // value is then used at every voxel. ec_at_temp signature mirrors
+        // the existing voxel cure pass for consistency.
+        let vat_temp = crate::services::ThermalCalculator::vat_temperature_at_layer_v2(
+            recipe,
+            printer,
+            thermal.ambient.value(),
+            thermal.initial_led_temp.map(|t| t.value()),
+            layer,
+        );
+        let ec_t = crate::services::CureCalculator::ec_at_temp(
+            Energy::new(state.ec_ref_mj_cm2).expect("ec_ref validated > 0 at profile load"),
+            state.ref_temp_c,
+            vat_temp,
+            state.ea_cure_kj_mol,
+        );
+
+        let (nx, ny, _) = state.cure.dimensions();
+        for ix in 0..nx {
+            for iy in 0..ny {
+                let dose = state
+                    .cure
+                    .dose_at(ix, iy, layer)
+                    .map_err(|e| format!("cure dose_at({ix},{iy},{layer}): {e}"))?;
+                let cure_extent = ShrinkageCalculator::cure_extent_at_voxel(
+                    dose,
+                    ec_t.value(),
+                    state.dp_um,
+                    layer_height_um,
+                );
+                let tensor = ShrinkageCalculator::free_shrinkage_strain_at_voxel(
+                    cure_extent,
+                    state.linear_shrinkage_frac,
+                    state.shrinkage_anisotropy_z_ratio,
+                );
+                // Skip the lock_strain_at call entirely when the voxel
+                // is uncured — leaves the default zero tensor and
+                // avoids a no-op write that would still pass through
+                // `AlreadyLocked` checks on revisit (defence in depth
+                // for any future caller that revisits a layer slab).
+                if tensor == crate::values::StrainTensor::zero() {
+                    continue;
+                }
+                state
+                    .strain
+                    .lock_strain_at(ix, iy, layer, tensor)
+                    .map_err(|e| format!("strain lock_strain_at({ix},{iy},{layer}): {e}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// ADR-0018 / t2f3 — per-layer linear-elastic stress accumulation.
+    ///
+    /// Walks every voxel of the layer's Z-slab, reads the strain we
+    /// just locked, applies the closed-form 6×6 isotropic stiffness
+    /// (KB-162) to produce a stress tensor, and writes it into
+    /// `state.stress`. Voxels with zero strain produce zero stress and
+    /// are skipped (the field is zero-initialised).
+    #[cfg(feature = "field-sim")]
+    fn accumulate_layer_stress(
+        state: &mut VoxelState,
+        layer: u32,
+    ) -> Result<(), String> {
+        let (nx, ny, _) = state.strain.dimensions();
+        for ix in 0..nx {
+            for iy in 0..ny {
+                let eps = state
+                    .strain
+                    .strain_at(ix, iy, layer)
+                    .map_err(|e| format!("strain_at({ix},{iy},{layer}): {e}"))?;
+                if eps == crate::values::StrainTensor::zero() {
+                    continue;
+                }
+                let sigma = StressAccumulator::strain_to_stress(
+                    &eps,
+                    state.youngs_modulus_mpa,
+                    state.poissons_ratio,
+                )
+                .map_err(|e| format!("strain_to_stress({ix},{iy},{layer}): {e}"))?;
+                state
+                    .stress
+                    .accumulate_at(ix, iy, layer, sigma)
+                    .map_err(|e| format!("stress accumulate_at({ix},{iy},{layer}): {e}"))?;
+            }
+        }
         Ok(())
     }
 

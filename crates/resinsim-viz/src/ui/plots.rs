@@ -768,6 +768,10 @@ mod tests {
             z_deflection_um: 1.0,
             effective_layer_height_um: 50.0,
             worst_cure_depth_um: 100.0,
+            strain_magnitude_max: None,
+            stress_von_mises_max_mpa: None,
+            strain_gradient_max_frac: None,
+            voxel_yield_fraction: None,
         };
         sim.add_layer(mk(0, 5.0, 3.0), vec![])
             .expect("test fixture: index 0 matches empty layer count");
@@ -822,6 +826,10 @@ mod tests {
             z_deflection_um: 1.0,
             effective_layer_height_um: 50.0,
             worst_cure_depth_um: 100.0,
+            strain_magnitude_max: None,
+            stress_von_mises_max_mpa: None,
+            strain_gradient_max_frac: None,
+            voxel_yield_fraction: None,
         };
         // Mix of: positive, zero, negative, infinite.
         for (idx, layer) in [

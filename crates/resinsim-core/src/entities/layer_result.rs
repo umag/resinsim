@@ -30,6 +30,32 @@ pub struct LayerResult {
     pub effective_layer_height_um: f32,
     /// Worst-case cure depth at plate edge/corner (LCD non-uniformity). KB-120.
     pub worst_cure_depth_um: f32,
+    /// Per-layer max Frobenius-norm strain (ADR-0018 / t2f3). `None` on
+    /// Tier-1 runs (no voxel mode) AND on voxel-mode runs where this
+    /// layer's strain slab is entirely zero (uncured liquid). Skip-
+    /// serialize-when-None keeps Tier-1 sim.json files unchanged.
+    /// NOT feature-gated — the field exists in both build configs as a
+    /// uniform Option<f32> so existing constructor literals across the
+    /// workspace stay one shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strain_magnitude_max: Option<f32>,
+    /// Per-layer max von Mises stress in MPa (ADR-0018 / t2f3). `None` in
+    /// the same conditions as `strain_magnitude_max`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stress_von_mises_max_mpa: Option<f32>,
+    /// Per-layer max strain gradient `|∇ε|` between adjacent voxels
+    /// (ADR-0018 / t2f3). Boundary voxels skipped per KB-161.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strain_gradient_max_frac: Option<f32>,
+    /// Per-layer voxel yield fraction (ADR-0018 / t2f3). The share of
+    /// cured voxels in this layer's Z-slab whose von Mises stress
+    /// exceeds `resin.tensile_strength_mpa()` — i.e. the share that
+    /// have crossed the multi-axial yield surface. Range `[0, 1]`.
+    /// `None` on Tier-1 paths. See KB-162 for the yield criterion
+    /// derivation and the model-gap caveat (free shrinkage stress only,
+    /// no cumulative residual stress).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voxel_yield_fraction: Option<f32>,
 }
 
 /// serde adapter for an `f32` that may legitimately be `f32::INFINITY`
