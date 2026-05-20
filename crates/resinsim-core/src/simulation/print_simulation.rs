@@ -916,7 +916,17 @@ pub(crate) mod tests {
         let cure = CureField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0]).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
         let pi = PhotoinitiatorField::new(4, 4, 5, 1.0).expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
         let err = sim.set_voxel_fields(cure, pi).expect_err("test fixture: dimension mismatch deliberately injected, so Err is the expected outcome");
-        matches!(err, AggregateError::VoxelFieldDimensionMismatch { .. });
+        // Destructured payload — see docs/patterns/anti/bare-matches-as-test-assertion.md
+        assert!(
+            matches!(
+                err,
+                AggregateError::VoxelFieldDimensionMismatch {
+                    cure_dims: (4, 4, 4),
+                    pi_dims: (4, 4, 5),
+                }
+            ),
+            "expected VoxelFieldDimensionMismatch with destructured payload, got {err:?}"
+        );
     }
 
     #[cfg(feature = "field-sim")]

@@ -337,52 +337,107 @@ mod tests {
         CureField::new(2, 2, 2, 0.5, [0.0, 0.0, 0.0]).expect("2×2×2 test fixture is valid")
     }
 
+    // Validation-error tests use destructured payloads to lock the
+    // typed variant + carried values. See
+    // docs/patterns/anti/bare-matches-as-test-assertion.md — bare
+    // matches!() returns a discarded bool and is silently green.
+
     #[test]
     fn new_rejects_zero_x() {
         let err = CureField::new(0, 2, 2, 0.5, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
-        matches!(err, CureFieldError::InvalidDimensions { nx: 0, .. });
+        assert!(
+            matches!(
+                err,
+                CureFieldError::InvalidDimensions {
+                    nx: 0,
+                    ny: 2,
+                    nz: 2
+                }
+            ),
+            "expected InvalidDimensions {{nx:0,ny:2,nz:2}}, got {err:?}"
+        );
     }
 
     #[test]
     fn new_rejects_zero_y() {
         let err = CureField::new(2, 0, 2, 0.5, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
-        matches!(err, CureFieldError::InvalidDimensions { ny: 0, .. });
+        assert!(
+            matches!(
+                err,
+                CureFieldError::InvalidDimensions {
+                    nx: 2,
+                    ny: 0,
+                    nz: 2
+                }
+            ),
+            "expected InvalidDimensions {{nx:2,ny:0,nz:2}}, got {err:?}"
+        );
     }
 
     #[test]
     fn new_rejects_zero_z() {
         let err = CureField::new(2, 2, 0, 0.5, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
-        matches!(err, CureFieldError::InvalidDimensions { nz: 0, .. });
+        assert!(
+            matches!(
+                err,
+                CureFieldError::InvalidDimensions {
+                    nx: 2,
+                    ny: 2,
+                    nz: 0
+                }
+            ),
+            "expected InvalidDimensions {{nx:2,ny:2,nz:0}}, got {err:?}"
+        );
     }
 
     #[test]
     fn new_rejects_nan_voxel_size() {
         let err = CureField::new(2, 2, 2, f32::NAN, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
-        matches!(err, CureFieldError::InvalidVoxelSize(_));
+        // f32 NaN patterns wouldn't match anything (NaN != NaN) — use guard.
+        assert!(
+            matches!(err, CureFieldError::InvalidVoxelSize(v) if v.is_nan()),
+            "expected InvalidVoxelSize(NaN), got {err:?}"
+        );
     }
 
     #[test]
     fn new_rejects_zero_voxel_size() {
         let err = CureField::new(2, 2, 2, 0.0, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
-        matches!(err, CureFieldError::InvalidVoxelSize(_));
+        assert!(
+            matches!(err, CureFieldError::InvalidVoxelSize(v) if v == 0.0),
+            "expected InvalidVoxelSize(0.0), got {err:?}"
+        );
     }
 
     #[test]
     fn new_rejects_negative_voxel_size() {
         let err = CureField::new(2, 2, 2, -0.5, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
-        matches!(err, CureFieldError::InvalidVoxelSize(_));
+        assert!(
+            matches!(err, CureFieldError::InvalidVoxelSize(v) if v == -0.5),
+            "expected InvalidVoxelSize(-0.5), got {err:?}"
+        );
     }
 
     #[test]
     fn new_rejects_infinite_voxel_size() {
         let err = CureField::new(2, 2, 2, f32::INFINITY, [0.0, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
-        matches!(err, CureFieldError::InvalidVoxelSize(_));
+        // f32 ±∞ literal patterns are deprecated since Rust 1.41; use
+        // an `if v.is_infinite()` guard instead. Test name
+        // is direction-agnostic ("rejects_infinite"); both ±∞ are non-
+        // finite and rejected by the same production path.
+        assert!(
+            matches!(err, CureFieldError::InvalidVoxelSize(v) if v.is_infinite()),
+            "expected InvalidVoxelSize(±∞), got {err:?}"
+        );
     }
 
     #[test]
     fn new_rejects_nan_bbox_min() {
         let err = CureField::new(2, 2, 2, 0.5, [f32::NAN, 0.0, 0.0]).expect_err("test fixture: input deliberately violates CureField constructor precondition, so Err is the expected outcome");
-        matches!(err, CureFieldError::InvalidBboxMin { .. });
+        assert!(
+            matches!(err, CureFieldError::InvalidBboxMin { x, y, z } if x.is_nan() && y == 0.0 && z == 0.0),
+            "expected InvalidBboxMin {{NaN, 0.0, 0.0}}, got {err:?}"
+        );
     }
 
     #[test]

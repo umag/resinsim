@@ -987,10 +987,16 @@ mod tests {
         let mut p = ResinProfile::generic_standard();
         assert!(p.has_calibrated_moduli());
         p.poissons_ratio = None;
-        assert!(!p.has_calibrated_moduli(), "ν None must report uncalibrated");
+        assert!(
+            !p.has_calibrated_moduli(),
+            "ν None must report uncalibrated"
+        );
         p.poissons_ratio = Some(0.35);
         p.youngs_modulus_mpa = None;
-        assert!(!p.has_calibrated_moduli(), "E None must report uncalibrated");
+        assert!(
+            !p.has_calibrated_moduli(),
+            "E None must report uncalibrated"
+        );
         p.youngs_modulus_mpa = Some(2000.0);
         p.shrinkage_anisotropy_z_ratio = None;
         assert!(
