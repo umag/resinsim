@@ -142,6 +142,17 @@ plate dense print, GPU acceleration in t2f5, or multiple simultaneous
 fields with cure + photoinitiator + temperature + strain) exceeds the
 memory budget, a sparse follow-on issue is filed at that point.
 
+**Update (ADR-0019 / t2f3.5, 2026-05-20):** the Rust voxel ecosystem
+re-survey at t2f3.5 confirmed the verdict here is unchanged — vdb-rs
+remains read-only (0.5.0 / Aug 2023), NanoVDB has no first-class Rust
+binding and its `ValueT` doesn't support 6-component tensors, Bonxai
+remains C++ header-only with no Rust bindings, and `voxelis`/`svo-rs`/
+voxtree target categorical block-ID data with structural-sharing
+compression (wrong domain for continuous-tensor scientific fields).
+The dense-Array3 in-memory layout stays per ADR-0019. The on-disk
+storage axis is addressed via the paired binary sidecar (per-layer
+slab + zstd compression) rather than explicit-index sparse encoding.
+
 ### 4. `LayerResult.cure_depth_um` / `worst_cure_depth_um` replaced by dispatch methods
 
 The two stored f32 fields on `LayerResult` become `pub(crate)` caches

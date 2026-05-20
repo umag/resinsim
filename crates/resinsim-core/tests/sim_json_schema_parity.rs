@@ -1,20 +1,25 @@
 //! Drift-guard parity test between Rust serde output and the canonical
-//! zod-derived JSON Schema (`schemas/sim-json/v1.schema.json`).
+//! zod-derived JSON Schema (`schemas/sim-json/v2.schema.json`).
 //!
 //! Per ADR-0015 the load-bearing risk is silent shape drift between two
 //! sources of truth: Rust's `#[derive(Serialize)]` on `PrintSimulation` /
 //! `SimulationEnvelope`, and the canonical zod schema in
-//! `schemas/sim-json/v1.ts` (regenerated to `v1.schema.json`). Both must
+//! `schemas/sim-json/v2.ts` (regenerated to `v2.schema.json`). Both must
 //! produce / accept the same byte shape; this test fails CI loudly the
 //! moment they disagree.
 //!
-//! Two cases:
+//! ADR-0019 / t2f3.5: schema bumped 1 → 2 (clean break, no v1 compat).
+//! The historical `v1.{ts,schema.json}` lives under `schemas/sim-json/archive/`.
+//!
+//! Three cases:
 //!
 //! - **Positive**: produce a known `SimulationEnvelope` via `save_to_path`,
-//!   parse the JSON, validate against `v1.schema.json` — expect zero
+//!   parse the JSON, validate against `v2.schema.json` — expect zero
 //!   validation errors.
 //! - **Negative**: tamper a single field (replace numeric `cure_depth_um`
 //!   with a string), validate — expect a validation error.
+//! - **Discriminant**: setting `schema_version` to anything other than 2
+//!   must fail (the v2 schema's const:2 enforces this).
 
 use boon::{Compiler, Schemas};
 use resinsim_core::entities::{
@@ -59,15 +64,11 @@ fn schema_path() -> PathBuf {
         .join("..")
         .join("schemas")
         .join("sim-json")
-        .join("v1.schema.json")
+        .join("v2.schema.json")
         .canonicalize()
-        .expect("test fixture: schemas/sim-json/v1.schema.json exists at workspace root")
+        .expect("test fixture: schemas/sim-json/v2.schema.json exists at workspace root")
 }
 
-/// Build a fixed deterministic envelope so the schema parity is checked
-/// against a known-good shape. Uses shipped `generic_standard` resin and
-/// `generic_msla_4k` printer factories so the on-disk shape matches what a
-/// real `resinsim sim` invocation would produce.
 fn build_known_envelope() -> PrintSimulation {
     let recipe = ResinProfile::generic_standard().recipe().clone();
     let printer = PrinterProfile::generic_msla_4k();
@@ -108,7 +109,7 @@ fn tmp_dir(label: &str) -> PathBuf {
     dir
 }
 
-fn compile_v1_schema() -> (Schemas, boon::SchemaIndex) {
+fn compile_v2_schema() -> (Schemas, boon::SchemaIndex) {
     let mut compiler = Compiler::new();
     let schema_url = format!(
         "file://{}",
@@ -117,12 +118,12 @@ fn compile_v1_schema() -> (Schemas, boon::SchemaIndex) {
     let mut schemas = Schemas::new();
     let id = compiler
         .compile(&schema_url, &mut schemas)
-        .expect("v1.schema.json must compile");
+        .expect("v2.schema.json must compile");
     (schemas, id)
 }
 
 #[test]
-fn fresh_envelope_validates_against_v1_schema() {
+fn fresh_envelope_validates_against_v2_schema() {
     let dir = tmp_dir("positive");
     let path = dir.join("known.sim.json");
     let sim = build_known_envelope();
@@ -130,11 +131,11 @@ fn fresh_envelope_validates_against_v1_schema() {
     let bytes = std::fs::read_to_string(&path).expect("read written envelope");
     let value: serde_json::Value = serde_json::from_str(&bytes).expect("parse envelope JSON");
 
-    let (schemas, id) = compile_v1_schema();
+    let (schemas, id) = compile_v2_schema();
     schemas.validate(&value, id).unwrap_or_else(|err| {
         panic!(
-            "envelope produced by save_with_provenance must validate against v1.schema.json — \
-             this means the Rust serde shape and schemas/sim-json/v1.ts have drifted. \
+            "envelope produced by save_with_provenance must validate against v2.schema.json — \
+             this means the Rust serde shape and schemas/sim-json/v2.ts have drifted. \
              Validation errors:\n{err}"
         )
     });
@@ -151,14 +152,14 @@ fn envelope_validates_without_provenance() {
     let bytes = std::fs::read_to_string(&path).expect("read written envelope");
     let value: serde_json::Value = serde_json::from_str(&bytes).expect("parse envelope JSON");
 
-    let (schemas, id) = compile_v1_schema();
+    let (schemas, id) = compile_v2_schema();
     schemas
         .validate(&value, id)
         .expect("envelope without provenance must still validate");
 }
 
 #[test]
-fn tampered_field_type_fails_v1_schema() {
+fn tampered_field_type_fails_v2_schema() {
     let dir = tmp_dir("negative");
     let path = dir.join("tampered.sim.json");
     let sim = build_known_envelope();
@@ -168,26 +169,26 @@ fn tampered_field_type_fails_v1_schema() {
             .expect("parse envelope JSON");
 
     // Tamper: replace numeric cure_depth_um on layer 0 with a string. The
-    // schema's `LayerResultV1.cure_depth_um` requires `type: "number"` so
+    // schema's `LayerResultV2.cure_depth_um` requires `type: "number"` so
     // validation must fail.
     value["simulation"]["layers"][0]["cure_depth_um"] =
         serde_json::Value::String("not-a-number".into());
 
-    let (schemas, id) = compile_v1_schema();
+    let (schemas, id) = compile_v2_schema();
     let result = schemas.validate(&value, id);
     assert!(
         result.is_err(),
-        "tampered cure_depth_um must fail v1.schema.json validation \
+        "tampered cure_depth_um must fail v2.schema.json validation \
          (otherwise the schema is too loose to catch real drift)"
     );
 }
 
 #[test]
-fn unknown_schema_version_fails_v1_schema() {
-    // The literal(1) discriminator in v1.ts produces a `const: 1` JSON
-    // Schema constraint. A future schema_version=2 envelope must fail
-    // validation against v1.schema.json so consumers branching on the
-    // discriminant don't silently mis-interpret a future shape.
+fn unknown_schema_version_fails_v2_schema() {
+    // The literal(2) discriminator in v2.ts produces a `const: 2` JSON
+    // Schema constraint. Any other schema_version (1, 3, 999) must fail
+    // validation so consumers branching on the discriminant don't silently
+    // mis-interpret a future shape.
     let dir = tmp_dir("future-version");
     let path = dir.join("future.sim.json");
     let sim = build_known_envelope();
@@ -195,12 +196,12 @@ fn unknown_schema_version_fails_v1_schema() {
     let mut value: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("read written envelope"))
             .expect("parse envelope JSON");
-    value["schema_version"] = serde_json::Value::Number(2.into());
+    value["schema_version"] = serde_json::Value::Number(999.into());
 
-    let (schemas, id) = compile_v1_schema();
+    let (schemas, id) = compile_v2_schema();
     let result = schemas.validate(&value, id);
     assert!(
         result.is_err(),
-        "schema_version=2 must fail v1.schema.json validation (const:1 enforces the discriminant)"
+        "schema_version=999 must fail v2.schema.json validation (const:2 enforces the discriminant)"
     );
 }

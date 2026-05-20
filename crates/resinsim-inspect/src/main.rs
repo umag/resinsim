@@ -27,17 +27,30 @@ enum Commands {
     /// producer and downstream consumers (LLM tooling, resinsim-viz,
     /// `resinsim report health --in`). The schema is governed by
     /// docs/adr/0015-sim-json-canonical-interchange.md and the canonical
-    /// definition is `schemas/sim-json/v1.ts` (zod 4); the on-disk shape
-    /// is `{ schema_version, simulation }`.
+    /// definition is `schemas/sim-json/v2.ts` (zod 4); the on-disk shape
+    /// is `{ schema_version, simulation, ?provenance, ?fields_sidecar }`.
+    ///
+    /// **Sidecar (ADR-0019 / t2f3.5):** When `--voxel-cure-mm` is set,
+    /// the producer also writes a paired `<out>.fields.bin` binary
+    /// sidecar carrying the four voxel fields (cure / photoinitiator /
+    /// strain / stress). The `.sim.json` carries a `fields_sidecar`
+    /// pointer (sha256 + byte_size). Consumers must keep BOTH files
+    /// together — `.sim.json` alone produces a typed "missing sidecar"
+    /// error on load.
+    ///
+    /// **V1 envelopes are no longer supported** as of t2f3.5. Existing
+    /// v1 sim.json files produce a typed `"unknown schema_version 1"`
+    /// error with a regeneration hint pointing back at this subcommand.
     ///
     /// Pipeline example:
     ///   resinsim sim --file model.ctb --resin generic_standard \
     ///       --printer generic_msla_4k --out model.sim.json
     ///   resinsim report health --in model.sim.json
     ///
-    /// See also: `resinsim report health --in <PATH>` consumes the sim.json
-    /// produced here; `resinsim-viz --load-sim <PATH>` renders the same
-    /// envelope on the GUI.
+    /// See also: `resinsim report health --in <PATH>` consumes the
+    /// sim.json produced here; `resinsim-viz --load-sim <PATH>` renders
+    /// the same envelope on the GUI. Both `.sim.json` AND `.fields.bin`
+    /// must be in the same directory when `--voxel-cure-mm` was used.
     Sim {
         /// Path to STL file. Exactly one of --stl or --file must be
         /// provided; clap rejects both-missing and both-present.

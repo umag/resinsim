@@ -94,7 +94,7 @@ impl FieldSidecarDecoder {
         reader.read_exact(&mut reserved)?;
 
         // Discover the sidecar's actual file size for size-mismatch check.
-        let current = reader.seek(SeekFrom::Current(0))?;
+        let current = reader.stream_position()?;
         let total_size = reader.seek(SeekFrom::End(0))?;
         reader.seek(SeekFrom::Start(current))?;
 
@@ -108,7 +108,7 @@ impl FieldSidecarDecoder {
             implied_payload = implied_payload.saturating_add(total_compressed);
             descriptors.push(d);
         }
-        let post_descriptors = reader.seek(SeekFrom::Current(0))?;
+        let post_descriptors = reader.stream_position()?;
         let descriptor_bytes = post_descriptors - header_plus_descriptors_start;
         let body_bytes = total_size.saturating_sub(64 + descriptor_bytes);
         if implied_payload > body_bytes {
@@ -218,7 +218,11 @@ impl FieldSidecarDecoder {
         let dim_x = read_u32_le(reader)?;
         let dim_y = read_u32_le(reader)?;
         let dim_z = read_u32_le(reader)?;
-        let bbox_origin = [read_f32_le(reader)?, read_f32_le(reader)?, read_f32_le(reader)?];
+        let bbox_origin = [
+            read_f32_le(reader)?,
+            read_f32_le(reader)?,
+            read_f32_le(reader)?,
+        ];
         let voxel_size_mm = read_f32_le(reader)?;
         let component_size = read_u32_le(reader)?;
         let expected_component_size = kind.component_size();
@@ -380,13 +384,14 @@ impl FieldSidecarDecoder {
         // fewer or more, error out.
         let mut buffer = vec![0u8; 8192];
         loop {
-            let n = decoder.read(&mut buffer).map_err(|e| {
-                DecodeError::SlabDecompressionFailed {
-                    field_name: d.kind.name().into(),
-                    iz,
-                    detail: format!("{e}"),
-                }
-            })?;
+            let n =
+                decoder
+                    .read(&mut buffer)
+                    .map_err(|e| DecodeError::SlabDecompressionFailed {
+                        field_name: d.kind.name().into(),
+                        iz,
+                        detail: format!("{e}"),
+                    })?;
             if n == 0 {
                 break;
             }
@@ -607,13 +612,9 @@ mod tests {
     #[test]
     fn truncated_slab_returns_typed_error() {
         // Encode a cure with non-zero values so we get a slab to truncate.
-        let mut cure = CureField::new(4, 4, 2, 0.05, [0.0; 3]).expect("ctor");
-        // CureField::add_dose exists but is complicated; just inject via
-        // an Array3 + reconstitute through from_persistence_parts.
-        let data = ndarray::Array3::<f32>::from_shape_fn((4, 4, 2), |(x, y, z)| {
-            (x + y + z) as f32 * 0.1
-        });
-        cure = CureField::from_persistence_parts(4, 4, 2, 0.05, [0.0; 3], data).expect("ctor");
+        let data =
+            ndarray::Array3::<f32>::from_shape_fn((4, 4, 2), |(x, y, z)| (x + y + z) as f32 * 0.1);
+        let cure = CureField::from_persistence_parts(4, 4, 2, 0.05, [0.0; 3], data).expect("ctor");
         let mut buf = Vec::new();
         encode_sidecar(
             &SidecarFields {

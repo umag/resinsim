@@ -137,6 +137,18 @@ clap's default rejection on unknown flags is sufficient — there are no
 current users to migrate; the rejection just needs to hard-fail invalid
 invocations.
 
+## Versioning history
+
+- **v1** (this ADR, 2026-04). Initial sim.json shape.
+- **v2** (ADR-0019 / t2f3.5, 2026-05-20). Adds optional
+  `fields_sidecar` pointer to a paired binary sidecar
+  `<stem>.fields.bin` carrying the four voxel fields (cure /
+  photoinitiator / strain / stress). Per ADR-0019 the v1 → v2
+  transition is a CLEAN BREAK with no migration tool — existing v1
+  files produce a typed `"unknown schema_version 1"` error with a
+  regeneration hint. The historical v1 schema files are preserved
+  under `schemas/sim-json/archive/`.
+
 ## Versioning rules
 
 `schema_version` is the discriminant. Versioning policy:

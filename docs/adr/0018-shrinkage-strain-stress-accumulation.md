@@ -387,6 +387,10 @@ than addressed in v1 code:
 - LOW: `lock_strain_at` naming (set-once semantic explicit in the
   StrainField API surface).
 - LOW: v2 sim.json roundtrip test — deferred until v2 bump.
+  **RESOLVED by t2f3.5 / ADR-0019 (2026-05-20)**: schema bumped to v2
+  with strain + stress fields persisted via the paired binary sidecar
+  (`<stem>.fields.bin`). Roundtrip tests live in
+  `crates/resinsim-core/tests/sidecar_roundtrip_integration.rs`.
 
 ## Folded post-implementation findings (t2f3.1)
 

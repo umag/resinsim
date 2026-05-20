@@ -135,7 +135,8 @@ impl PhotoinitiatorField {
     /// at construction and validated via `new`-equivalent rules; the
     /// caller passes the per-voxel data array directly (already-validated
     /// for finiteness by the sidecar decoder).
-    pub(crate) fn from_persistence_parts(
+    #[doc(hidden)]
+    pub fn from_persistence_parts(
         nx: u32,
         ny: u32,
         nz: u32,

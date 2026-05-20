@@ -49,9 +49,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "field-sim")]
-use super::sidecar::{
-    decode_sidecar, encode_sidecar, FieldKind, SidecarFields, SidecarOutput,
-};
+use super::sidecar::{decode_sidecar, encode_sidecar, FieldKind, SidecarFields, SidecarOutput};
 
 /// Current `sim.json` schema version. v1 is dropped per ADR-0019 / t2f3.5
 /// — v1 envelopes carrying inline `cure_field` / `photoinitiator_field`
@@ -85,6 +83,7 @@ struct SimulationEnvelope {
     #[serde(default)]
     provenance: Option<Provenance>,
     #[serde(default)]
+    #[allow(dead_code)] // Read by load_envelope under `#[cfg(feature = "field-sim")]`.
     fields_sidecar: Option<SidecarPointer>,
 }
 
@@ -111,8 +110,8 @@ struct SimulationEnvelopeRef<'a> {
 /// integrity verification only — NOT a cryptographic guarantee (sha256
 /// over a file an attacker can both write to and write into the json
 /// pointer is trivially forgeable). The check catches accidental tamper
-/// + concurrent-write races (typed `"sidecar sha256 mismatch"` loud
-/// error per ADR-0019 race-window 3).
+///     + concurrent-write races (typed `"sidecar sha256 mismatch"` loud
+///     error per ADR-0019 race-window 3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SidecarPointer {
     pub path: String,
@@ -158,15 +157,13 @@ impl SidecarPointer {
     pub fn validate_against_parent(&self, sim_json_parent: &Path) -> Result<PathBuf, String> {
         // (a) Reject empty path.
         if self.path.is_empty() {
-            return Err(format!(
-                "sidecar path traversal rejected: empty path in sim.json pointer"
-            ));
+            return Err(
+                "sidecar path traversal rejected: empty path in sim.json pointer".to_string(),
+            );
         }
         // (b) Reject NUL bytes (Windows / POSIX both treat NUL as illegal).
         if self.path.contains('\0') {
-            return Err(format!(
-                "sidecar path traversal rejected: path contains NUL byte"
-            ));
+            return Err("sidecar path traversal rejected: path contains NUL byte".to_string());
         }
         let p = Path::new(&self.path);
         // (c) Reject absolute paths.
@@ -398,10 +395,7 @@ fn encode_paired_sidecar(
     let bin_final = sidecar_bin_path(sim_json_path);
     let bin_tmp = {
         let mut t = bin_final.clone();
-        let mut name = t
-            .file_name()
-            .map(|n| n.to_os_string())
-            .unwrap_or_default();
+        let mut name = t.file_name().map(|n| n.to_os_string()).unwrap_or_default();
         name.push(".tmp");
         t.set_file_name(name);
         t
@@ -481,8 +475,12 @@ fn sidecar_bin_path(sim_json_path: &Path) -> PathBuf {
 #[cfg(feature = "field-sim")]
 fn sha256_hex_of_file(path: &Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(path)
-        .map_err(|e| format!("failed to read sidecar for sha256: {} ({e})", path.display()))?;
+    let bytes = std::fs::read(path).map_err(|e| {
+        format!(
+            "failed to read sidecar for sha256: {} ({e})",
+            path.display()
+        )
+    })?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     let result = hasher.finalize();
@@ -634,12 +632,8 @@ fn load_and_install_sidecar(
         ));
     }
     let mut cursor = std::io::Cursor::new(bytes);
-    let decoded = decode_sidecar(&mut cursor, &canonical.display().to_string()).map_err(|e| {
-        format!(
-            "invalid sidecar {}: {e}",
-            canonical.display()
-        )
-    })?;
+    let decoded = decode_sidecar(&mut cursor, &canonical.display().to_string())
+        .map_err(|e| format!("invalid sidecar {}: {e}", canonical.display()))?;
     // Install via the existing aggregate setters (which enforce
     // dimension-lock invariants).
     if let (Some(cure), Some(photoinit)) = (decoded.cure, decoded.photoinitiator) {

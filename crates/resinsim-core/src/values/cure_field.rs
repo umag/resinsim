@@ -176,7 +176,8 @@ impl CureField {
     /// validating the per-voxel `is_finite()` invariant before
     /// invoking — the sidecar decoder does this as part of its
     /// "non-finite in sidecar field" guard.
-    pub(crate) fn from_persistence_parts(
+    #[doc(hidden)]
+    pub fn from_persistence_parts(
         nx: u32,
         ny: u32,
         nz: u32,

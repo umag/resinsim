@@ -263,13 +263,61 @@ the same substring strings.
 
 ## Fixture audit
 
-(Populated by Phase 4 step 13 — `find . -name '*.sim.json' -not -path
-'./target/*'` enumerates every fixture; per-file outcome recorded
-here.)
+`find . -name '*.sim.json' -not -path './target/*'` enumerated six v1
+fixtures, all Tier-1 (no voxel field data — no `cure_field` /
+`photoinitiator_field` JSON arrays were present). Migration was
+mechanical: bump `"schema_version": 1` to `"schema_version": 2`. The
+new `fields_sidecar` field is optional and absent in these Tier-1
+fixtures.
 
 | Path | Outcome | Notes |
 |------|---------|-------|
-| TBD | TBD | filled in by step 13 |
+| `crates/resinsim-viz/tests/fixtures/lilith-torso.sim.json` | schema_version bumped 1→2 | 2.4 MB Tier-1 output, no voxel data |
+| `crates/resinsim-viz/tests/fixtures/lilith-torso-elegoo-grey-30um.sim.json` | schema_version bumped 1→2 | 2.4 MB Tier-1 output |
+| `crates/resinsim-viz/tests/fixtures/lilith-torso-elegoo-grey-50um.sim.json` | schema_version bumped 1→2 | 2.4 MB Tier-1 output |
+| `crates/resinsim-inspect/tests/fixtures/sim_golden/baseline.sim.json` | schema_version bumped 1→2 | 3.9 KB golden |
+| `crates/resinsim-inspect/tests/fixtures/sim_golden/single_layer.sim.json` | schema_version bumped 1→2 | 2.1 KB golden |
+| `crates/resinsim-inspect/tests/fixtures/sim_golden/zero_layers.sim.json` | schema_version bumped 1→2 | 1.6 KB golden |
+
+No fixture carried the heavy 6.1 GB `lilith_torso` real run referenced
+in the issue description — that file lives outside the repo (developer
+artifact). Its regeneration is a manual one-time `resinsim sim
+--voxel-cure-mm ... --out lilith_torso.sim.json` invocation; the
+producer will emit the v2 envelope + paired sidecar automatically.
+
+## Consumer-side budget
+
+The sidecar decoder enforces
+`uncompressed_layer_byte_size × layer_count ≤ active_budget_bytes()`
+at descriptor-parse, BEFORE allocation, to defend against
+decompression-bomb inputs. This means **the consumer's
+`RESINSIM_MAX_FIELD_BYTES` env must be at least as permissive as the
+producer's**.
+
+Real-world example (E2E validation on lilith-torso + Elegoo Ceramic
+Grey V2 + Elegoo Mars 5 Ultra at 30 µm):
+
+- Producer ran with `RESINSIM_MAX_FIELD_BYTES=17179869184` (16 GB)
+- StrainField claimed `5_163_140_736` bytes (~4.81 GB) in memory
+- Default consumer budget (4 GB) rejects with typed `"exceeds field
+  budget for strain"` — even though the bytes are valid + sha256 OK
+
+Producer + consumer must agree on the budget. Workflow:
+
+```bash
+# Producer
+RESINSIM_MAX_FIELD_BYTES=17179869184 resinsim sim --voxel-cure-mm 0.05 \
+    --file model.ctb --resin <r> --printer <p> --out model.sim.json
+
+# Consumer — must use the same env (or larger)
+RESINSIM_MAX_FIELD_BYTES=17179869184 resinsim report health --in model.sim.json
+RESINSIM_MAX_FIELD_BYTES=17179869184 resinsim-viz --load-sim model.sim.json
+```
+
+Future work (out of scope for this issue): consider stamping the
+producer's active budget into the SidecarPointer envelope so the
+consumer can hint the user with the correct override. Filed as a
+follow-up: "sidecar pointer carries producer field budget".
 
 ## Consequences
 

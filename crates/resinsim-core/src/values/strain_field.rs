@@ -151,7 +151,8 @@ impl StrainField {
     /// then takes the caller-supplied data array. The sidecar decoder
     /// guarantees per-tensor finiteness before invoking — see
     /// `docs/patterns/anti/rust-nan-positive-validation-gap.md`.
-    pub(crate) fn from_persistence_parts(
+    #[doc(hidden)]
+    pub fn from_persistence_parts(
         nx: u32,
         ny: u32,
         nz: u32,

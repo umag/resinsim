@@ -119,7 +119,8 @@ impl StressField {
 
     /// Reconstitute a `StressField` from raw persistence inputs
     /// (ADR-0019 sidecar decoder).
-    pub(crate) fn from_persistence_parts(
+    #[doc(hidden)]
+    pub fn from_persistence_parts(
         nx: u32,
         ny: u32,
         nz: u32,

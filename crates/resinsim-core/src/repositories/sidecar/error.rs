@@ -271,10 +271,7 @@ mod tests {
 
     #[test]
     fn implausible_field_count_carries_stable_substring() {
-        let err = DecodeError::ImplausibleFieldCount {
-            got: 32,
-            max: 16,
-        };
+        let err = DecodeError::ImplausibleFieldCount { got: 32, max: 16 };
         assert!(err.to_string().contains("implausible field_count"));
     }
 

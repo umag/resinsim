@@ -23,6 +23,19 @@
 //! See `agent-constraints/implementation-conventions.md` §"Cargo feature
 //! matrix" — CI / nextest environments that intentionally exercise large
 //! allocations MUST set the env var explicitly.
+//!
+//! # In-memory vs on-disk budget (ADR-0019 / t2f3.5)
+//!
+//! This module's cap is the **in-memory** budget — peak RAM allocated
+//! per field at construction. ADR-0019 introduces a separate **on-disk**
+//! axis: the paired binary sidecar `<stem>.fields.bin` carries the
+//! four fields per-layer-zstd-compressed, so on-disk footprint is
+//! typically 10-30× smaller than the in-memory dense Array3. There is
+//! NO on-disk cap; the in-memory cap here remains the single binding
+//! constraint at runtime. The sidecar decoder calls
+//! [`active_budget_bytes`] at descriptor-parse time to reject
+//! decompression-bomb inputs BEFORE any allocation — see
+//! `crates/resinsim-core/src/repositories/sidecar/decoder.rs`.
 
 #![cfg(feature = "field-sim")]
 

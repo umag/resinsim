@@ -260,8 +260,9 @@ impl FieldSidecarEncoder {
         // Photoinit doesn't own bbox/voxel_size. Inherit from a peer
         // (cure / strain / stress) per ADR-0019; if no peer field is
         // present, the descriptor gets a sentinel zero geometry.
-        let (bbox_origin, voxel_size_mm) =
-            geometry_donor.map(|g| (g.bbox_origin, g.voxel_size_mm)).unwrap_or(([0.0; 3], 0.0));
+        let (bbox_origin, voxel_size_mm) = geometry_donor
+            .map(|g| (g.bbox_origin, g.voxel_size_mm))
+            .unwrap_or(([0.0; 3], 0.0));
         let data = field.data();
         let mut slabs = Vec::with_capacity(nz as usize);
         for iz in 0..nz {
@@ -453,7 +454,7 @@ impl CompressedField {
     /// 8 (uncompressed_layer_byte_size) +
     /// 8 × layer_count (offsets) + 4 × layer_count (sizes)
     fn descriptor_byte_size(&self) -> u64 {
-        let name_bytes = self.kind.name().as_bytes().len() as u64;
+        let name_bytes = self.kind.name().len() as u64;
         let fixed = 4 + name_bytes + 4 + 4 * 3 + 4 * 3 + 4 + 4 + 4 + 4 + 4 + 8;
         let variable = u64::from(self.dim_z) * (8 + 4);
         fixed + variable
