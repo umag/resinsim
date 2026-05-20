@@ -15,12 +15,22 @@ aes = "0.8"
 cbc = "0.1"
 bitvec = "1.0"
 ndarray = { version = "0.16", features = ["serde"], optional = true }
+# t2f3.5 / ADR-0019: voxel field binary sidecar persistence.
+# zstd: vendored libzstd C source via zstd-sys. Pinned to =0.13.x because
+# bit-exact golden files in tests/golden/ depend on deterministic output
+# across patch versions; minor-version bumps require regenerating goldens
+# via `cargo test --test sidecar_golden_regenerate -- --ignored`.
+# sha2: pure-Rust SHA-256 for sidecar integrity (NOT security — see
+# ADR-0019 §Hash choice).
+zstd = { version = "=0.13.3", optional = true, default-features = false }
+sha2 = { version = "=0.10.9", optional = true }
 
 [features]
-# Tier-2 voxel cure path (ADR-0017 / t2f1). Pulls in ndarray (with serde
-# support so CureField + PhotoinitiatorField can round-trip through
-# sim.json) and the voxel modules under `values/` and `services/`.
-field-sim = ["dep:ndarray"]
+# Tier-2 voxel cure path (ADR-0017 / t2f1, extended by ADR-0019 / t2f3.5).
+# Pulls in ndarray (with serde support for the structural sim.json
+# envelope) plus zstd + sha2 for the paired binary sidecar that carries
+# all four voxel fields (cure / photoinitiator / strain / stress) on disk.
+field-sim = ["dep:ndarray", "dep:zstd", "dep:sha2"]
 
 [dev-dependencies]
 proptest = "1.9.0"

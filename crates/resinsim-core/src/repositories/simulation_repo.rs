@@ -48,9 +48,17 @@ use crate::simulation::PrintSimulation;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Current `sim.json` schema version. Bumped on any breaking change to the
-/// on-disk shape of the persisted simulation (per ADR-0015 versioning rules).
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+#[cfg(feature = "field-sim")]
+use super::sidecar::{
+    decode_sidecar, encode_sidecar, FieldKind, SidecarFields, SidecarOutput,
+};
+
+/// Current `sim.json` schema version. v1 is dropped per ADR-0019 / t2f3.5
+/// — v1 envelopes carrying inline `cure_field` / `photoinitiator_field`
+/// JSON arrays are no longer supported. v2 envelopes carry an optional
+/// `fields_sidecar` pointer into a paired `<stem>.fields.bin` binary
+/// sidecar that holds all four voxel fields losslessly.
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// On-disk envelope around `PrintSimulation`. The `schema_version` field
 /// lets consumers reject files written by a future or past schema-incompatible
@@ -63,6 +71,11 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 /// the user re-supplying CLI args. Absent `provenance` is valid (legacy
 /// callers / GUI sidecars) — consumers degrade to placeholder strings.
 ///
+/// `fields_sidecar` (v2+) points at the paired `<stem>.fields.bin` that
+/// carries the four voxel fields (cure / photoinitiator / strain /
+/// stress). Absent `fields_sidecar` is valid (Tier-1 scalar simulations
+/// don't write a sidecar).
+///
 /// This struct is the *deserialize* shape. For serialize, callers use
 /// [`SimulationEnvelopeRef`] to avoid having to clone the aggregate.
 #[derive(Debug, Deserialize)]
@@ -71,6 +84,8 @@ struct SimulationEnvelope {
     simulation: PrintSimulation,
     #[serde(default)]
     provenance: Option<Provenance>,
+    #[serde(default)]
+    fields_sidecar: Option<SidecarPointer>,
 }
 
 /// Borrowed view of [`SimulationEnvelope`] used for serialize-only paths so
@@ -81,6 +96,29 @@ struct SimulationEnvelopeRef<'a> {
     simulation: &'a PrintSimulation,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<&'a Provenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fields_sidecar: Option<&'a SidecarPointer>,
+}
+
+/// Pointer from a v2+ `sim.json` envelope to its paired binary sidecar
+/// `<stem>.fields.bin`. ADR-0019, t2f3.5.
+///
+/// `path` is **relative** to the sim.json's parent directory. The
+/// loader validates path-traversal, symlink-escape, and is-regular-file
+/// before reading; see [`SidecarPointer::validate_against_parent`].
+///
+/// `sha256` is a hex-encoded SHA-256 over the sidecar bytes. Used for
+/// integrity verification only — NOT a cryptographic guarantee (sha256
+/// over a file an attacker can both write to and write into the json
+/// pointer is trivially forgeable). The check catches accidental tamper
+/// + concurrent-write races (typed `"sidecar sha256 mismatch"` loud
+/// error per ADR-0019 race-window 3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SidecarPointer {
+    pub path: String,
+    pub byte_size: u64,
+    pub sha256: String,
+    pub fields_present: Vec<String>,
 }
 
 /// Run-context metadata carried alongside a `PrintSimulation` in the
@@ -109,6 +147,91 @@ pub struct Provenance {
     pub n_supports: u32,
     /// Support tip radius (mm) used for the run.
     pub tip_radius_mm: f32,
+}
+
+impl SidecarPointer {
+    /// Validate the pointer against a sim.json parent directory. Defends
+    /// against path-traversal, symlink-escape, and is-regular-file
+    /// classes per ADR-0019. Returns the resolved absolute path on
+    /// success; typed `"sidecar path traversal rejected"` error
+    /// otherwise.
+    pub fn validate_against_parent(&self, sim_json_parent: &Path) -> Result<PathBuf, String> {
+        // (a) Reject empty path.
+        if self.path.is_empty() {
+            return Err(format!(
+                "sidecar path traversal rejected: empty path in sim.json pointer"
+            ));
+        }
+        // (b) Reject NUL bytes (Windows / POSIX both treat NUL as illegal).
+        if self.path.contains('\0') {
+            return Err(format!(
+                "sidecar path traversal rejected: path contains NUL byte"
+            ));
+        }
+        let p = Path::new(&self.path);
+        // (c) Reject absolute paths.
+        if !p.is_relative() {
+            return Err(format!(
+                "sidecar path traversal rejected: absolute path not allowed ({})",
+                self.path
+            ));
+        }
+        // (d) Reject ParentDir / RootDir / CurDir components.
+        for component in p.components() {
+            use std::path::Component;
+            match component {
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(format!(
+                        "sidecar path traversal rejected: disallowed component in {}",
+                        self.path
+                    ));
+                }
+                Component::CurDir => {
+                    return Err(format!(
+                        "sidecar path traversal rejected: CurDir component in {}",
+                        self.path
+                    ));
+                }
+                _ => {}
+            }
+        }
+        // (e) Canonicalize and confirm the resolved path stays inside
+        // the sim.json parent directory (defeats symlink escape).
+        let joined = sim_json_parent.join(p);
+        let canonical = std::fs::canonicalize(&joined).map_err(|e| {
+            format!(
+                "sidecar path traversal rejected: cannot canonicalize {} ({e})",
+                joined.display()
+            )
+        })?;
+        let parent_canonical = std::fs::canonicalize(sim_json_parent).map_err(|e| {
+            format!(
+                "sidecar path traversal rejected: cannot canonicalize parent {} ({e})",
+                sim_json_parent.display()
+            )
+        })?;
+        if !canonical.starts_with(&parent_canonical) {
+            return Err(format!(
+                "sidecar path traversal rejected: {} escapes sim.json parent {}",
+                canonical.display(),
+                parent_canonical.display()
+            ));
+        }
+        // (f) is_file metadata check (rejects directory-as-sidecar).
+        let meta = canonical.metadata().map_err(|e| {
+            format!(
+                "sidecar path traversal rejected: cannot stat {} ({e})",
+                canonical.display()
+            )
+        })?;
+        if !meta.is_file() {
+            return Err(format!(
+                "sidecar path traversal rejected: {} is not a regular file",
+                canonical.display()
+            ));
+        }
+        Ok(canonical)
+    }
 }
 
 impl Provenance {
@@ -173,16 +296,9 @@ fn save_envelope_to_path(
     sim: &PrintSimulation,
     provenance: Option<&Provenance>,
 ) -> Result<(), String> {
-    let envelope = SimulationEnvelopeRef {
-        schema_version: CURRENT_SCHEMA_VERSION,
-        simulation: sim,
-        provenance,
-    };
-    let json = serde_json::to_string_pretty(&envelope)
-        .map_err(|e| format!("failed to serialize simulation for {}: {e}", path.display()))?;
-
-    let tmp = tmp_sibling(path);
-    if let Some(parent) = tmp.parent()
+    // Ensure parent dir exists for both .sim.json and .fields.bin tmp files.
+    let tmp_json = tmp_sibling(path);
+    if let Some(parent) = tmp_json.parent()
         && !parent.as_os_str().is_empty()
     {
         std::fs::create_dir_all(parent).map_err(|e| {
@@ -192,19 +308,190 @@ fn save_envelope_to_path(
             )
         })?;
     }
-    std::fs::write(&tmp, json).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("failed to write {}: {e}", tmp.display())
+
+    // (1) If the simulation carries any voxel field, encode the sidecar
+    // FIRST so we have its sha256 + byte_size before writing the sim.json.
+    // ADR-0019: bin renames before sim.json (the only file with the
+    // pointer); on partial failure the orphan .bin is consumer-invisible.
+    #[cfg(feature = "field-sim")]
+    let sidecar_outcome = encode_paired_sidecar(path, sim)?;
+
+    #[cfg(feature = "field-sim")]
+    let sidecar_pointer = sidecar_outcome.as_ref().map(|s| &s.pointer);
+    #[cfg(not(feature = "field-sim"))]
+    let sidecar_pointer: Option<&SidecarPointer> = None;
+
+    let envelope = SimulationEnvelopeRef {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        simulation: sim,
+        provenance,
+        fields_sidecar: sidecar_pointer,
+    };
+    let json = serde_json::to_string_pretty(&envelope)
+        .map_err(|e| format!("failed to serialize simulation for {}: {e}", path.display()))?;
+
+    // (2) Write sim.json.tmp.
+    std::fs::write(&tmp_json, json).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_json);
+        #[cfg(feature = "field-sim")]
+        if let Some(s) = &sidecar_outcome {
+            let _ = std::fs::remove_file(&s.bin_tmp);
+        }
+        format!("failed to write {}: {e}", tmp_json.display())
     })?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
+
+    // (3) Atomic rename ordering: .bin.tmp → .fields.bin FIRST (orphan-safe),
+    // .sim.json.tmp → .sim.json SECOND. Per ADR-0019 §"Multi-file atomic
+    // write contract".
+    #[cfg(feature = "field-sim")]
+    if let Some(s) = &sidecar_outcome {
+        std::fs::rename(&s.bin_tmp, &s.bin_final).map_err(|e| {
+            let _ = std::fs::remove_file(&s.bin_tmp);
+            let _ = std::fs::remove_file(&tmp_json);
+            format!(
+                "failed to rename {} -> {}: {e}",
+                s.bin_tmp.display(),
+                s.bin_final.display()
+            )
+        })?;
+    }
+    std::fs::rename(&tmp_json, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_json);
+        // Leave the .fields.bin in place — best-effort cleanup. Per
+        // ADR-0019 the orphan is consumer-invisible (no sim.json points
+        // there).
         format!(
             "failed to rename {} -> {}: {e}",
-            tmp.display(),
+            tmp_json.display(),
             path.display()
         )
     })?;
     Ok(())
+}
+
+/// Outcome of encoding a sidecar — paths to inspect on rename and the
+/// pointer to embed in the sim.json envelope.
+#[cfg(feature = "field-sim")]
+struct SidecarWriteOutcome {
+    bin_tmp: PathBuf,
+    bin_final: PathBuf,
+    pointer: SidecarPointer,
+}
+
+/// Encode the binary sidecar to `<path-stem>.fields.bin.tmp` if the
+/// simulation carries any voxel field. Returns `None` for Tier-1 scalar
+/// runs (no fields → no sidecar). ADR-0019.
+#[cfg(feature = "field-sim")]
+fn encode_paired_sidecar(
+    sim_json_path: &Path,
+    sim: &PrintSimulation,
+) -> Result<Option<SidecarWriteOutcome>, String> {
+    let fields = SidecarFields {
+        cure: sim.cure_field(),
+        photoinitiator: sim.photoinitiator_field(),
+        strain: sim.strain_field(),
+        stress: sim.stress_field(),
+    };
+    if fields.field_count() == 0 {
+        return Ok(None);
+    }
+    let bin_final = sidecar_bin_path(sim_json_path);
+    let bin_tmp = {
+        let mut t = bin_final.clone();
+        let mut name = t
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
+        name.push(".tmp");
+        t.set_file_name(name);
+        t
+    };
+    // Encode into the .bin.tmp file.
+    let mut file = std::fs::File::create(&bin_tmp)
+        .map_err(|e| format!("failed to open sidecar tmp {} ({e})", bin_tmp.display()))?;
+    let output: SidecarOutput = encode_sidecar(&fields, &mut file).map_err(|e| {
+        let _ = std::fs::remove_file(&bin_tmp);
+        format!("failed to encode sidecar {} ({e})", bin_tmp.display())
+    })?;
+    drop(file);
+    // fsync.
+    {
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .open(&bin_tmp)
+            .map_err(|e| format!("failed to fsync open {} ({e})", bin_tmp.display()))?;
+        f.sync_all()
+            .map_err(|e| format!("failed to fsync {} ({e})", bin_tmp.display()))?;
+    }
+    // sha256 over the .bin.tmp bytes (re-read from disk to match
+    // consumer's view).
+    let sha256 = sha256_hex_of_file(&bin_tmp)?;
+    let mut fields_present = Vec::new();
+    if sim.cure_field().is_some() {
+        fields_present.push(FieldKind::Cure.name().to_string());
+    }
+    if sim.photoinitiator_field().is_some() {
+        fields_present.push(FieldKind::Photoinitiator.name().to_string());
+    }
+    if sim.strain_field().is_some() {
+        fields_present.push(FieldKind::Strain.name().to_string());
+    }
+    if sim.stress_field().is_some() {
+        fields_present.push(FieldKind::Stress.name().to_string());
+    }
+    let pointer_path = bin_final
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .ok_or_else(|| format!("sidecar bin path has no filename: {}", bin_final.display()))?;
+    Ok(Some(SidecarWriteOutcome {
+        bin_tmp,
+        bin_final,
+        pointer: SidecarPointer {
+            path: pointer_path,
+            byte_size: output.byte_size,
+            sha256,
+            fields_present,
+        },
+    }))
+}
+
+/// Compute the conventional sidecar path: `<stem>.fields.bin` next to
+/// the `<stem>.sim.json`. Strips the `.sim.json` extension (or its tail
+/// `.json` if the file ended with `.json` but not `.sim.json`) and
+/// appends `.fields.bin`.
+#[cfg(feature = "field-sim")]
+fn sidecar_bin_path(sim_json_path: &Path) -> PathBuf {
+    let parent = sim_json_path.parent().unwrap_or(Path::new(""));
+    let file = sim_json_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    // Strip ".sim.json" then ".json" then bare; in each case appending
+    // ".fields.bin" produces the conventional pair.
+    let stem = if let Some(s) = file.strip_suffix(".sim.json") {
+        s.to_string()
+    } else if let Some(s) = file.strip_suffix(".json") {
+        s.to_string()
+    } else {
+        file
+    };
+    parent.join(format!("{stem}.fields.bin"))
+}
+
+#[cfg(feature = "field-sim")]
+fn sha256_hex_of_file(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path)
+        .map_err(|e| format!("failed to read sidecar for sha256: {} ({e})", path.display()))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let result = hasher.finalize();
+    let mut hex = String::with_capacity(64);
+    for b in result {
+        use std::fmt::Write;
+        let _ = write!(hex, "{b:02x}");
+    }
+    Ok(hex)
 }
 
 /// `<path>.tmp` next to `path`. We append `.tmp` to the file name so the
@@ -257,24 +544,35 @@ pub struct LoadedEnvelope {
     pub provenance: Option<Provenance>,
 }
 
-/// Load the full envelope (simulation + optional provenance). Same
+/// Load the full envelope (simulation + optional provenance + optional
+/// reattached voxel fields from the paired binary sidecar). Same
 /// version-check + validate() guards as [`load_from_path`]; same stable
 /// error substrings.
+///
+/// **v1 envelopes are no longer supported** (ADR-0019 / t2f3.5 clean
+/// break). The schema_version check rejects them with the existing
+/// `"unknown schema_version"` substring + a regeneration hint.
 pub fn load_envelope(path: &Path) -> Result<LoadedEnvelope, String> {
     let contents = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     let envelope: SimulationEnvelope = serde_json::from_str(&contents)
         .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
     if envelope.schema_version != CURRENT_SCHEMA_VERSION {
+        let hint = if envelope.schema_version == 1 {
+            " — v1 files are no longer supported as of t2f3.5; regenerate via `resinsim sim` per ADR-0019"
+        } else {
+            ""
+        };
         return Err(format!(
-            "unknown schema_version {} in {} (expected {})",
+            "unknown schema_version {} in {} (expected {}){hint}",
             envelope.schema_version,
             path.display(),
             CURRENT_SCHEMA_VERSION
         ));
     }
-    envelope
-        .simulation
+    #[allow(unused_mut)]
+    let mut simulation = envelope.simulation;
+    simulation
         .validate()
         .map_err(|e| format!("invalid simulation {}: {e}", path.display()))?;
     if let Some(provenance) = envelope.provenance.as_ref() {
@@ -282,10 +580,99 @@ pub fn load_envelope(path: &Path) -> Result<LoadedEnvelope, String> {
             .validate()
             .map_err(|e| format!("invalid provenance in {}: {e}", path.display()))?;
     }
+
+    // Reattach voxel fields from the paired binary sidecar if the
+    // envelope carries a pointer.
+    #[cfg(feature = "field-sim")]
+    if let Some(pointer) = envelope.fields_sidecar.as_ref() {
+        load_and_install_sidecar(path, pointer, &mut simulation)?;
+    }
+
     Ok(LoadedEnvelope {
-        simulation: envelope.simulation,
+        simulation,
         provenance: envelope.provenance,
     })
+}
+
+/// Decode the paired sidecar pointed at by `pointer` and install its
+/// voxel fields onto `sim`. Path validation, sha256 verification, and
+/// typed-error propagation all live here. ADR-0019.
+#[cfg(feature = "field-sim")]
+fn load_and_install_sidecar(
+    sim_json_path: &Path,
+    pointer: &SidecarPointer,
+    sim: &mut PrintSimulation,
+) -> Result<(), String> {
+    let parent = sim_json_path.parent().unwrap_or(Path::new("."));
+    let canonical = pointer.validate_against_parent(parent)?;
+    let meta = canonical
+        .metadata()
+        .map_err(|e| format!("missing sidecar: cannot stat {} ({e})", canonical.display()))?;
+    if meta.len() != pointer.byte_size {
+        return Err(format!(
+            "sidecar size mismatch: pointer claims {} bytes, file is {} bytes ({})",
+            pointer.byte_size,
+            meta.len(),
+            canonical.display()
+        ));
+    }
+    // Read the sidecar bytes once; both sha256 + decode go off this
+    // snapshot to narrow the consumer-side TOCTOU window.
+    let bytes = std::fs::read(&canonical).map_err(|e| {
+        format!(
+            "missing sidecar: failed to read {} ({e})",
+            canonical.display()
+        )
+    })?;
+    let actual_sha = sha256_hex_of_bytes(&bytes);
+    if actual_sha != pointer.sha256 {
+        return Err(format!(
+            "sidecar sha256 mismatch in {}: pointer {} != actual {}",
+            canonical.display(),
+            pointer.sha256,
+            actual_sha
+        ));
+    }
+    let mut cursor = std::io::Cursor::new(bytes);
+    let decoded = decode_sidecar(&mut cursor, &canonical.display().to_string()).map_err(|e| {
+        format!(
+            "invalid sidecar {}: {e}",
+            canonical.display()
+        )
+    })?;
+    // Install via the existing aggregate setters (which enforce
+    // dimension-lock invariants).
+    if let (Some(cure), Some(photoinit)) = (decoded.cure, decoded.photoinitiator) {
+        sim.set_voxel_fields(cure, photoinit).map_err(|e| {
+            format!(
+                "invalid sidecar {}: cannot install cure+photoinit ({e})",
+                canonical.display()
+            )
+        })?;
+    }
+    if let (Some(strain), Some(stress)) = (decoded.strain, decoded.stress) {
+        sim.set_strain_stress_fields(strain, stress).map_err(|e| {
+            format!(
+                "invalid sidecar {}: cannot install strain+stress ({e})",
+                canonical.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "field-sim")]
+fn sha256_hex_of_bytes(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let result = hasher.finalize();
+    let mut hex = String::with_capacity(64);
+    for b in result {
+        use std::fmt::Write;
+        let _ = write!(hex, "{b:02x}");
+    }
+    hex
 }
 
 /// Backwards-compatible alias for [`load_from_path`]; kept so existing

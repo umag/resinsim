@@ -81,33 +81,33 @@ pub struct PrintSimulation {
     /// `SimulationRunner` only when the `--voxel-cure-mm` flag is set;
     /// `None` for Tier-1 scalar runs. Aggregate invariant: when `Some`,
     /// the field's bbox must contain every layer's solid region.
+    ///
+    /// ADR-0019 / t2f3.5: persisted via the paired binary sidecar
+    /// (`<stem>.fields.bin`), NOT inline in the sim.json envelope.
+    /// `#[serde(skip)]` keeps this out of the JSON projection; the
+    /// repository layer (`simulation_repo.rs`) reattaches voxel fields
+    /// from the sidecar on `load_envelope`.
     #[cfg(feature = "field-sim")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip)]
     cure_field: Option<CureField>,
     /// Per-voxel photoinitiator concentration field (KB-160). Populated
-    /// in lockstep with `cure_field`.
+    /// in lockstep with `cure_field`. Persisted via the sidecar per
+    /// ADR-0019 (same rationale as `cure_field` above).
     #[cfg(feature = "field-sim")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip)]
     photoinitiator_field: Option<PhotoinitiatorField>,
     /// Per-voxel cure-driven shrinkage strain (ADR-0018 / t2f3).
     /// Populated only when voxel-cure mode is active (full Tier-2);
     /// dimension-locked to `cure_field` and `stress_field`.
     ///
-    /// **In-memory only** for v1 — `#[serde(skip)]` on the heavy field.
-    /// At 24 bytes/voxel binary the JSON expansion (12 bytes per f32
-    /// literal plus structural overhead) puts a typical 1.6 G-voxel
-    /// Mars 5 Ultra strain field at ~100 GB on disk, exceeding any
-    /// reasonable workstation budget. Per-layer aggregates on
-    /// `LayerResult` (`strain_magnitude_max`, etc.) ARE serialised and
-    /// give consumers a compact projection. A future schema_version bump
-    /// with a sparse / quantised serialiser can revisit this.
+    /// ADR-0019 / t2f3.5: persisted via the paired binary sidecar.
+    /// Previously `#[serde(skip)]` because dense JSON would balloon to
+    /// ~250 GB; now persisted losslessly in the sidecar's RSFIELD format.
     #[cfg(feature = "field-sim")]
     #[serde(default, skip)]
     strain_field: Option<StrainField>,
-    /// Per-voxel residual stress in MPa (ADR-0018 / t2f3). Populated
-    /// only when voxel-cure mode is active; dimension-locked to
-    /// `cure_field` and `strain_field`. **In-memory only** — same
-    /// rationale as `strain_field` above.
+    /// Per-voxel residual stress in MPa (ADR-0018 / t2f3). Persisted
+    /// via the sidecar per ADR-0019 (same rationale as `strain_field`).
     #[cfg(feature = "field-sim")]
     #[serde(default, skip)]
     stress_field: Option<StressField>,

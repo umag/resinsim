@@ -162,6 +162,64 @@ impl CureField {
         (self.nx, self.ny, self.nz)
     }
 
+    /// Read access to the underlying dense voxel buffer. Used by the
+    /// sidecar persistence layer (ADR-0019) for per-slab encode; not
+    /// part of the public domain API.
+    pub(crate) fn data(&self) -> &Array3<f32> {
+        &self.data
+    }
+
+    /// Reconstitute a `CureField` from raw persistence inputs (ADR-0019
+    /// sidecar decoder). Re-runs the same dimension / voxel_size_mm /
+    /// bbox_min_mm validations as `new()`, then takes ownership of the
+    /// caller-supplied `data` array. Caller is responsible for
+    /// validating the per-voxel `is_finite()` invariant before
+    /// invoking — the sidecar decoder does this as part of its
+    /// "non-finite in sidecar field" guard.
+    pub(crate) fn from_persistence_parts(
+        nx: u32,
+        ny: u32,
+        nz: u32,
+        voxel_size_mm: f32,
+        bbox_min_mm: [f32; 3],
+        data: Array3<f32>,
+    ) -> Result<Self, CureFieldError> {
+        if nx == 0 || ny == 0 || nz == 0 {
+            return Err(CureFieldError::InvalidDimensions { nx, ny, nz });
+        }
+        if !voxel_size_mm.is_finite() || voxel_size_mm <= 0.0 {
+            return Err(CureFieldError::InvalidVoxelSize(voxel_size_mm));
+        }
+        if !bbox_min_mm[0].is_finite() || !bbox_min_mm[1].is_finite() || !bbox_min_mm[2].is_finite()
+        {
+            return Err(CureFieldError::InvalidBboxMin {
+                x: bbox_min_mm[0],
+                y: bbox_min_mm[1],
+                z: bbox_min_mm[2],
+            });
+        }
+        enforce_field_budget(
+            "CureField",
+            nx,
+            ny,
+            nz,
+            std::mem::size_of::<f32>() as u64,
+            voxel_size_mm,
+        )
+        .map_err(CureFieldError::ExceedsBudget)?;
+        if data.shape() != [nx as usize, ny as usize, nz as usize] {
+            return Err(CureFieldError::InvalidDimensions { nx, ny, nz });
+        }
+        Ok(Self {
+            nx,
+            ny,
+            nz,
+            voxel_size_mm,
+            bbox_min_mm,
+            data,
+        })
+    }
+
     /// Physical edge length of one voxel (mm).
     pub fn voxel_size_mm(&self) -> f32 {
         self.voxel_size_mm

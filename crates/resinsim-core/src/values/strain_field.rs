@@ -139,6 +139,62 @@ impl StrainField {
         self.bbox_min_mm
     }
 
+    /// Read access to the underlying dense voxel buffer. Used by the
+    /// sidecar persistence layer (ADR-0019); not part of the public
+    /// domain API.
+    pub(crate) fn data(&self) -> &Array3<StrainTensor> {
+        &self.data
+    }
+
+    /// Reconstitute a `StrainField` from raw persistence inputs
+    /// (ADR-0019 sidecar decoder). Validates dim/voxel_size/bbox/budget
+    /// then takes the caller-supplied data array. The sidecar decoder
+    /// guarantees per-tensor finiteness before invoking — see
+    /// `docs/patterns/anti/rust-nan-positive-validation-gap.md`.
+    pub(crate) fn from_persistence_parts(
+        nx: u32,
+        ny: u32,
+        nz: u32,
+        voxel_size_mm: f32,
+        bbox_min_mm: [f32; 3],
+        data: Array3<StrainTensor>,
+    ) -> Result<Self, StrainFieldError> {
+        if nx == 0 || ny == 0 || nz == 0 {
+            return Err(StrainFieldError::InvalidDimensions { nx, ny, nz });
+        }
+        if !voxel_size_mm.is_finite() || voxel_size_mm <= 0.0 {
+            return Err(StrainFieldError::InvalidVoxelSize(voxel_size_mm));
+        }
+        if !bbox_min_mm[0].is_finite() || !bbox_min_mm[1].is_finite() || !bbox_min_mm[2].is_finite()
+        {
+            return Err(StrainFieldError::InvalidBboxMin {
+                x: bbox_min_mm[0],
+                y: bbox_min_mm[1],
+                z: bbox_min_mm[2],
+            });
+        }
+        enforce_field_budget(
+            "StrainField",
+            nx,
+            ny,
+            nz,
+            std::mem::size_of::<StrainTensor>() as u64,
+            voxel_size_mm,
+        )
+        .map_err(StrainFieldError::ExceedsBudget)?;
+        if data.shape() != [nx as usize, ny as usize, nz as usize] {
+            return Err(StrainFieldError::InvalidDimensions { nx, ny, nz });
+        }
+        Ok(Self {
+            nx,
+            ny,
+            nz,
+            voxel_size_mm,
+            bbox_min_mm,
+            data,
+        })
+    }
+
     pub fn voxel_count(&self) -> u64 {
         u64::from(self.nx) * u64::from(self.ny) * u64::from(self.nz)
     }

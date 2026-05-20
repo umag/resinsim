@@ -1,5 +1,7 @@
 pub mod printer_repo;
 pub mod resin_repo;
+#[cfg(feature = "field-sim")]
+pub mod sidecar;
 pub mod simulation_repo;
 
 pub use printer_repo::PrinterProfileRepository;

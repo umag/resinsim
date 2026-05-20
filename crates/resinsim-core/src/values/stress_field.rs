@@ -110,6 +110,59 @@ impl StressField {
         self.bbox_min_mm
     }
 
+    /// Read access to the underlying dense voxel buffer. Used by the
+    /// sidecar persistence layer (ADR-0019); not part of the public
+    /// domain API.
+    pub(crate) fn data(&self) -> &Array3<StressTensor> {
+        &self.data
+    }
+
+    /// Reconstitute a `StressField` from raw persistence inputs
+    /// (ADR-0019 sidecar decoder).
+    pub(crate) fn from_persistence_parts(
+        nx: u32,
+        ny: u32,
+        nz: u32,
+        voxel_size_mm: f32,
+        bbox_min_mm: [f32; 3],
+        data: Array3<StressTensor>,
+    ) -> Result<Self, StressFieldError> {
+        if nx == 0 || ny == 0 || nz == 0 {
+            return Err(StressFieldError::InvalidDimensions { nx, ny, nz });
+        }
+        if !voxel_size_mm.is_finite() || voxel_size_mm <= 0.0 {
+            return Err(StressFieldError::InvalidVoxelSize(voxel_size_mm));
+        }
+        if !bbox_min_mm[0].is_finite() || !bbox_min_mm[1].is_finite() || !bbox_min_mm[2].is_finite()
+        {
+            return Err(StressFieldError::InvalidBboxMin {
+                x: bbox_min_mm[0],
+                y: bbox_min_mm[1],
+                z: bbox_min_mm[2],
+            });
+        }
+        enforce_field_budget(
+            "StressField",
+            nx,
+            ny,
+            nz,
+            std::mem::size_of::<StressTensor>() as u64,
+            voxel_size_mm,
+        )
+        .map_err(StressFieldError::ExceedsBudget)?;
+        if data.shape() != [nx as usize, ny as usize, nz as usize] {
+            return Err(StressFieldError::InvalidDimensions { nx, ny, nz });
+        }
+        Ok(Self {
+            nx,
+            ny,
+            nz,
+            voxel_size_mm,
+            bbox_min_mm,
+            data,
+        })
+    }
+
     pub fn voxel_count(&self) -> u64 {
         u64::from(self.nx) * u64::from(self.ny) * u64::from(self.nz)
     }

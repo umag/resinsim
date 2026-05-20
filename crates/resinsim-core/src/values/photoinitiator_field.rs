@@ -123,6 +123,54 @@ impl PhotoinitiatorField {
         (self.nx, self.ny, self.nz)
     }
 
+    /// Read access to the underlying dense voxel buffer. Used by the
+    /// sidecar persistence layer (ADR-0019); not part of the public
+    /// domain API.
+    pub(crate) fn data(&self) -> &Array3<f32> {
+        &self.data
+    }
+
+    /// Reconstitute a `PhotoinitiatorField` from raw persistence inputs
+    /// (ADR-0019 sidecar decoder). `initial_concentration` is captured
+    /// at construction and validated via `new`-equivalent rules; the
+    /// caller passes the per-voxel data array directly (already-validated
+    /// for finiteness by the sidecar decoder).
+    pub(crate) fn from_persistence_parts(
+        nx: u32,
+        ny: u32,
+        nz: u32,
+        initial_concentration: f32,
+        data: Array3<f32>,
+    ) -> Result<Self, PhotoinitiatorFieldError> {
+        if nx == 0 || ny == 0 || nz == 0 {
+            return Err(PhotoinitiatorFieldError::InvalidDimensions { nx, ny, nz });
+        }
+        if !initial_concentration.is_finite() || !(0.0..=1.0).contains(&initial_concentration) {
+            return Err(PhotoinitiatorFieldError::InvalidInitialConcentration(
+                initial_concentration,
+            ));
+        }
+        enforce_field_budget(
+            "PhotoinitiatorField",
+            nx,
+            ny,
+            nz,
+            std::mem::size_of::<f32>() as u64,
+            1.0,
+        )
+        .map_err(PhotoinitiatorFieldError::ExceedsBudget)?;
+        if data.shape() != [nx as usize, ny as usize, nz as usize] {
+            return Err(PhotoinitiatorFieldError::InvalidDimensions { nx, ny, nz });
+        }
+        Ok(Self {
+            nx,
+            ny,
+            nz,
+            initial_concentration,
+            data,
+        })
+    }
+
     pub fn initial_concentration(&self) -> f32 {
         self.initial_concentration
     }
