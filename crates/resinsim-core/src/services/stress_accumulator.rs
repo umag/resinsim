@@ -37,14 +37,17 @@ mod tests {
 
     #[test]
     fn zero_strain_produces_zero_stress() {
-        let s = StressAccumulator::strain_to_stress(&StrainTensor::zero(), 2000.0, 0.35).expect("test fixture: validated E (=2000 MPa) and nu (=0.35) produce finite stress");
+        let s = StressAccumulator::strain_to_stress(&StrainTensor::zero(), 2000.0, 0.35)
+            .expect("test fixture: validated E (=2000 MPa) and nu (=0.35) produce finite stress");
         assert_eq!(s, StressTensor::zero());
     }
 
     #[test]
     fn isotropic_strain_produces_isotropic_stress() {
-        let e = StrainTensor::from_isotropic(-0.01).expect("test fixture: validated E (=2000 MPa) and nu (=0.35) produce finite stress");
-        let s = StressAccumulator::strain_to_stress(&e, 2000.0, 0.35).expect("test fixture: validated E (=2000 MPa) and nu (=0.35) produce finite stress");
+        let e = StrainTensor::from_isotropic(-0.01)
+            .expect("test fixture: validated E (=2000 MPa) and nu (=0.35) produce finite stress");
+        let s = StressAccumulator::strain_to_stress(&e, 2000.0, 0.35)
+            .expect("test fixture: validated E (=2000 MPa) and nu (=0.35) produce finite stress");
         // Hydrostatic component non-zero, shears zero.
         assert!(s.hydrostatic_mpa() < 0.0);
         assert_eq!(s.yz(), 0.0);

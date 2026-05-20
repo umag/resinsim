@@ -37,7 +37,9 @@ use thiserror::Error;
 /// Errors from `StrainTensor` construction and access.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum StrainTensorError {
-    #[error("StrainTensor components must all be finite, got ({xx}, {yy}, {zz}, {yz}, {xz}, {xy})")]
+    #[error(
+        "StrainTensor components must all be finite, got ({xx}, {yy}, {zz}, {yz}, {xz}, {xy})"
+    )]
     NonFiniteComponent {
         xx: f32,
         yy: f32,
@@ -68,11 +70,29 @@ impl StrainTensor {
 
     /// New strain tensor from Voigt-ordered components. Validates each is
     /// finite; rejects NaN / ±∞ before constructing.
-    pub fn new(xx: f32, yy: f32, zz: f32, yz: f32, xz: f32, xy: f32) -> Result<Self, StrainTensorError> {
-        if !(xx.is_finite() && yy.is_finite() && zz.is_finite()
-            && yz.is_finite() && xz.is_finite() && xy.is_finite())
+    pub fn new(
+        xx: f32,
+        yy: f32,
+        zz: f32,
+        yz: f32,
+        xz: f32,
+        xy: f32,
+    ) -> Result<Self, StrainTensorError> {
+        if !(xx.is_finite()
+            && yy.is_finite()
+            && zz.is_finite()
+            && yz.is_finite()
+            && xz.is_finite()
+            && xy.is_finite())
         {
-            return Err(StrainTensorError::NonFiniteComponent { xx, yy, zz, yz, xz, xy });
+            return Err(StrainTensorError::NonFiniteComponent {
+                xx,
+                yy,
+                zz,
+                yz,
+                xz,
+                xy,
+            });
         }
         Ok(Self {
             components: [xx, yy, zz, yz, xz, xy],
@@ -215,16 +235,20 @@ impl StrainTensor {
             // Diagonal matrix — eigenvalues are the diagonal entries.
             let m = xx.max(yy).max(zz);
             if !m.is_finite() {
-                return Err(StrainTensorError::NonFiniteComponent { xx, yy, zz, yz, xz, xy });
+                return Err(StrainTensorError::NonFiniteComponent {
+                    xx,
+                    yy,
+                    zz,
+                    yz,
+                    xz,
+                    xy,
+                });
             }
             return Ok(m);
         }
 
         let q = (xx + yy + zz) / 3.0;
-        let p2 = (xx - q) * (xx - q)
-            + (yy - q) * (yy - q)
-            + (zz - q) * (zz - q)
-            + 2.0 * p1;
+        let p2 = (xx - q) * (xx - q) + (yy - q) * (yy - q) + (zz - q) * (zz - q) + 2.0 * p1;
         let p = (p2 / 6.0).sqrt();
 
         // B = (1/p) * (A - qI). Determinant of B is then used to find phi.
@@ -236,15 +260,21 @@ impl StrainTensor {
         let b_xy = xy / p;
 
         // det(B) for a 3×3 symmetric matrix.
-        let det_b = b_xx * (b_yy * b_zz - b_yz * b_yz)
-            - b_xy * (b_xy * b_zz - b_yz * b_xz)
+        let det_b = b_xx * (b_yy * b_zz - b_yz * b_yz) - b_xy * (b_xy * b_zz - b_yz * b_xz)
             + b_xz * (b_xy * b_yz - b_yy * b_xz);
         let r = (det_b / 2.0).clamp(-1.0, 1.0);
         let phi = r.acos() / 3.0;
         let eig1 = q + 2.0 * p * phi.cos();
 
         if !eig1.is_finite() {
-            return Err(StrainTensorError::NonFiniteComponent { xx, yy, zz, yz, xz, xy });
+            return Err(StrainTensorError::NonFiniteComponent {
+                xx,
+                yy,
+                zz,
+                yz,
+                xz,
+                xy,
+            });
         }
         Ok(eig1)
     }
@@ -280,10 +310,7 @@ mod tests {
             let mut comps = [0.0_f32; 6];
             comps[slot] = f32::NAN;
             let r = StrainTensor::new(comps[0], comps[1], comps[2], comps[3], comps[4], comps[5]);
-            assert!(
-                r.is_err(),
-                "NaN at slot {slot} must be rejected",
-            );
+            assert!(r.is_err(), "NaN at slot {slot} must be rejected",);
         }
     }
 
@@ -299,7 +326,8 @@ mod tests {
 
     #[test]
     fn from_isotropic_diagonal_only() {
-        let e = StrainTensor::from_isotropic(-0.015).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e = StrainTensor::from_isotropic(-0.015)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
         assert_eq!(e.xx(), -0.015);
         assert_eq!(e.yy(), -0.015);
         assert_eq!(e.zz(), -0.015);
@@ -316,16 +344,19 @@ mod tests {
     #[test]
     fn from_free_shrinkage_at_zero_cure_is_zero() {
         // No cure → no shrinkage strain (regardless of anisotropy).
-        let e = StrainTensor::from_free_shrinkage(0.015, 0.0, 1.0).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e = StrainTensor::from_free_shrinkage(0.015, 0.0, 1.0)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
         assert_eq!(e, StrainTensor::zero());
-        let e = StrainTensor::from_free_shrinkage(0.015, 0.0, 1.5).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e = StrainTensor::from_free_shrinkage(0.015, 0.0, 1.5)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
         assert_eq!(e, StrainTensor::zero());
     }
 
     #[test]
     fn from_free_shrinkage_isotropic_at_full_cure_matches_linear_pct() {
         // Anisotropy ratio = 1.0 → legacy isotropic ε_ii = -L exactly.
-        let e = StrainTensor::from_free_shrinkage(0.015, 1.0, 1.0).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e = StrainTensor::from_free_shrinkage(0.015, 1.0, 1.0)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
         assert!((e.xx() - (-0.015)).abs() < 1e-6);
         assert!((e.yy() - (-0.015)).abs() < 1e-6);
         assert!((e.zz() - (-0.015)).abs() < 1e-6);
@@ -338,7 +369,8 @@ mod tests {
         //   factor_xy = 3 / (2 + 1.5) = 0.857
         //   factor_z  = 1.5 × 0.857   = 1.286
         // At L=0.015, full cure: ε_xx = ε_yy = -0.01286; ε_zz = -0.01929.
-        let e = StrainTensor::from_free_shrinkage(0.015, 1.0, 1.5).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e = StrainTensor::from_free_shrinkage(0.015, 1.0, 1.5)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
         let factor_xy = 3.0_f32 / (2.0 + 1.5);
         let factor_z = 1.5 * factor_xy;
         assert!((e.xx() - (-0.015 * factor_xy)).abs() < 1e-5);
@@ -352,17 +384,21 @@ mod tests {
     fn from_free_shrinkage_negative_sign_for_shrinkage() {
         // Positive linear_shrinkage_frac + positive cure_extent →
         // negative ε (compressive) regardless of anisotropy.
-        let e = StrainTensor::from_free_shrinkage(0.024, 0.5, 1.0).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e = StrainTensor::from_free_shrinkage(0.024, 0.5, 1.0)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
         assert!(e.xx() < 0.0);
-        let e = StrainTensor::from_free_shrinkage(0.024, 0.5, 1.5).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e = StrainTensor::from_free_shrinkage(0.024, 0.5, 1.5)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
         assert!(e.zz() < 0.0);
     }
 
     #[test]
     fn from_free_shrinkage_clamps_overflow_cure() {
         // cure_extent_frac > 1 silently clamps to 1 (defensive).
-        let e_over = StrainTensor::from_free_shrinkage(0.015, 1.5, 1.0).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
-        let e_full = StrainTensor::from_free_shrinkage(0.015, 1.0, 1.0).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e_over = StrainTensor::from_free_shrinkage(0.015, 1.5, 1.0)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e_full = StrainTensor::from_free_shrinkage(0.015, 1.0, 1.0)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
         assert_eq!(e_over, e_full);
     }
 
@@ -383,7 +419,8 @@ mod tests {
     #[test]
     fn magnitude_isotropic_compressive() {
         // Pure isotropic ε = -0.01 → magnitude = √(3 × 0.0001) = 0.01√3.
-        let e = StrainTensor::from_isotropic(-0.01).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e = StrainTensor::from_isotropic(-0.01)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
         let expected = (3.0_f32 * 0.0001).sqrt();
         assert!((e.magnitude() - expected).abs() < 1e-6);
     }
@@ -391,28 +428,48 @@ mod tests {
     #[test]
     fn magnitude_shear_counted_twice() {
         // Pure shear: only ε_xy ≠ 0. Frobenius² = 0 + 0 + 0 + 2·(0 + 0 + ε_xy²).
-        let e = StrainTensor::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.05).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e = StrainTensor::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.05)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
         let expected = (2.0_f32 * 0.05 * 0.05).sqrt();
         assert!((e.magnitude() - expected).abs() < 1e-6);
     }
 
     #[test]
     fn max_principal_zero_for_zero_tensor() {
-        assert_eq!(StrainTensor::zero().max_principal().expect("test fixture: literal finite tensor components satisfy from_* preconditions"), 0.0);
+        assert_eq!(
+            StrainTensor::zero().max_principal().expect(
+                "test fixture: literal finite tensor components satisfy from_* preconditions"
+            ),
+            0.0
+        );
     }
 
     #[test]
     fn max_principal_isotropic_compressive() {
         // Diagonal -0.01 on all axes → all eigenvalues = -0.01, max = -0.01.
-        let e = StrainTensor::from_isotropic(-0.01).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
-        assert!((e.max_principal().expect("test fixture: literal finite tensor components satisfy from_* preconditions") - (-0.01)).abs() < 1e-6);
+        let e = StrainTensor::from_isotropic(-0.01)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        assert!(
+            (e.max_principal().expect(
+                "test fixture: literal finite tensor components satisfy from_* preconditions"
+            ) - (-0.01))
+                .abs()
+                < 1e-6
+        );
     }
 
     #[test]
     fn max_principal_diagonal_picks_largest() {
         // Diagonal {-0.02, 0.005, -0.001} → max = 0.005.
-        let e = StrainTensor::new(-0.02, 0.005, -0.001, 0.0, 0.0, 0.0).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
-        assert!((e.max_principal().expect("test fixture: literal finite tensor components satisfy from_* preconditions") - 0.005).abs() < 1e-6);
+        let e = StrainTensor::new(-0.02, 0.005, -0.001, 0.0, 0.0, 0.0)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        assert!(
+            (e.max_principal().expect(
+                "test fixture: literal finite tensor components satisfy from_* preconditions"
+            ) - 0.005)
+                .abs()
+                < 1e-6
+        );
     }
 
     #[test]
@@ -420,16 +477,26 @@ mod tests {
         // Symmetric matrix with non-zero shear — answer is closed-form
         // verifiable via numpy.linalg.eigvalsh. Use a well-conditioned
         // example: diag(1, 2, 3), no shear → eigenvalues (1, 2, 3), max 3.
-        let e = StrainTensor::new(1.0, 2.0, 3.0, 0.0, 0.0, 0.0).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
-        assert!((e.max_principal().expect("test fixture: literal finite tensor components satisfy from_* preconditions") - 3.0).abs() < 1e-5);
+        let e = StrainTensor::new(1.0, 2.0, 3.0, 0.0, 0.0, 0.0)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        assert!(
+            (e.max_principal().expect(
+                "test fixture: literal finite tensor components satisfy from_* preconditions"
+            ) - 3.0)
+                .abs()
+                < 1e-5
+        );
     }
 
     #[test]
     fn max_principal_pure_shear_xy() {
         // [[0, k, 0], [k, 0, 0], [0, 0, 0]] eigenvalues: -k, 0, k.
         // max = k. Pick k = 0.05.
-        let e = StrainTensor::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.05).expect("test fixture: literal finite tensor components satisfy from_* preconditions");
-        let max = e.max_principal().expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let e = StrainTensor::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.05)
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
+        let max = e
+            .max_principal()
+            .expect("test fixture: literal finite tensor components satisfy from_* preconditions");
         assert!((max - 0.05).abs() < 1e-5);
     }
 

@@ -96,9 +96,7 @@ impl StrainField {
         if !voxel_size_mm.is_finite() || voxel_size_mm <= 0.0 {
             return Err(StrainFieldError::InvalidVoxelSize(voxel_size_mm));
         }
-        if !bbox_min_mm[0].is_finite()
-            || !bbox_min_mm[1].is_finite()
-            || !bbox_min_mm[2].is_finite()
+        if !bbox_min_mm[0].is_finite() || !bbox_min_mm[1].is_finite() || !bbox_min_mm[2].is_finite()
         {
             return Err(StrainFieldError::InvalidBboxMin {
                 x: bbox_min_mm[0],
@@ -170,12 +168,7 @@ impl StrainField {
 
     /// Strain tensor at voxel `[ix, iy, iz]`. Returns `StrainTensor::zero()`
     /// for unlocked voxels (constructor initial state).
-    pub fn strain_at(
-        &self,
-        ix: u32,
-        iy: u32,
-        iz: u32,
-    ) -> Result<StrainTensor, StrainFieldError> {
+    pub fn strain_at(&self, ix: u32, iy: u32, iz: u32) -> Result<StrainTensor, StrainFieldError> {
         self.check_bounds(ix, iy, iz)?;
         Ok(self.data[(ix as usize, iy as usize, iz as usize)])
     }
@@ -277,9 +270,7 @@ impl StrainField {
         // Predicate: both neighbours must be cured (non-zero strain)
         // for the pair to contribute. cured-vs-empty pairs are the
         // part-surface noise we're filtering out.
-        let both_cured = |a: StrainTensor, b: StrainTensor| -> bool {
-            a != zero && b != zero
-        };
+        let both_cured = |a: StrainTensor, b: StrainTensor| -> bool { a != zero && b != zero };
 
         // X-direction gradients within the slab
         if self.nx >= 2 {
@@ -353,7 +344,9 @@ mod tests {
 
     #[test]
     fn new_constructs_zero_filled_field() {
-        let f = StrainField::new(2, 3, 4, 0.5, [0.0, 0.0, 0.0]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let f = StrainField::new(2, 3, 4, 0.5, [0.0, 0.0, 0.0]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         assert_eq!(f.dimensions(), (2, 3, 4));
         assert_eq!(f.voxel_count(), 24);
         // Every voxel starts at zero.
@@ -402,7 +395,9 @@ mod tests {
 
     #[test]
     fn strain_at_oob_returns_err() {
-        let f = StrainField::new(2, 2, 2, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let f = StrainField::new(2, 2, 2, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         assert!(matches!(
             f.strain_at(2, 0, 0),
             Err(StrainFieldError::OutOfBounds { .. })
@@ -411,24 +406,41 @@ mod tests {
 
     #[test]
     fn lock_strain_at_writes_zero_voxel() {
-        let mut f = StrainField::new(2, 2, 2, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let t = StrainTensor::from_isotropic(-0.01).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        f.lock_strain_at(0, 0, 0, t).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let mut f = StrainField::new(2, 2, 2, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let t = StrainTensor::from_isotropic(-0.01).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        f.lock_strain_at(0, 0, 0, t).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         assert_eq!(f.strain_at(0, 0, 0).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions"), t);
     }
 
     #[test]
     fn lock_strain_at_rejects_overwrite() {
-        let mut f = StrainField::new(2, 2, 2, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let t = StrainTensor::from_isotropic(-0.01).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        f.lock_strain_at(0, 0, 0, t).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let mut f = StrainField::new(2, 2, 2, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let t = StrainTensor::from_isotropic(-0.01).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        f.lock_strain_at(0, 0, 0, t).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         let result = f.lock_strain_at(0, 0, 0, t);
-        assert!(matches!(result, Err(StrainFieldError::AlreadyLocked { .. })));
+        assert!(matches!(
+            result,
+            Err(StrainFieldError::AlreadyLocked { .. })
+        ));
     }
 
     #[test]
     fn lock_strain_at_oob_returns_err() {
-        let mut f = StrainField::new(2, 2, 2, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let mut f = StrainField::new(2, 2, 2, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         let t = StrainTensor::zero();
         assert!(matches!(
             f.lock_strain_at(2, 0, 0, t),
@@ -438,19 +450,33 @@ mod tests {
 
     #[test]
     fn magnitude_layer_max_zero_for_unlocked_layer() {
-        let f = StrainField::new(3, 3, 2, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let f = StrainField::new(3, 3, 2, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         assert_eq!(f.magnitude_layer_max(0).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions"), 0.0);
         assert_eq!(f.magnitude_layer_max(1).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions"), 0.0);
     }
 
     #[test]
     fn magnitude_layer_max_picks_largest_in_slab() {
-        let mut f = StrainField::new(3, 3, 2, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let small = StrainTensor::from_isotropic(-0.005).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let large = StrainTensor::from_isotropic(-0.02).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        f.lock_strain_at(0, 0, 1, small).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        f.lock_strain_at(1, 1, 1, large).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let m = f.magnitude_layer_max(1).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let mut f = StrainField::new(3, 3, 2, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let small = StrainTensor::from_isotropic(-0.005).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let large = StrainTensor::from_isotropic(-0.02).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        f.lock_strain_at(0, 0, 1, small).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        f.lock_strain_at(1, 1, 1, large).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let m = f.magnitude_layer_max(1).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         // Frobenius of isotropic ε = -0.02 is |ε|·√3 ≈ 0.0346.
         let expected = 0.02 * 3.0_f32.sqrt();
         assert!((m - expected).abs() < 1e-5);
@@ -458,7 +484,9 @@ mod tests {
 
     #[test]
     fn magnitude_layer_max_oob_returns_err() {
-        let f = StrainField::new(1, 1, 1, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let f = StrainField::new(1, 1, 1, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         assert!(matches!(
             f.magnitude_layer_max(1),
             Err(StrainFieldError::OutOfBounds { .. })
@@ -467,8 +495,12 @@ mod tests {
 
     #[test]
     fn gradient_layer_max_zero_for_uniform_layer() {
-        let mut f = StrainField::new(2, 2, 1, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let t = StrainTensor::from_isotropic(-0.01).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let mut f = StrainField::new(2, 2, 1, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let t = StrainTensor::from_isotropic(-0.01).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         for ix in 0..2 {
             for iy in 0..2 {
                 f.lock_strain_at(ix, iy, 0, t).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
@@ -484,47 +516,73 @@ mod tests {
         // are the part-surface false-positive that pollutes the layer
         // max. The new contract is: both neighbours must be non-zero
         // (cured) for the pair to contribute to the max.
-        let mut f = StrainField::new(2, 1, 1, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let nonzero = StrainTensor::from_isotropic(-0.02).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let mut f = StrainField::new(2, 1, 1, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let nonzero = StrainTensor::from_isotropic(-0.02).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         // Only voxel (1, 0, 0) is locked; (0, 0, 0) stays zero.
         // This is a part-surface transition — must NOT trigger the
         // gradient max.
-        f.lock_strain_at(1, 0, 0, nonzero).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let g = f.gradient_layer_max(0).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        assert_eq!(g, 0.0, "cured-vs-empty pair must NOT contribute to gradient_layer_max");
+        f.lock_strain_at(1, 0, 0, nonzero).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let g = f.gradient_layer_max(0).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        assert_eq!(
+            g, 0.0,
+            "cured-vs-empty pair must NOT contribute to gradient_layer_max"
+        );
     }
 
     #[test]
     fn gradient_layer_max_detects_interior_step() {
         // Two cured voxels with different magnitudes are the intended
         // CohesiveFailure signal — measure that gradient.
-        let mut f = StrainField::new(2, 1, 1, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let small = StrainTensor::from_isotropic(-0.005).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let large = StrainTensor::from_isotropic(-0.02).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        f.lock_strain_at(0, 0, 0, small).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        f.lock_strain_at(1, 0, 0, large).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let g = f.gradient_layer_max(0).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let mut f = StrainField::new(2, 1, 1, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let small = StrainTensor::from_isotropic(-0.005).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let large = StrainTensor::from_isotropic(-0.02).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        f.lock_strain_at(0, 0, 0, small).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        f.lock_strain_at(1, 0, 0, large).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let g = f.gradient_layer_max(0).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         // Frobenius diff of two isotropic tensors with magnitudes
         // 0.005 and 0.02: components differ by 0.015 on the diagonal,
         // 0 on shears → √(3·0.015²) = 0.015·√3.
         let expected = 0.015_f32 * 3.0_f32.sqrt();
-        assert!(
-            (g - expected).abs() < 1e-5,
-            "expected {expected}, got {g}"
-        );
+        assert!((g - expected).abs() < 1e-5, "expected {expected}, got {g}");
     }
 
     #[test]
     fn total_bytes_matches_voxel_count_times_tensor_size() {
-        let f = StrainField::new(2, 3, 4, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let f = StrainField::new(2, 3, 4, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         let expected = 24_u64 * (std::mem::size_of::<StrainTensor>() as u64);
         assert_eq!(f.total_bytes(), expected);
     }
 
     #[test]
     fn world_at_voxel_center_with_bbox_offset() {
-        let f = StrainField::new(2, 2, 2, 0.5, [10.0, 20.0, 30.0]).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
-        let p = f.world_at_voxel_center(0, 0, 0).expect("test fixture: in-bounds index and finite tensor satisfy field accessor preconditions");
+        let f = StrainField::new(2, 2, 2, 0.5, [10.0, 20.0, 30.0]).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
+        let p = f.world_at_voxel_center(0, 0, 0).expect(
+            "test fixture: in-bounds index and finite tensor satisfy field accessor preconditions",
+        );
         assert!((p[0] - 10.25).abs() < 1e-6);
         assert!((p[1] - 20.25).abs() < 1e-6);
         assert!((p[2] - 30.25).abs() < 1e-6);

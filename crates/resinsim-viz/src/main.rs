@@ -2685,7 +2685,6 @@ mod tests {
                     strain_magnitude_max: None,
                     stress_von_mises_max_mpa: None,
                     strain_gradient_max_frac: None,
-            voxel_yield_fraction: None,
                     voxel_yield_fraction: None,
                 };
                 sim.add_layer(lr, vec![]).expect("sequential index");

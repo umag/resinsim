@@ -122,7 +122,10 @@ mod tests {
         // clamp at 1.0, so we can see the monotonic ramp.
         let e_low = ShrinkageCalculator::cure_extent_at_voxel(10.0, 5.0, 170.0, 1000.0);
         let e_high = ShrinkageCalculator::cure_extent_at_voxel(100.0, 5.0, 170.0, 1000.0);
-        assert!(e_high > e_low, "cure_extent must grow with dose ({e_low} vs {e_high})");
+        assert!(
+            e_high > e_low,
+            "cure_extent must grow with dose ({e_low} vs {e_high})"
+        );
         assert!(e_low >= 0.0);
         assert!(e_high <= 1.0);
     }
@@ -174,7 +177,10 @@ mod tests {
         // r = 1.5 → KB-164 default. ε_zz amplified by 1.5x relative to ε_xy.
         let t = ShrinkageCalculator::free_shrinkage_strain_at_voxel(1.0, 0.015, 1.5);
         // |ε_zz| > |ε_xx| (the warping-relevant break of hydrostatic symmetry).
-        assert!(t.zz().abs() > t.xx().abs(), "ε_zz must dominate under r=1.5");
+        assert!(
+            t.zz().abs() > t.xx().abs(),
+            "ε_zz must dominate under r=1.5"
+        );
         // Trace invariance: vendor linear_shrinkage_pct meaning preserved.
         let trace = t.xx() + t.yy() + t.zz();
         assert!((trace - (-0.045)).abs() < 1e-5);

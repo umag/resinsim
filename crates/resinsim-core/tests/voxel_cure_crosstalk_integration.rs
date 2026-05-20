@@ -56,8 +56,7 @@ thermal_tau_sec = 1200.0
 lcd_uniformity_variation = 0.0
 {xy_line}{z_line}"#
     );
-    let p: PrinterProfile =
-        toml::from_str(&toml_text).expect("hand-rolled TOML must parse");
+    let p: PrinterProfile = toml::from_str(&toml_text).expect("hand-rolled TOML must parse");
     p.validate().expect("hand-rolled profile must validate");
     p
 }
@@ -167,7 +166,9 @@ fn regime_ba_xy_only_realistic_default_is_near_no_op() {
     let sim_baseline = run_voxel(&layers, &p_baseline);
 
     let cf_xy = sim_xy.cure_field().expect("BA installs cure_field");
-    let cf_b = sim_baseline.cure_field().expect("baseline installs cure_field");
+    let cf_b = sim_baseline
+        .cure_field()
+        .expect("baseline installs cure_field");
     let max_dose = cf_b.max_dose();
 
     // At σ_xy_voxels ≈ 0.016, every voxel dose should be within
@@ -220,9 +221,18 @@ fn regime_bb_xy_only_synthetic_large_sigma_produces_off_pixel_dose() {
     let n_yp = cf.dose_at(4, 5, 0).expect("(+y)");
     let n_ym = cf.dose_at(4, 3, 0).expect("(-y)");
     let tol = 1e-5 * centre_dose;
-    assert!((n_xp - n_xm).abs() < tol, "x-symmetry: +x={n_xp}, -x={n_xm}");
-    assert!((n_yp - n_ym).abs() < tol, "y-symmetry: +y={n_yp}, -y={n_ym}");
-    assert!((n_xp - n_yp).abs() < tol, "x-y-symmetry: +x={n_xp}, +y={n_yp}");
+    assert!(
+        (n_xp - n_xm).abs() < tol,
+        "x-symmetry: +x={n_xp}, -x={n_xm}"
+    );
+    assert!(
+        (n_yp - n_ym).abs() < tol,
+        "y-symmetry: +y={n_yp}, -y={n_ym}"
+    );
+    assert!(
+        (n_xp - n_yp).abs() < tol,
+        "x-y-symmetry: +x={n_xp}, +y={n_yp}"
+    );
 }
 
 // =====================================================================
@@ -247,7 +257,11 @@ fn regime_cb_z_only_realistic_default_exercises_z_smear() {
         .map(|i| {
             let mut li = LayerInput::new(i, 0.25, 3.0, 60.0, 50.0, (i as f32 + 1.0) * 0.05)
                 .expect("LayerInput in-domain");
-            li.mask = Some(if i == 3 { mask_lit.clone() } else { mask_empty.clone() });
+            li.mask = Some(if i == 3 {
+                mask_lit.clone()
+            } else {
+                mask_empty.clone()
+            });
             li
         })
         .collect();
@@ -319,7 +333,11 @@ fn regime_cb_z_only_realistic_default_exercises_z_smear() {
         .map(|i| {
             let mut li = LayerInput::new(i, 0.25, 3.0, 60.0, 50.0, (i as f32 + 1.0) * 0.05)
                 .expect("LayerInput in-domain");
-            li.mask = Some(if i == 0 { mask_lit.clone() } else { mask_empty.clone() });
+            li.mask = Some(if i == 0 {
+                mask_lit.clone()
+            } else {
+                mask_empty.clone()
+            });
             li
         })
         .collect();
@@ -442,7 +460,11 @@ fn regime_dd_both_active_combined_xy_and_z() {
         .map(|i| {
             let mut li = LayerInput::new(i, 0.25, 3.0, 60.0, 50.0, (i as f32 + 1.0) * 0.05)
                 .expect("LayerInput");
-            li.mask = Some(if i == 2 { mask_lit.clone() } else { mask_empty.clone() });
+            li.mask = Some(if i == 2 {
+                mask_lit.clone()
+            } else {
+                mask_empty.clone()
+            });
             li
         })
         .collect();
@@ -476,8 +498,8 @@ fn regime_dd_both_active_combined_xy_and_z() {
     // matches the (separable) XY kernel ratio. Compute the expected XY
     // ratio from a fresh kernel build using the same σ.
     use resinsim_core::services::LightCrosstalkCalculator;
-    let xy_kernel = LightCrosstalkCalculator::build_separable_kernel(2.0)
-        .expect("σ_xy_voxels = 2 kernel");
+    let xy_kernel =
+        LightCrosstalkCalculator::build_separable_kernel(2.0).expect("σ_xy_voxels = 2 kernel");
     // The 2D separable kernel value at offset (1, 0) is k[r+1] × k[r] /
     // (k[r] × k[r]) ratio simplifies to k[r+1] / k[r]. At source layer
     // L=2, the ratio of cure dose at (3,2,2) / cure dose at (2,2,2)

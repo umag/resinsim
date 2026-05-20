@@ -165,7 +165,9 @@ impl PhotoinitiatorField {
             });
         }
         let (ix_u, iy_u) = (ix as usize, iy as usize);
-        Ok((0..self.nz as usize).map(|iz| self.data[(ix_u, iy_u, iz)]).collect())
+        Ok((0..self.nz as usize)
+            .map(|iz| self.data[(ix_u, iy_u, iz)])
+            .collect())
     }
 
     /// Deplete the voxel at `[ix, iy, iz]` per KB-160:

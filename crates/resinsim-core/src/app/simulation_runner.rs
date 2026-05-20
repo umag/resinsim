@@ -556,12 +556,10 @@ impl SimulationRunner {
                     // MAX_FIELD_ALLOCATION_BYTES budget — out-of-budget
                     // configurations fail BEFORE the per-layer loop
                     // begins (no silent kernel OOM).
-                    let strain =
-                        StrainField::new(nx, ny, nz, voxel_size_mm, [0.0, 0.0, 0.0])
-                            .map_err(|e| format!("strain field: {e}"))?;
-                    let stress =
-                        StressField::new(nx, ny, nz, voxel_size_mm, [0.0, 0.0, 0.0])
-                            .map_err(|e| format!("stress field: {e}"))?;
+                    let strain = StrainField::new(nx, ny, nz, voxel_size_mm, [0.0, 0.0, 0.0])
+                        .map_err(|e| format!("strain field: {e}"))?;
+                    let stress = StressField::new(nx, ny, nz, voxel_size_mm, [0.0, 0.0, 0.0])
+                        .map_err(|e| format!("stress field: {e}"))?;
                     // KB-120 LCD non-uniformity profile. Sized to the cure
                     // field's lateral extent (nx × ny at voxel_size_mm) so
                     // the UniformityCalculator's radial cosine model centres
@@ -675,12 +673,9 @@ impl SimulationRunner {
                 // t2f3.5 follow-up). The Options are populated even
                 // when zero — the presence of Some(_) is the signal
                 // that the run was field-sim-enabled.
-                result.strain_magnitude_max =
-                    state.strain.magnitude_layer_max(i as u32).ok();
-                result.stress_von_mises_max_mpa =
-                    state.stress.von_mises_layer_max(i as u32).ok();
-                result.strain_gradient_max_frac =
-                    state.strain.gradient_layer_max(i as u32).ok();
+                result.strain_magnitude_max = state.strain.magnitude_layer_max(i as u32).ok();
+                result.stress_von_mises_max_mpa = state.stress.von_mises_layer_max(i as u32).ok();
+                result.strain_gradient_max_frac = state.strain.gradient_layer_max(i as u32).ok();
                 result.voxel_yield_fraction = state
                     .stress
                     .yield_fraction(i as u32, resin.tensile_strength_mpa())
@@ -948,10 +943,7 @@ impl SimulationRunner {
     /// `state.stress`. Voxels with zero strain produce zero stress and
     /// are skipped (the field is zero-initialised).
     #[cfg(feature = "field-sim")]
-    fn accumulate_layer_stress(
-        state: &mut VoxelState,
-        layer: u32,
-    ) -> Result<(), String> {
+    fn accumulate_layer_stress(state: &mut VoxelState, layer: u32) -> Result<(), String> {
         let (nx, ny, _) = state.strain.dimensions();
         for ix in 0..nx {
             for iy in 0..ny {

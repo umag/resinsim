@@ -1100,4 +1100,62 @@ pub(crate) mod tests {
             "worst_* AR convenience method must be byte-identical to its manual chain too"
         );
     }
+
+    // --- t2f3.1 B2: set_strain_stress_fields error-path coverage ---
+    //
+    // The happy path is exercised in voxel_strain_stress_integration.rs;
+    // these two tests lock the two typed error variants directly so
+    // future refactors of set_strain_stress_fields can't accidentally
+    // make the error paths unreachable. Both use destructured matches!
+    // (not bare `matches!(...)`) per
+    // docs/patterns/anti/bare-matches-as-test-assertion.md to avoid
+    // silent-green assertion regressions.
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn set_strain_stress_fields_errors_without_cure_field() {
+        use crate::values::{StrainField, StressField};
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        // No set_voxel_fields call → cure_field is None.
+        let strain = StrainField::new(2, 2, 2, 0.2, [0.0, 0.0, 0.0])
+            .expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let stress = StressField::new(2, 2, 2, 0.2, [0.0, 0.0, 0.0])
+            .expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let result = sim.set_strain_stress_fields(strain, stress);
+        assert!(
+            matches!(result, Err(AggregateError::StrainStressWithoutCureField)),
+            "expected StrainStressWithoutCureField, got {result:?}"
+        );
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn set_strain_stress_fields_rejects_dimension_mismatch() {
+        use crate::values::{CureField, PhotoinitiatorField, StrainField, StressField};
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        // Install voxel fields at (4,4,4) first so cure_field is Some.
+        let cure = CureField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0])
+            .expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let pi = PhotoinitiatorField::new(4, 4, 4, 1.0)
+            .expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        sim.set_voxel_fields(cure, pi)
+            .expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        // Strain at (4,4,4) but stress at (4,4,5) — stress disagrees.
+        let strain = StrainField::new(4, 4, 4, 0.2, [0.0, 0.0, 0.0])
+            .expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let stress = StressField::new(4, 4, 5, 0.2, [0.0, 0.0, 0.0])
+            .expect("test fixture: literal inputs satisfy the called function's preconditions (dimension match, finite f32, validated profile)");
+        let result = sim.set_strain_stress_fields(strain, stress);
+        assert!(
+            matches!(
+                result,
+                Err(AggregateError::StrainStressFieldDimensionMismatch {
+                    strain_dims: (4, 4, 4),
+                    stress_dims: (4, 4, 5),
+                    cure_dims: Some((4, 4, 4)),
+                })
+            ),
+            "expected StrainStressFieldDimensionMismatch with destructured payload, got {result:?}"
+        );
+    }
 }

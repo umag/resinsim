@@ -67,9 +67,7 @@ impl StressField {
         if !voxel_size_mm.is_finite() || voxel_size_mm <= 0.0 {
             return Err(StressFieldError::InvalidVoxelSize(voxel_size_mm));
         }
-        if !bbox_min_mm[0].is_finite()
-            || !bbox_min_mm[1].is_finite()
-            || !bbox_min_mm[2].is_finite()
+        if !bbox_min_mm[0].is_finite() || !bbox_min_mm[1].is_finite() || !bbox_min_mm[2].is_finite()
         {
             return Err(StressFieldError::InvalidBboxMin {
                 x: bbox_min_mm[0],
@@ -122,12 +120,7 @@ impl StressField {
 
     /// Stress tensor at voxel `[ix, iy, iz]` (MPa). Returns zero tensor
     /// for unwritten voxels.
-    pub fn stress_at(
-        &self,
-        ix: u32,
-        iy: u32,
-        iz: u32,
-    ) -> Result<StressTensor, StressFieldError> {
+    pub fn stress_at(&self, ix: u32, iy: u32, iz: u32) -> Result<StressTensor, StressFieldError> {
         self.check_bounds(ix, iy, iz)?;
         Ok(self.data[(ix as usize, iy as usize, iz as usize)])
     }
@@ -278,7 +271,9 @@ mod tests {
 
     #[test]
     fn new_constructs_zero_filled_field() {
-        let f = StressField::new(2, 3, 4, 0.5, [0.0, 0.0, 0.0]).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
+        let f = StressField::new(2, 3, 4, 0.5, [0.0, 0.0, 0.0]).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
         assert_eq!(f.dimensions(), (2, 3, 4));
         for ix in 0..2 {
             for iy in 0..3 {
@@ -307,15 +302,23 @@ mod tests {
 
     #[test]
     fn accumulate_at_writes_tensor() {
-        let mut f = StressField::new(2, 2, 2, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
-        let s = StressTensor::new(10.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
-        f.accumulate_at(0, 0, 0, s).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
+        let mut f = StressField::new(2, 2, 2, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
+        let s = StressTensor::new(10.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
+        f.accumulate_at(0, 0, 0, s).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
         assert_eq!(f.stress_at(0, 0, 0).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions"), s);
     }
 
     #[test]
     fn accumulate_at_oob_returns_err() {
-        let mut f = StressField::new(2, 2, 2, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
+        let mut f = StressField::new(2, 2, 2, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
         assert!(matches!(
             f.accumulate_at(2, 0, 0, StressTensor::zero()),
             Err(StressFieldError::OutOfBounds { .. })
@@ -324,25 +327,41 @@ mod tests {
 
     #[test]
     fn von_mises_layer_max_zero_for_unwritten_layer() {
-        let f = StressField::new(2, 2, 2, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
+        let f = StressField::new(2, 2, 2, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
         assert_eq!(f.von_mises_layer_max(0).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions"), 0.0);
     }
 
     #[test]
     fn von_mises_layer_max_picks_largest_in_slab() {
-        let mut f = StressField::new(2, 2, 2, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
+        let mut f = StressField::new(2, 2, 2, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
         // Uniaxial 100 → vm = 100; uniaxial 50 → vm = 50.
-        let s100 = StressTensor::new(100.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
-        let s50 = StressTensor::new(50.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
-        f.accumulate_at(0, 0, 1, s50).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
-        f.accumulate_at(1, 1, 1, s100).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
-        let m = f.von_mises_layer_max(1).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
+        let s100 = StressTensor::new(100.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
+        let s50 = StressTensor::new(50.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
+        f.accumulate_at(0, 0, 1, s50).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
+        f.accumulate_at(1, 1, 1, s100).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
+        let m = f.von_mises_layer_max(1).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
         assert!((m - 100.0).abs() < 1e-3);
     }
 
     #[test]
     fn von_mises_layer_max_oob_returns_err() {
-        let f = StressField::new(1, 1, 1, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
+        let f = StressField::new(1, 1, 1, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
         assert!(matches!(
             f.von_mises_layer_max(1),
             Err(StressFieldError::OutOfBounds { .. })
@@ -351,7 +370,9 @@ mod tests {
 
     #[test]
     fn total_bytes_uses_stress_tensor_size() {
-        let f = StressField::new(2, 3, 4, 0.5, [0.0; 3]).expect("test fixture: in-bounds index and finite stress tensor satisfy field preconditions");
+        let f = StressField::new(2, 3, 4, 0.5, [0.0; 3]).expect(
+            "test fixture: in-bounds index and finite stress tensor satisfy field preconditions",
+        );
         let expected = 24_u64 * (std::mem::size_of::<StressTensor>() as u64);
         assert_eq!(f.total_bytes(), expected);
     }
@@ -363,5 +384,140 @@ mod tests {
         let r = StressField::new(1000, 1000, 1, 0.1, [0.0; 3]);
         unsafe { std::env::remove_var(FIELD_BUDGET_ENV_VAR) };
         assert!(matches!(r, Err(StressFieldError::ExceedsBudget(_))));
+    }
+
+    // --- t2f3.1 B1: direct unit tests for yield_fraction ---
+    //
+    // yield_fraction was previously exercised only indirectly via
+    // predict_strain_failures. These six tests lock its query surface
+    // directly so future regressions surface without round-tripping
+    // through the predictor.
+    //
+    // Math anchor: von Mises of a uniaxial stress tensor (σ_xx, 0, 0,
+    // 0, 0, 0) equals |σ_xx|. Hydrostatic p = σ_xx/3; deviatoric
+    // s_xx = 2σ/3, s_yy = s_zz = -σ/3; vm = √(3/2 · (4/9 + 1/9 + 1/9)
+    // · σ²) = √(σ²) = |σ_xx|. Tests (c) and (d) rely on this.
+
+    #[test]
+    fn yield_fraction_zero_for_unwritten_slab() {
+        // Fresh field, no accumulate_at calls — exercises the
+        // cured_count == 0 early-return at the end of yield_fraction.
+        let f = StressField::new(2, 2, 1, 0.5, [0.0; 3])
+            .expect("test fixture: literal stress components satisfy validation");
+        let frac = f
+            .yield_fraction(0, 50.0)
+            .expect("test fixture: in-bounds layer with finite positive tensile");
+        assert_eq!(frac, 0.0);
+    }
+
+    #[test]
+    fn yield_fraction_zero_when_cured_below_threshold() {
+        // 1×1×1 field with a single cured voxel whose von Mises is
+        // sub-threshold. Distinct from the unwritten-slab path: here
+        // cured_count == 1, yielded_count == 0 → 0.0.
+        use crate::entities::ResinProfile;
+        let resin = ResinProfile::elegoo_ceramic_grey_v2();
+        let tensile = resin.tensile_strength_mpa;
+        let mut f = StressField::new(1, 1, 1, 0.5, [0.0; 3])
+            .expect("test fixture: literal stress components satisfy validation");
+        // σ_xx = 5 MPa → vm = 5 < tensile = 38 → does not yield.
+        let sub = StressTensor::new(5.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            .expect("test fixture: literal stress components satisfy validation");
+        f.accumulate_at(0, 0, 0, sub)
+            .expect("test fixture: literal stress components satisfy validation");
+        let frac = f
+            .yield_fraction(0, tensile)
+            .expect("test fixture: in-bounds layer with finite positive tensile");
+        assert_eq!(frac, 0.0);
+    }
+
+    #[test]
+    fn yield_fraction_one_when_all_cured_voxels_yield() {
+        // 1×1×1 field; sole voxel uniaxially loaded above tensile.
+        // vm(uniaxial σ_xx=50) = 50 > tensile=38 → yielded_count == 1,
+        // cured_count == 1 → 1.0.
+        use crate::entities::ResinProfile;
+        let resin = ResinProfile::elegoo_ceramic_grey_v2();
+        let tensile = resin.tensile_strength_mpa;
+        let mut f = StressField::new(1, 1, 1, 0.5, [0.0; 3])
+            .expect("test fixture: literal stress components satisfy validation");
+        let yielded = StressTensor::new(50.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            .expect("test fixture: literal stress components satisfy validation");
+        f.accumulate_at(0, 0, 0, yielded)
+            .expect("test fixture: literal stress components satisfy validation");
+        let frac = f
+            .yield_fraction(0, tensile)
+            .expect("test fixture: in-bounds layer with finite positive tensile");
+        assert_eq!(frac, 1.0);
+    }
+
+    #[test]
+    fn yield_fraction_denominator_excludes_uncured_voxels() {
+        // 2×2×1 field; exactly ONE voxel cured + yielded; three left
+        // at StressTensor::zero() (uncured). The s == zero filter in
+        // yield_fraction must exclude the three uncureds from the
+        // denominator: yielded_count = 1, cured_count = 1 → 1.0.
+        // If the denominator wrongly counted all 4 voxels, fraction
+        // would be 0.25 ≠ 1.0.
+        use crate::entities::ResinProfile;
+        let resin = ResinProfile::elegoo_ceramic_grey_v2();
+        let tensile = resin.tensile_strength_mpa;
+        let mut f = StressField::new(2, 2, 1, 0.5, [0.0; 3])
+            .expect("test fixture: literal stress components satisfy validation");
+        let yielded = StressTensor::new(50.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            .expect("test fixture: literal stress components satisfy validation");
+        f.accumulate_at(0, 0, 0, yielded)
+            .expect("test fixture: literal stress components satisfy validation");
+        // Three other voxels deliberately left at StressTensor::zero().
+        let frac = f
+            .yield_fraction(0, tensile)
+            .expect("test fixture: in-bounds layer with finite positive tensile");
+        assert_eq!(
+            frac, 1.0,
+            "denominator must exclude uncured (zero-tensor) voxels"
+        );
+    }
+
+    #[test]
+    fn yield_fraction_defensive_on_invalid_tensile() {
+        // The defensive guard at the top of yield_fraction returns 0.0
+        // when tensile is not finite or not strictly positive. Even
+        // with a real yielding stress accumulated, NaN / 0 / negative
+        // tensile must produce Ok(0.0).
+        let mut f = StressField::new(1, 1, 1, 0.5, [0.0; 3])
+            .expect("test fixture: literal stress components satisfy validation");
+        let s = StressTensor::new(100.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            .expect("test fixture: literal stress components satisfy validation");
+        f.accumulate_at(0, 0, 0, s)
+            .expect("test fixture: literal stress components satisfy validation");
+        assert_eq!(
+            f.yield_fraction(0, f32::NAN)
+                .expect("defensive guard returns Ok(0.0) for NaN tensile"),
+            0.0
+        );
+        assert_eq!(
+            f.yield_fraction(0, 0.0)
+                .expect("defensive guard returns Ok(0.0) for zero tensile"),
+            0.0
+        );
+        assert_eq!(
+            f.yield_fraction(0, -1.0)
+                .expect("defensive guard returns Ok(0.0) for negative tensile"),
+            0.0
+        );
+    }
+
+    #[test]
+    fn yield_fraction_layer_oob_returns_err() {
+        let f = StressField::new(2, 2, 1, 0.5, [0.0; 3])
+            .expect("test fixture: literal stress components satisfy validation");
+        let err = f.yield_fraction(99, 50.0);
+        // Destructure on iz to lock the witness — bare matches! is a
+        // silent-green hazard per
+        // docs/patterns/anti/bare-matches-as-test-assertion.md.
+        assert!(
+            matches!(err, Err(StressFieldError::OutOfBounds { iz: 99, .. })),
+            "expected OutOfBounds {{ iz: 99, .. }}, got {err:?}"
+        );
     }
 }

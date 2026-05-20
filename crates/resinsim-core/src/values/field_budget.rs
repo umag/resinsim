@@ -128,14 +128,18 @@ mod tests {
 
     #[test]
     fn default_budget_when_env_unset() {
-        let _g = ENV_LOCK.lock().expect("test fixture: env-lock mutex never poisoned within a single test scope");
+        let _g = ENV_LOCK
+            .lock()
+            .expect("test fixture: env-lock mutex never poisoned within a single test scope");
         unsafe { std::env::remove_var(FIELD_BUDGET_ENV_VAR) };
         assert_eq!(active_budget_bytes(), DEFAULT_MAX_FIELD_ALLOCATION_BYTES);
     }
 
     #[test]
     fn env_override_applied() {
-        let _g = ENV_LOCK.lock().expect("test fixture: env-lock mutex never poisoned within a single test scope");
+        let _g = ENV_LOCK
+            .lock()
+            .expect("test fixture: env-lock mutex never poisoned within a single test scope");
         unsafe { std::env::set_var(FIELD_BUDGET_ENV_VAR, "1000000") };
         assert_eq!(active_budget_bytes(), 1_000_000);
         unsafe { std::env::remove_var(FIELD_BUDGET_ENV_VAR) };
@@ -143,7 +147,9 @@ mod tests {
 
     #[test]
     fn invalid_env_falls_back_to_default() {
-        let _g = ENV_LOCK.lock().expect("test fixture: env-lock mutex never poisoned within a single test scope");
+        let _g = ENV_LOCK
+            .lock()
+            .expect("test fixture: env-lock mutex never poisoned within a single test scope");
         unsafe { std::env::set_var(FIELD_BUDGET_ENV_VAR, "not-a-number") };
         assert_eq!(active_budget_bytes(), DEFAULT_MAX_FIELD_ALLOCATION_BYTES);
         unsafe { std::env::remove_var(FIELD_BUDGET_ENV_VAR) };
@@ -151,7 +157,9 @@ mod tests {
 
     #[test]
     fn small_allocation_passes_default_budget() {
-        let _g = ENV_LOCK.lock().expect("test fixture: env-lock mutex never poisoned within a single test scope");
+        let _g = ENV_LOCK
+            .lock()
+            .expect("test fixture: env-lock mutex never poisoned within a single test scope");
         unsafe { std::env::remove_var(FIELD_BUDGET_ENV_VAR) };
         // 10×10×10 voxels × 4 bytes = 4000 B — trivially under 4 GB.
         assert!(enforce_field_budget("test", 10, 10, 10, 4, 0.5).is_ok());
@@ -159,7 +167,9 @@ mod tests {
 
     #[test]
     fn over_budget_returns_error_with_suggested_voxel_size() {
-        let _g = ENV_LOCK.lock().expect("test fixture: env-lock mutex never poisoned within a single test scope");
+        let _g = ENV_LOCK
+            .lock()
+            .expect("test fixture: env-lock mutex never poisoned within a single test scope");
         // Cap budget at 1 MB so we don't need to allocate truly huge
         // dimensions to trigger overflow.
         unsafe { std::env::set_var(FIELD_BUDGET_ENV_VAR, "1000000") };
@@ -182,7 +192,9 @@ mod tests {
 
     #[test]
     fn error_message_mentions_env_var() {
-        let _g = ENV_LOCK.lock().expect("test fixture: env-lock mutex never poisoned within a single test scope");
+        let _g = ENV_LOCK
+            .lock()
+            .expect("test fixture: env-lock mutex never poisoned within a single test scope");
         unsafe { std::env::set_var(FIELD_BUDGET_ENV_VAR, "1000") };
         let err = enforce_field_budget("test", 100, 100, 100, 4, 0.5).expect_err("over budget");
         let msg = format!("{err}");

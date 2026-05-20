@@ -591,9 +591,7 @@ mod tests {
     fn crosstalk_sigma_xy_um_zero_rejected() {
         let mut p = PrinterProfile::generic_msla_4k();
         p.crosstalk_sigma_xy_um = Some(0.0);
-        let err = p
-            .validate()
-            .expect_err("σ_xy = 0.0 must be rejected");
+        let err = p.validate().expect_err("σ_xy = 0.0 must be rejected");
         assert!(err.contains("crosstalk_sigma_xy_um"));
     }
 
@@ -601,9 +599,7 @@ mod tests {
     fn crosstalk_sigma_z_um_zero_rejected() {
         let mut p = PrinterProfile::generic_msla_4k();
         p.crosstalk_sigma_z_um = Some(0.0);
-        let err = p
-            .validate()
-            .expect_err("σ_z = 0.0 must be rejected");
+        let err = p.validate().expect_err("σ_z = 0.0 must be rejected");
         assert!(err.contains("crosstalk_sigma_z_um"));
     }
 

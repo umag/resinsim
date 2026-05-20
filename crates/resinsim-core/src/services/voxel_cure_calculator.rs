@@ -855,10 +855,9 @@ mod tests {
         let dp = PenetrationDepth::new(dp_um)
             .expect("dp_um in PenetrationDepth domain — proptest filtered");
 
-        let mut cure_a = CureField::new(nx, ny, nz, 0.05, [0.0, 0.0, 0.0])
-            .expect("CureField fixture valid");
-        let mut pi_a =
-            PhotoinitiatorField::new(nx, ny, nz, initial_c).expect("PI fixture valid");
+        let mut cure_a =
+            CureField::new(nx, ny, nz, 0.05, [0.0, 0.0, 0.0]).expect("CureField fixture valid");
+        let mut pi_a = PhotoinitiatorField::new(nx, ny, nz, initial_c).expect("PI fixture valid");
         VoxelCureCalculator::apply_column_exposure(
             &mut cure_a,
             &mut pi_a,
@@ -874,10 +873,9 @@ mod tests {
         .expect("in-place form must succeed for in-domain inputs");
 
         // Form B: compute_column_exposure → add/deplete manually.
-        let mut cure_b = CureField::new(nx, ny, nz, 0.05, [0.0, 0.0, 0.0])
-            .expect("CureField fixture valid");
-        let mut pi_b =
-            PhotoinitiatorField::new(nx, ny, nz, initial_c).expect("PI fixture valid");
+        let mut cure_b =
+            CureField::new(nx, ny, nz, 0.05, [0.0, 0.0, 0.0]).expect("CureField fixture valid");
+        let mut pi_b = PhotoinitiatorField::new(nx, ny, nz, initial_c).expect("PI fixture valid");
         let pi_snapshot = pi_b
             .column_at(ix, iy)
             .expect("column_at on valid (ix, iy) succeeds");
@@ -907,12 +905,8 @@ mod tests {
         for iix in 0..dims_a.0 {
             for iiy in 0..dims_a.1 {
                 for iiz in 0..dims_a.2 {
-                    let ca = cure_a
-                        .dose_at(iix, iiy, iiz)
-                        .expect("voxel in bounds");
-                    let cb = cure_b
-                        .dose_at(iix, iiy, iiz)
-                        .expect("voxel in bounds");
+                    let ca = cure_a.dose_at(iix, iiy, iiz).expect("voxel in bounds");
+                    let cb = cure_b.dose_at(iix, iiy, iiz).expect("voxel in bounds");
                     assert!(
                         ca.to_bits() == cb.to_bits(),
                         "cure mismatch at ({iix},{iiy},{iiz}): a={ca} ({:#010x}), b={cb} ({:#010x})",
@@ -942,10 +936,10 @@ mod tests {
         run_parity_pair(
             4, 4, 8, // dims
             1, 1, 0, // (ix, iy, iz_top)
-            10.0, 2.5,    // intensity, exposure_sec
-            100.0, 0.05,  // dp_um, k_d
-            50.0,         // layer_height_um
-            1.0,          // initial_c
+            10.0, 2.5, // intensity, exposure_sec
+            100.0, 0.05, // dp_um, k_d
+            50.0, // layer_height_um
+            1.0,  // initial_c
         );
     }
 

@@ -3,20 +3,20 @@ pub mod cavity_detector;
 pub mod cure_calculator;
 pub mod failure_predictor;
 pub mod layer_timing_calculator;
+#[cfg(feature = "field-sim")]
+pub mod light_crosstalk_calculator;
 pub mod pairing_validator;
 pub mod peel_force_calculator;
+#[cfg(feature = "field-sim")]
+pub mod shrinkage_calculator;
+#[cfg(feature = "field-sim")]
+pub mod stress_accumulator;
 pub mod suction_detector;
 pub mod support_analyzer;
 pub mod thermal_calculator;
 pub mod uniformity_calculator;
 #[cfg(feature = "field-sim")]
 pub mod voxel_cure_calculator;
-#[cfg(feature = "field-sim")]
-pub mod light_crosstalk_calculator;
-#[cfg(feature = "field-sim")]
-pub mod shrinkage_calculator;
-#[cfg(feature = "field-sim")]
-pub mod stress_accumulator;
 pub mod z_axis_compensator;
 
 pub use build_plate::BuildPlate;
@@ -24,17 +24,17 @@ pub use cavity_detector::{CavityDetector, CavityError, CavityEvent};
 pub use cure_calculator::CureCalculator;
 pub use failure_predictor::FailurePredictor;
 pub use layer_timing_calculator::LayerTimingCalculator;
+#[cfg(feature = "field-sim")]
+pub use light_crosstalk_calculator::{CrosstalkError, LightCrosstalkCalculator};
 pub use peel_force_calculator::PeelForceCalculator;
+#[cfg(feature = "field-sim")]
+pub use shrinkage_calculator::ShrinkageCalculator;
+#[cfg(feature = "field-sim")]
+pub use stress_accumulator::StressAccumulator;
 pub use suction_detector::SuctionDetector;
 pub use support_analyzer::{SupportAnalyzer, SupportAssessment};
 pub use thermal_calculator::ThermalCalculator;
 pub use uniformity_calculator::UniformityCalculator;
 #[cfg(feature = "field-sim")]
 pub use voxel_cure_calculator::{VoxelCureCalculator, VoxelCureError};
-#[cfg(feature = "field-sim")]
-pub use light_crosstalk_calculator::{CrosstalkError, LightCrosstalkCalculator};
-#[cfg(feature = "field-sim")]
-pub use shrinkage_calculator::ShrinkageCalculator;
-#[cfg(feature = "field-sim")]
-pub use stress_accumulator::StressAccumulator;
 pub use z_axis_compensator::ZAxisCompensator;

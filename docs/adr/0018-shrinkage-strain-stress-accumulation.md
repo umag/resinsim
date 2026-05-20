@@ -176,17 +176,109 @@ nextest environments that intentionally exercise large allocations must
 override `RESINSIM_MAX_FIELD_BYTES`. The 4-config matrix in
 `agent-constraints/implementation-conventions.md` is the ship gate.
 
-### 9. v1 thresholds + Athena II calibration as deliberate follow-on
+### 9. Per-voxel yield-fraction WarpingRisk criterion
 
-WarpingRisk threshold: `vm > 0.5 × resin.tensile_strength_mpa()`
-(Warning) and `vm > tensile_strength_mpa` (Critical). CohesiveFailure
-threshold: `|∇ε| > GRADIENT_THRESHOLD_FRAC = 0.005` (Warning).
+WarpingRisk fires on the per-voxel **yield fraction** — the share of
+cured voxels in a layer's Z-slab whose von Mises stress σ_vm exceeds
+`resin.tensile_strength_mpa()`. Two severity thresholds, named as
+`pub const` in `services::failure_predictor`:
 
-Both are literature defaults for v1. Real-world calibration via Athena
-II measurements is a separately filed follow-on (NOT in t2f3 scope).
-The `FailureEvent.message` discloses the uncalibrated-moduli caveat
-when `resin.has_calibrated_moduli() == false` so users can distinguish
-calibration-artefact emissions from real physics.
+- `YIELD_FRACTION_WARN_THRESHOLD = 0.001` (0.1 %, Warning) — see
+  `crates/resinsim-core/src/services/failure_predictor.rs:430`.
+- `YIELD_FRACTION_CRIT_THRESHOLD = 0.05` (5 %, Critical) — see
+  `failure_predictor.rs:437`.
+
+CohesiveFailure retains its strain-gradient threshold:
+`|∇ε| > GRADIENT_THRESHOLD_FRAC = 0.005` (Warning).
+
+**Why yield-fraction against `tensile_strength_mpa`, not against
+`0.5 × tensile_strength_mpa`.** `tensile_strength_mpa` IS the
+physically-correct yield threshold — von Mises generalises uniaxial
+tensile yield to a multi-axial stress state via the invariant
+`σ_vm > σ_y`. Halving it would inject an arbitrary safety factor
+unmoored from physics. Per-voxel fraction (rather than layer-max σ_vm)
+makes the signal robust to single-voxel outliers from upstream
+numerical artefacts while remaining sensitive to true progressive
+yielding.
+
+**Model-gap caveat (KB-162).** The σ_vm value used here reflects
+**free-shrinkage** stress only — it does NOT include the cumulative
+residual stress that accumulates as later layers cure against
+already-cured layers below. Real MSLA prints warp because of the
+latter. Lilith torso empirical validation on t2f3 v1 confirms this:
+σ_vm peaked at 5.71 MPa per layer against Elegoo Ceramic Grey's
+tensile_strength of 38 MPa — `voxel_yield_fraction` read exactly 0.0
+on every layer. The B3 integration test in t2f3.1
+(`honest_zero_yield_fraction_on_generic_standard_solid`) locks this
+"honest-zero on the calibrated profile" behaviour; the companion
+`nonzero_strain_magnitude_on_generic_standard_solid` test catches
+the dual magnitude-collapse direction. The yield-fraction signal will
+become a useful early-warning at this same threshold once the Tier-3
+cumulative residual stress model lands — no threshold recalibration
+needed because `tensile_strength_mpa` is already the physical yield
+boundary.
+
+Real-world calibration of E, ν, and z_ratio via Athena II
+measurements is a separately filed follow-on (NOT in t2f3 scope; see
+KB-163 + KB-164). The `FailureEvent.message` discloses the
+uncalibrated-moduli caveat when `resin.has_calibrated_moduli() ==
+false` (any of E, ν, z_ratio is `None`) so users can distinguish
+calibration-artefact emissions from real physics. t2f3.1 widened the
+predicate from the original 2-of-2 (E + ν) to 3-of-3 (E + ν +
+z_ratio); see Decision 10 below.
+
+### 10. Anisotropic free shrinkage (Z amplification)
+
+`StrainTensor::from_free_shrinkage` takes a `z_anisotropy_ratio: f32`
+parameter (was a scalar isotropic strain in pre-fix v1). `ratio > 1.0`
+amplifies `ε_zz` relative to `ε_xx = ε_yy` while preserving the
+volumetric trace:
+
+```text
+ε_xx = ε_yy = a            (in-plane)
+ε_zz = ratio · a           (out-of-plane)
+trace = (2 + ratio) · a = 3 · ε_iso       ⟹    a = 3 · ε_iso / (2 + ratio)
+```
+
+For `ratio = 1.5` (the v1 default): `a ≈ 0.857 · ε_iso`,
+`ε_zz ≈ 1.286 · ε_iso`, `trace = 3 · ε_iso` ✓. The volumetric trace
+identity preserves `linear_shrinkage_pct`'s vendor-data-sheet meaning
+regardless of the chosen ratio — vendors publish total linear
+shrinkage, and as long as the trace is conserved that headline number
+is honoured.
+
+**Why it matters.** The pre-fix v1 produced a *hydrostatic-symmetric*
+strain field. The deviatoric stress of a hydrostatic strain (under
+linear elasticity with constant E + ν across all axes) is identically
+zero, and von Mises is invariant under hydrostatic stress — so
+σ_vm ≡ 0 at every voxel. Hydrostatic strain is a silent-zero
+warpage detector
+(`docs/patterns/anti/hydrostatic-strain-dead-warpage-detector.md`):
+the per-voxel yield criterion produces zero signal regardless of the
+strain magnitude. Breaking the XY-vs-Z symmetry is what makes any
+yield criterion produce a non-trivial signal at all.
+
+**Default value.** `ratio = 1.5 ± 0.3` (KB-164). Anchored to the
+PMC5344561 modulus-anisotropy measurements (`E_z / E_xy ∈ [1.27,
+1.39]` for untreated DLP photopolymers — strain anisotropy correlates
+because the stiffer axis resists shrinkage less under a given driving
+chemistry) plus the engineering mechanism: in MSLA the XY plane is
+constrained by adhesion to the cured layer below, while Z is free to
+amplify. The ±0.3 band acknowledges that strain anisotropy is not
+identical to modulus anisotropy — calibration via DIC capture on a
+free-shrinkage column geometry per resin is the follow-on.
+
+**Disclosure.** When `shrinkage_anisotropy_z_ratio` is `None`, the
+uncalibrated-moduli caveat fires (per A1 + A2 in t2f3.1). The caveat
+cites BOTH KB-163 (E + ν defaults) AND KB-164 (z_ratio anisotropy
+±0.3 band), closing the disclosure trail.
+
+**References for Decision 10.** KB-163 (moduli defaults disclosure
+contract), KB-164 (Z/XY anisotropy ratio mechanism + literature
+anchor + volume-conserving mapping), PMC5344561 (modulus-anisotropy
+data), `docs/patterns/anti/hydrostatic-strain-dead-warpage-detector.md`
+(the silent-zero anti-pattern this decision breaks), and the A1 + A2
+predicate/caveat changes in t2f3.1.
 
 ## Alternatives considered
 
@@ -255,8 +347,13 @@ lazy allocation can be a follow-on if profiling shows it matters.
   Z = num_layers, two-layer NaN defence, field-sim Cargo feature gate,
   4-config matrix).
 - **KB-161** (this issue) — Cure-extent → free-shrinkage strain.
-- **KB-162** (this issue) — Linear-elasticity 6×6 Voigt stiffness.
-- **KB-163** (this issue) — Photopolymer E + ν literature ranges.
+- **KB-162** (this issue) — Linear-elasticity 6×6 Voigt stiffness +
+  per-voxel yield criterion (the basis of the §9 threshold scheme).
+- **KB-163** (this issue) — Photopolymer E + ν literature ranges +
+  uncalibrated-moduli disclosure contract.
+- **KB-164** (this issue) — Z/XY shrinkage anisotropy ratio
+  mechanism + PMC5344561 modulus-anisotropy anchor + volume-
+  conserving mapping. Basis of Decision 10.
 - `docs/patterns/voxel-field-z-dimension-is-layer-count.md` — Z
   convention shared with t2f1.
 - `docs/patterns/nan-two-layer-defence.md` — applied uniformly to
@@ -284,7 +381,37 @@ than addressed in v1 code:
 - MED: Full Tier-2 mandatory mode (no `--no-strain-stress` flag).
   Decision 7 above.
 - MED: Uncalibrated-moduli disclosure in FailureEvent.message.
-  Implemented via `resin.has_calibrated_moduli()` (Decision 9 above).
+  Implemented via `resin.has_calibrated_moduli()` (Decisions 9 and
+  10 above). t2f3.1 widened the predicate to require z_ratio, and
+  the caveat now cites KB-163 + KB-164.
 - LOW: `lock_strain_at` naming (set-once semantic explicit in the
   StrainField API surface).
 - LOW: v2 sim.json roundtrip test — deferred until v2 bump.
+
+## Folded post-implementation findings (t2f3.1)
+
+After t2f3 shipped, the Phase 5 code review surfaced 5 MED + 3 LOW
+findings folded as non-blocking. Six of those became the t2f3.1
+follow-up implementation; two LOW (typed `Pressure` newtype +
+sentinel-explicitness) were accepted as v1 trade-offs. The t2f3.1
+implementation:
+
+- Widened `has_calibrated_moduli()` from a 2-of-2 predicate (E + ν)
+  to a 3-of-3 predicate (E + ν + z_ratio). The disclosure contract
+  was silently incomplete for any partially-calibrated profile.
+- Extended the `FailureEvent.message` caveat to cite both KB-163 and
+  KB-164.
+- Added six direct unit tests for `StressField::yield_fraction`,
+  two error-path tests for
+  `PrintSimulation::set_strain_stress_fields`, and an integration-
+  level honest-zero regression guard (`B3`) + companion
+  strain-magnitude guard (catches the dual magnitude-collapse
+  direction).
+- Rewrote §9 from the original `vm > 0.5 × tensile`-style threshold
+  set to the per-voxel yield-fraction criterion that's actually
+  implemented in `failure_predictor.rs`.
+- Added Decision 10 documenting the anisotropic free-shrinkage
+  Z-amplification redesign (the change that broke the
+  hydrostatic-symmetric silent-zero detector and made the per-voxel
+  yield criterion produce a non-trivial signal at all).
+- Updated KB-163 to match the 3-of-3 predicate.

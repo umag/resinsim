@@ -279,8 +279,7 @@ mod tests {
 
     #[test]
     fn kernel_sigma_one_has_expected_radius_and_normalisation() {
-        let k = LightCrosstalkCalculator::build_separable_kernel(1.0)
-            .expect("σ = 1 must succeed");
+        let k = LightCrosstalkCalculator::build_separable_kernel(1.0).expect("σ = 1 must succeed");
         // radius = ⌈3·1⌉ = 3; length 7.
         assert_eq!(k.len(), 7);
         let sum: f32 = k.iter().sum();
@@ -290,8 +289,8 @@ mod tests {
     #[test]
     fn kernel_sigma_point_eight_yields_seven_taps() {
         // σ_z_um = 40, layer_height = 50 ⇒ σ_layers = 0.8 ⇒ radius ⌈2.4⌉ = 3 ⇒ length 7.
-        let k = LightCrosstalkCalculator::build_separable_kernel(0.8)
-            .expect("σ = 0.8 must succeed");
+        let k =
+            LightCrosstalkCalculator::build_separable_kernel(0.8).expect("σ = 0.8 must succeed");
         assert_eq!(k.len(), 7);
         // Symmetry about centre (index 3).
         for i in 0..3 {
@@ -322,17 +321,20 @@ mod tests {
 
     #[test]
     fn xy_sigma_zero_identity_is_noop() {
-        let mut intensity = Array2::from_shape_vec((3, 3), vec![1., 2., 3., 4., 5., 6., 7., 8., 9.])
-            .expect("3x3 init");
+        let mut intensity =
+            Array2::from_shape_vec((3, 3), vec![1., 2., 3., 4., 5., 6., 7., 8., 9.])
+                .expect("3x3 init");
         let mut scratch = Array2::<f32>::zeros((3, 3));
         let before = intensity.clone();
-        let k = LightCrosstalkCalculator::build_separable_kernel(0.0)
-            .expect("σ = 0 must succeed");
+        let k = LightCrosstalkCalculator::build_separable_kernel(0.0).expect("σ = 0 must succeed");
         LightCrosstalkCalculator::apply_separable_2d(&mut intensity, &k, &mut scratch)
             .expect("identity kernel must succeed");
         for ((ix, iy), v) in intensity.indexed_iter() {
-            assert_eq!(*v, before[(ix, iy)],
-                "identity kernel must be no-op at ({ix},{iy})");
+            assert_eq!(
+                *v,
+                before[(ix, iy)],
+                "identity kernel must be no-op at ({ix},{iy})"
+            );
         }
     }
 
@@ -342,8 +344,7 @@ mod tests {
         let mut intensity = Array2::<f32>::zeros((7, 7));
         intensity[(3, 3)] = 1.0;
         let mut scratch = Array2::<f32>::zeros((7, 7));
-        let k = LightCrosstalkCalculator::build_separable_kernel(1.0)
-            .expect("σ = 1 must succeed");
+        let k = LightCrosstalkCalculator::build_separable_kernel(1.0).expect("σ = 1 must succeed");
         LightCrosstalkCalculator::apply_separable_2d(&mut intensity, &k, &mut scratch)
             .expect("σ = 1 must succeed");
         // Analytical separable Gaussian: I(ix, iy) = k[ix - 3 + 3] * k[iy - 3 + 3]
@@ -381,11 +382,7 @@ mod tests {
         for ix in 0..5 {
             for iy in 0..5 {
                 let a_pre_rotated_at_this_position = a[(4 - iy, ix)];
-                assert_relative_eq!(
-                    b[(ix, iy)],
-                    a_pre_rotated_at_this_position,
-                    epsilon = 1e-6
-                );
+                assert_relative_eq!(b[(ix, iy)], a_pre_rotated_at_this_position, epsilon = 1e-6);
             }
         }
     }

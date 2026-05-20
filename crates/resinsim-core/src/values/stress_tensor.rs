@@ -45,7 +45,9 @@ use crate::values::strain_tensor::StrainTensor;
 /// Errors from `StressTensor` construction and access.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum StressTensorError {
-    #[error("StressTensor components must all be finite, got ({xx}, {yy}, {zz}, {yz}, {xz}, {xy})")]
+    #[error(
+        "StressTensor components must all be finite, got ({xx}, {yy}, {zz}, {yz}, {xz}, {xy})"
+    )]
     NonFiniteComponent {
         xx: f32,
         yy: f32,
@@ -85,11 +87,29 @@ impl StressTensor {
 
     /// New stress tensor from Voigt-ordered components. Validates each
     /// is finite; rejects NaN / ±∞.
-    pub fn new(xx: f32, yy: f32, zz: f32, yz: f32, xz: f32, xy: f32) -> Result<Self, StressTensorError> {
-        if !(xx.is_finite() && yy.is_finite() && zz.is_finite()
-            && yz.is_finite() && xz.is_finite() && xy.is_finite())
+    pub fn new(
+        xx: f32,
+        yy: f32,
+        zz: f32,
+        yz: f32,
+        xz: f32,
+        xy: f32,
+    ) -> Result<Self, StressTensorError> {
+        if !(xx.is_finite()
+            && yy.is_finite()
+            && zz.is_finite()
+            && yz.is_finite()
+            && xz.is_finite()
+            && xy.is_finite())
         {
-            return Err(StressTensorError::NonFiniteComponent { xx, yy, zz, yz, xz, xy });
+            return Err(StressTensorError::NonFiniteComponent {
+                xx,
+                yy,
+                zz,
+                yz,
+                xz,
+                xy,
+            });
         }
         Ok(Self {
             components: [xx, yy, zz, yz, xz, xy],
@@ -121,8 +141,8 @@ impl StressTensor {
         // Closed-form isotropic stiffness coefficients.
         let denom = (1.0 + poissons) * (1.0 - 2.0 * poissons);
         let d_diag = e_mpa * (1.0 - poissons) / denom; // normal-normal diagonal
-        let d_off = e_mpa * poissons / denom;          // normal-normal off-diagonal
-        let g = e_mpa / (2.0 * (1.0 + poissons));      // shear modulus G
+        let d_off = e_mpa * poissons / denom; // normal-normal off-diagonal
+        let g = e_mpa / (2.0 * (1.0 + poissons)); // shear modulus G
 
         let eps = epsilon.components();
         // σ_normal_i = D_diag · ε_ii + D_off · (sum of other two ε_jj)
@@ -197,8 +217,7 @@ impl StressTensor {
     /// intermediates.
     pub fn von_mises_mpa(&self) -> Result<f32, StressTensorError> {
         let [xx, yy, zz, yz, xz, xy] = self.components;
-        let normal_diff_sq =
-            (xx - yy) * (xx - yy) + (yy - zz) * (yy - zz) + (zz - xx) * (zz - xx);
+        let normal_diff_sq = (xx - yy) * (xx - yy) + (yy - zz) * (yy - zz) + (zz - xx) * (zz - xx);
         let shear_sq = yz * yz + xz * xz + xy * xy;
         let inner = 0.5 * normal_diff_sq + 3.0 * shear_sq;
         if !inner.is_finite() || inner < 0.0 {
@@ -227,10 +246,7 @@ impl StressTensor {
         }
 
         let q = (xx + yy + zz) / 3.0;
-        let p2 = (xx - q) * (xx - q)
-            + (yy - q) * (yy - q)
-            + (zz - q) * (zz - q)
-            + 2.0 * p1;
+        let p2 = (xx - q) * (xx - q) + (yy - q) * (yy - q) + (zz - q) * (zz - q) + 2.0 * p1;
         let p = (p2 / 6.0).sqrt();
         if !p.is_finite() || p == 0.0 {
             // Already handled p1 == 0 above; this guards against degenerate
@@ -245,8 +261,7 @@ impl StressTensor {
         let b_xz = xz / p;
         let b_xy = xy / p;
 
-        let det_b = b_xx * (b_yy * b_zz - b_yz * b_yz)
-            - b_xy * (b_xy * b_zz - b_yz * b_xz)
+        let det_b = b_xx * (b_yy * b_zz - b_yz * b_yz) - b_xy * (b_xy * b_zz - b_yz * b_xz)
             + b_xz * (b_xy * b_yz - b_yy * b_xz);
         let r = (det_b / 2.0).clamp(-1.0, 1.0);
         let phi = r.acos() / 3.0;

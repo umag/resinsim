@@ -41,15 +41,8 @@ fn layer_inputs(n: u32, side: u32) -> Vec<LayerInput> {
     (0..n)
         .map(|i| {
             let area = (side as f64) * (side as f64) * 0.25;
-            let mut li = LayerInput::new(
-                i,
-                area,
-                3.0,
-                60.0,
-                50.0,
-                (i as f32 + 1.0) * 0.05,
-            )
-            .expect("LayerInput precondition");
+            let mut li = LayerInput::new(i, area, 3.0, 60.0, 50.0, (i as f32 + 1.0) * 0.05)
+                .expect("LayerInput precondition");
             li.mask = Some(solid_mask(side));
             li
         })
@@ -84,8 +77,14 @@ fn voxel_mode_installs_strain_and_stress_fields() {
     let resin = ResinProfile::generic_standard();
     let sim = run_voxel_sim(&resin, 3, 3);
 
-    assert!(sim.strain_field().is_some(), "voxel mode must install strain_field");
-    assert!(sim.stress_field().is_some(), "voxel mode must install stress_field");
+    assert!(
+        sim.strain_field().is_some(),
+        "voxel mode must install strain_field"
+    );
+    assert!(
+        sim.stress_field().is_some(),
+        "voxel mode must install stress_field"
+    );
 }
 
 #[test]
@@ -158,8 +157,14 @@ fn strain_locked_voxels_produce_nonzero_stress() {
             }
         }
     }
-    assert!(any_strain, "expected at least one strained voxel after a real exposure");
-    assert!(any_stress, "expected at least one stressed voxel after a real exposure (hydrostatic)");
+    assert!(
+        any_strain,
+        "expected at least one strained voxel after a real exposure"
+    );
+    assert!(
+        any_stress,
+        "expected at least one stressed voxel after a real exposure (hydrostatic)"
+    );
 }
 
 #[test]
@@ -181,4 +186,79 @@ fn budget_exceeded_surfaces_typed_error_before_allocation() {
         }
         other => panic!("expected ExceedsBudget, got {other:?}"),
     }
+}
+
+// --- t2f3.1 B3: honest-zero yield-fraction regression guard ---
+//
+// Locks the "calibrated generic profile, free-shrinkage model → honest
+// zero yield" behaviour empirically validated on the lilith torso during
+// t2f3 (σ_vm peak 5.71 MPa vs tensile 38 MPa = 0 yield fraction across
+// all layers). The 4-layer 3×3 solid_mask used here is much simpler
+// than the lilith and produces even less stress — yield_fraction should
+// be exactly 0 on every layer.
+//
+// Regression class COVERED: σ_vm magnitude blow-ups ≥~6× from
+// unit-conversion errors / double-counted strain contributions
+// (5.71 × 6 ≈ 34 MPa > generic_standard tensile = 35 MPa). 100×
+// blow-ups (e.g. Pa↔MPa wrong direction) trip immediately.
+//
+// Regression class NOT covered: (i) magnitude COLLAPSE (e.g. MPa → Pa
+// wrong direction → tiny number, still 0.0); (ii) sign flips (von Mises
+// uses absolute squares, sign cancels); (iii) sub-6× drift. The
+// companion nonzero_strain_magnitude_on_generic_standard_solid test
+// below catches direction (i) at the strain-field layer.
+//
+// See docs/patterns/honest-zero-with-model-gap-caveat.md.
+#[test]
+fn honest_zero_yield_fraction_on_generic_standard_solid() {
+    let resin = ResinProfile::generic_standard();
+    let sim = run_voxel_sim(&resin, 4, 3);
+    assert!(
+        !sim.layers().is_empty(),
+        "voxel-mode sim must produce layer results"
+    );
+    for layer in sim.layers() {
+        // Strict Some(0.0) assertion (NOT a < 1e-6 tolerance):
+        // (1) yield_fraction computes exact zeros — either the
+        //     cured_count == 0 early-return or the yielded_count == 0
+        //     path. No rounding enters because both early-returns
+        //     bypass the (yielded_count as f32) / (cured_count as f32)
+        //     division.
+        // (2) Any non-zero value indicates a real magnitude regression
+        //     and should fail loudly even when small.
+        assert_eq!(
+            layer.voxel_yield_fraction,
+            Some(0.0),
+            "layer {idx}: expected Some(0.0) voxel_yield_fraction in voxel mode on calibrated generic profile",
+            idx = layer.index
+        );
+    }
+}
+
+// Companion guard: the strain field's per-layer cache MUST populate to
+// non-zero magnitude on at least one layer of a voxel-mode sim. Catches
+// the magnitude-COLLAPSE direction (unit error MPa → Pa, missing
+// multiply, scalar default to 0.0) that
+// honest_zero_yield_fraction_on_generic_standard_solid cannot detect —
+// a fully-collapsed strain field also produces voxel_yield_fraction =
+// Some(0.0) and would pass the sibling test silently.
+//
+// Distinct from `strain_locked_voxels_produce_nonzero_stress` above
+// (line 128 of this file) which checks the raw StrainField tensor at
+// the voxel level — this test guards the LayerResult.strain_magnitude_max
+// CACHE population path specifically (the per-layer projection
+// downstream sim.json consumers read).
+#[test]
+fn nonzero_strain_magnitude_on_generic_standard_solid() {
+    let resin = ResinProfile::generic_standard();
+    let sim = run_voxel_sim(&resin, 4, 3);
+    let any_nonzero = sim
+        .layers()
+        .iter()
+        .any(|l| matches!(l.strain_magnitude_max, Some(m) if m > 0.0));
+    assert!(
+        any_nonzero,
+        "voxel-mode sim on calibrated solid must produce at least one layer with strain_magnitude_max > 0.0 — \
+         magnitude collapse (e.g. unit error) would zero this out"
+    );
 }

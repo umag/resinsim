@@ -325,11 +325,15 @@ impl FailurePredictor {
     ///   are filtered out per the post-t2f3 calibration finding.
     ///
     /// When the resin's mechanical moduli are uncalibrated
-    /// (`resin.has_calibrated_moduli() == false`), the
+    /// (`resin.has_calibrated_moduli() == false`, i.e. any of the
+    /// three moduli — E, ν, z_ratio — is `None`), the
     /// `FailureEvent.message` is suffixed with a
-    /// "(uncalibrated moduli — magnitude has ±50% uncertainty)" caveat
-    /// so users can distinguish calibration-artefact emissions from
-    /// real physics.
+    /// "(uncalibrated moduli — magnitude has ±50% uncertainty,
+    /// see KB-163 + KB-164)" caveat so users can distinguish
+    /// calibration-artefact emissions from real physics. KB-163
+    /// covers the E + ν defaults; KB-164 covers the z_ratio
+    /// anisotropy whose ±0.3 uncertainty is a material σ_vm
+    /// magnitude driver post-anisotropy redesign.
     ///
     /// **Model-gap caveat (ADR-0018 §9, KB-162):** the per-voxel σ_vm
     /// value used here reflects free-shrinkage stress only — it does
@@ -353,7 +357,7 @@ impl FailurePredictor {
         let calibration_caveat: &str = if resin.has_calibrated_moduli() {
             ""
         } else {
-            " (uncalibrated moduli — magnitude has ±50% uncertainty, see KB-163)"
+            " (uncalibrated moduli — magnitude has ±50% uncertainty, see KB-163 + KB-164)"
         };
 
         // WarpingRisk — per-voxel yield-fraction signal ----------------
@@ -818,7 +822,10 @@ mod tests {
             let (strain, stress) = fields_2x2x1();
             let resin = ResinProfile::generic_standard();
             let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
-            assert!(f.is_empty(), "zero fields must produce no failures, got {f:?}");
+            assert!(
+                f.is_empty(),
+                "zero fields must produce no failures, got {f:?}"
+            );
         }
 
         #[test]
@@ -851,8 +858,15 @@ mod tests {
             // (CohesiveFailure may also emit because the small/large
             // strain difference is zero — all cells are placeholder, so
             // grad_max == 0; thus single emission.)
-            let warpings: Vec<_> = f.iter().filter(|e| e.failure_type == FailureType::WarpingRisk).collect();
-            assert_eq!(warpings.len(), 1, "expected exactly one WarpingRisk; got {f:?}");
+            let warpings: Vec<_> = f
+                .iter()
+                .filter(|e| e.failure_type == FailureType::WarpingRisk)
+                .collect();
+            assert_eq!(
+                warpings.len(),
+                1,
+                "expected exactly one WarpingRisk; got {f:?}"
+            );
             assert_eq!(warpings[0].severity, Severity::Warning);
         }
 
@@ -872,7 +886,10 @@ mod tests {
             }
             stress.accumulate_at(0, 0, 0, yielded).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
             let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
-            let warpings: Vec<_> = f.iter().filter(|e| e.failure_type == FailureType::WarpingRisk).collect();
+            let warpings: Vec<_> = f
+                .iter()
+                .filter(|e| e.failure_type == FailureType::WarpingRisk)
+                .collect();
             assert_eq!(warpings.len(), 1);
             assert_eq!(warpings[0].severity, Severity::Critical);
         }
@@ -913,7 +930,8 @@ mod tests {
             strain.lock_strain_at(1, 0, 0, large).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
             let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
             assert!(
-                f.iter().any(|e| e.failure_type == FailureType::CohesiveFailure),
+                f.iter()
+                    .any(|e| e.failure_type == FailureType::CohesiveFailure),
                 "interior strain step must surface CohesiveFailure: {f:?}"
             );
         }
@@ -930,7 +948,8 @@ mod tests {
             strain.lock_strain_at(0, 0, 0, t).expect("test fixture: literal stress/strain components and in-bounds index satisfy field preconditions");
             let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
             assert!(
-                !f.iter().any(|e| e.failure_type == FailureType::CohesiveFailure),
+                !f.iter()
+                    .any(|e| e.failure_type == FailureType::CohesiveFailure),
                 "cured-vs-empty must NOT emit CohesiveFailure: {f:?}"
             );
         }
@@ -946,12 +965,15 @@ mod tests {
                 }
             }
             let f = FailurePredictor::predict_strain_failures(0, &strain, &stress, &resin);
-            assert!(!f.iter().any(|e| e.failure_type == FailureType::CohesiveFailure));
+            assert!(!f
+                .iter()
+                .any(|e| e.failure_type == FailureType::CohesiveFailure));
         }
 
         #[test]
         fn message_discloses_uncalibrated_moduli_for_unset_resin() {
-            // elegoo_ceramic_grey_v2 deliberately omits both E and ν.
+            // elegoo_ceramic_grey_v2 deliberately omits E, ν, AND z_ratio
+            // (t2f3.1 widened the predicate from 2-of-2 to 3-of-3).
             let (mut strain, mut stress) = fields_2x2x1();
             let resin = ResinProfile::elegoo_ceramic_grey_v2();
             assert!(!resin.has_calibrated_moduli());
@@ -974,6 +996,19 @@ mod tests {
             assert!(
                 warping.message.contains("uncalibrated moduli"),
                 "message must disclose uncalibrated moduli; got: {}",
+                warping.message
+            );
+            // t2f3.1 A2: caveat cites BOTH KB-163 (E + ν defaults) and
+            // KB-164 (z_ratio anisotropy ±0.3 band). Lock both substrings
+            // so a future single-cite regression fails this test.
+            assert!(
+                warping.message.contains("KB-163"),
+                "caveat must cite KB-163 (E + ν defaults); got: {}",
+                warping.message
+            );
+            assert!(
+                warping.message.contains("KB-164"),
+                "caveat must cite KB-164 (z_ratio anisotropy ±0.3 band); got: {}",
                 warping.message
             );
         }

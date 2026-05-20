@@ -78,34 +78,43 @@ comment.
 
 ## Uncalibrated-moduli caveat in FailureEvent.message
 
-When `resin.has_calibrated_moduli() == false` (either field is
-`None`), every emitted `WarpingRisk` and `CohesiveFailure` message
-ends with:
+When `resin.has_calibrated_moduli() == false` (any of the three
+calibrated-moduli Option fields — `youngs_modulus_mpa`,
+`poissons_ratio`, or `shrinkage_anisotropy_z_ratio` — is `None`),
+every emitted `WarpingRisk` and `CohesiveFailure` message ends with:
 
 ```text
-(uncalibrated moduli — magnitude has ±50% uncertainty, see KB-163)
+(uncalibrated moduli — magnitude has ±50% uncertainty, see KB-163 + KB-164)
 ```
 
 This satisfies the round-2 plan-review MEDIUM finding: WarpingRisk
 threshold-crosses computed against literature-midpoint moduli may
 trip spuriously (or miss real warping) by ±50%, and the user
 needs the disclosure to distinguish "real physics says warp" from
-"uncalibrated model says might warp."
+"uncalibrated model says might warp." t2f3.1 widened the predicate
+from the original 2-of-2 (E + ν only) to 3-of-3 to include
+z_ratio, which has its own ±0.3 uncertainty band (KB-164) and is
+the dominant σ_vm magnitude driver post-anisotropy redesign — a
+profile with E + ν set but z_ratio defaulted is still
+under-disclosed if treated as calibrated.
 
 ## Calibration path
 
 Athena II tensile measurement on a printed test bar (preferably the
 ISO 527 Type 1B dogbone geometry, or the resinsim-bundled
 `tests/fixtures/tensile_bar.stl` once that exists) directly yields
-E and ν. The follow-on workflow:
+E and ν. KB-164 covers the z_ratio measurement path (DIC capture of
+Z vs XY strain on a free-shrinkage column geometry). The follow-on
+workflow:
 
 1. Print the test bar with the candidate resin profile.
 2. Run Athena II tensile + DIC capture (E from slope, ν from
    transverse strain ratio).
-3. Edit the resin TOML to populate `youngs_modulus_mpa` and
-   `poissons_ratio`.
-4. `resin.has_calibrated_moduli()` flips to true; the caveat
-   disappears from emitted FailureEvents.
+3. Run the KB-164 z_ratio DIC capture on the same resin.
+4. Edit the resin TOML to populate `youngs_modulus_mpa`,
+   `poissons_ratio`, AND `shrinkage_anisotropy_z_ratio`.
+5. `resin.has_calibrated_moduli()` flips to true once all three
+   are present; the caveat disappears from emitted FailureEvents.
 
 A dedicated follow-on issue (`athena-tensile-calibration-workflow`,
 TBD) will document the procedure in detail.

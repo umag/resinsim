@@ -303,7 +303,8 @@ impl ResinProfile {
     /// check [`youngs_modulus_mpa`](Self::youngs_modulus_mpa) and warn /
     /// annotate emitted failures when it is None.
     pub fn effective_youngs_modulus_mpa(&self) -> f32 {
-        self.youngs_modulus_mpa.unwrap_or(DEFAULT_YOUNGS_MODULUS_MPA)
+        self.youngs_modulus_mpa
+            .unwrap_or(DEFAULT_YOUNGS_MODULUS_MPA)
     }
     /// Poisson's ratio if the TOML carries a measured value (None ⇒
     /// uncalibrated). See [`DEFAULT_POISSONS_RATIO`] for the fallback.
@@ -326,13 +327,21 @@ impl ResinProfile {
         self.shrinkage_anisotropy_z_ratio
             .unwrap_or(DEFAULT_SHRINKAGE_ANISOTROPY_Z_RATIO)
     }
-    /// Whether the mechanical moduli used by the t2f3 strain/stress path
-    /// are calibrated (both fields populated). When false, the predictor
-    /// MUST disclose the uncalibrated-moduli caveat in any emitted
-    /// `FailureEvent.message` per the round-2 plan-review folded
-    /// finding (planV=2 r2 MEDIUM correctness, 2026-05-20).
+    /// Whether the mechanical-moduli set used by the t2f3 strain/stress
+    /// path is fully calibrated. Requires all THREE Option fields to be
+    /// `Some`: `youngs_modulus_mpa` (KB-163), `poissons_ratio` (KB-163),
+    /// and `shrinkage_anisotropy_z_ratio` (KB-164). When false, the
+    /// predictor MUST disclose the uncalibrated-moduli caveat in any
+    /// emitted `FailureEvent.message`. t2f3.1 widened the predicate from
+    /// the original 2-of-2 (E + ν only) to 3-of-3 to close the
+    /// disclosure-contract gap: a profile with E + ν explicit but
+    /// z_ratio defaulted was previously reported as calibrated yet the
+    /// z_ratio ±0.3 uncertainty band remains a material driver of σ_vm
+    /// magnitude (post-anisotropy redesign).
     pub fn has_calibrated_moduli(&self) -> bool {
-        self.youngs_modulus_mpa.is_some() && self.poissons_ratio.is_some()
+        self.youngs_modulus_mpa.is_some()
+            && self.poissons_ratio.is_some()
+            && self.shrinkage_anisotropy_z_ratio.is_some()
     }
     /// The concrete operating point (Recipe VO) for this resin.
     pub fn recipe(&self) -> &Recipe {
@@ -972,14 +981,22 @@ mod tests {
     }
 
     #[test]
-    fn has_calibrated_moduli_requires_both() {
+    fn has_calibrated_moduli_requires_all_three() {
+        // t2f3.1 A1: predicate is 3-of-3 — E, ν, AND z_ratio must
+        // all be Some. Exhaustive single-axis miss coverage:
         let mut p = ResinProfile::generic_standard();
         assert!(p.has_calibrated_moduli());
         p.poissons_ratio = None;
-        assert!(!p.has_calibrated_moduli());
+        assert!(!p.has_calibrated_moduli(), "ν None must report uncalibrated");
         p.poissons_ratio = Some(0.35);
         p.youngs_modulus_mpa = None;
-        assert!(!p.has_calibrated_moduli());
+        assert!(!p.has_calibrated_moduli(), "E None must report uncalibrated");
+        p.youngs_modulus_mpa = Some(2000.0);
+        p.shrinkage_anisotropy_z_ratio = None;
+        assert!(
+            !p.has_calibrated_moduli(),
+            "z_ratio None must report uncalibrated (t2f3.1 widening)"
+        );
     }
 
     #[test]
@@ -998,18 +1015,23 @@ mod tests {
 
     #[test]
     fn toml_with_explicit_mechanical_moduli_round_trips() {
+        // t2f3.1 A1: has_calibrated_moduli is 3-of-3 (E + ν + z_ratio).
+        // Any fixture exercising the calibrated-disclosure path must
+        // therefore set all three explicitly.
         let toml_str = format!(
-            "{}\nyoungs_modulus_mpa = 2500.0\npoissons_ratio = 0.32\n{}",
+            "{}\nyoungs_modulus_mpa = 2500.0\npoissons_ratio = 0.32\nshrinkage_anisotropy_z_ratio = 1.4\n{}",
             legacy_toml_root_without_thermal_thresholds(),
             valid_recipe_table()
         );
         let p: ResinProfile = toml::from_str(&toml_str)
-            .expect("explicit youngs_modulus_mpa + poissons_ratio TOML must parse");
+            .expect("explicit youngs_modulus_mpa + poissons_ratio + z_ratio TOML must parse");
         assert_eq!(p.youngs_modulus_mpa(), Some(2500.0));
         assert_eq!(p.poissons_ratio(), Some(0.32));
+        assert_eq!(p.shrinkage_anisotropy_z_ratio(), Some(1.4));
         assert!(p.has_calibrated_moduli());
         assert_eq!(p.effective_youngs_modulus_mpa(), 2500.0);
         assert_eq!(p.effective_poissons_ratio(), 0.32);
+        assert_eq!(p.effective_shrinkage_anisotropy_z_ratio(), 1.4);
         p.validate()
             .expect("explicit mechanical moduli values must satisfy validate()");
     }
@@ -1302,5 +1324,58 @@ density_g_cm3 = 1.1
             err.contains("photoinitiator_concentration_initial"),
             "error must name the field: {err}"
         );
+    }
+
+    // --- t2f3.1 A1: has_calibrated_moduli is a 3-of-3 predicate ---
+
+    #[test]
+    fn has_calibrated_moduli_false_when_z_ratio_unset() {
+        // A profile with E + ν explicit but z_ratio defaulted is
+        // partially calibrated — the disclosure caveat MUST fire.
+        let p = ResinProfile {
+            shrinkage_anisotropy_z_ratio: None,
+            ..ResinProfile::generic_standard()
+        };
+        assert!(p.youngs_modulus_mpa().is_some());
+        assert!(p.poissons_ratio().is_some());
+        assert!(p.shrinkage_anisotropy_z_ratio().is_none());
+        assert!(
+            !p.has_calibrated_moduli(),
+            "partial calibration (z_ratio unset) must NOT report calibrated"
+        );
+    }
+
+    #[test]
+    fn has_calibrated_moduli_true_when_all_three_set() {
+        // Positive control: generic_standard ships with E=2000, ν=0.35,
+        // z_ratio=1.5 — all three Some.
+        let p = ResinProfile::generic_standard();
+        assert!(p.youngs_modulus_mpa().is_some());
+        assert!(p.poissons_ratio().is_some());
+        assert!(p.shrinkage_anisotropy_z_ratio().is_some());
+        assert!(
+            p.has_calibrated_moduli(),
+            "all-three-Some must report calibrated"
+        );
+    }
+
+    #[test]
+    fn has_calibrated_moduli_false_when_e_unset() {
+        // Coverage of the E-only-missing direction.
+        let p = ResinProfile {
+            youngs_modulus_mpa: None,
+            ..ResinProfile::generic_standard()
+        };
+        assert!(!p.has_calibrated_moduli());
+    }
+
+    #[test]
+    fn has_calibrated_moduli_false_when_nu_unset() {
+        // Coverage of the ν-only-missing direction.
+        let p = ResinProfile {
+            poissons_ratio: None,
+            ..ResinProfile::generic_standard()
+        };
+        assert!(!p.has_calibrated_moduli());
     }
 }
