@@ -107,6 +107,7 @@ uses spatial Z (see `thermal-field-z-dim-is-spatial.md`).
 
 - ADR-0020 §Decision i — FTCS choice + ADI deferral rationale
 - ADR-0020 §Decision iv — single resin-domain α scope cut
+- ADR-0020 §Decision v — Rayon parallel update + scratch-buffer reuse
 - `docs/patterns/thermal-field-z-dim-is-spatial.md` — why ThermalField
   doesn't share the layer-count Z anti-pattern
 - `docs/patterns/anti/voxel-z-step-from-lateral-voxel-size.md` — sibling

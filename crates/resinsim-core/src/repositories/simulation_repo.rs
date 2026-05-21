@@ -388,6 +388,7 @@ fn encode_paired_sidecar(
         photoinitiator: sim.photoinitiator_field(),
         strain: sim.strain_field(),
         stress: sim.stress_field(),
+        thermal: sim.thermal_field(),
     };
     if fields.field_count() == 0 {
         return Ok(None);
@@ -651,6 +652,12 @@ fn load_and_install_sidecar(
                 canonical.display()
             )
         })?;
+    }
+    // ADR-0020 / t2f4 — install thermal field if the sidecar carried one.
+    // Independent of the (cure, photoinit) / (strain, stress) pairs since
+    // its dims diverge (vat envelope vs part bbox).
+    if let Some(thermal) = decoded.thermal {
+        sim.set_thermal_field(thermal);
     }
     Ok(())
 }

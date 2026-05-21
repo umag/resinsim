@@ -186,6 +186,67 @@ impl ThermalField {
         })
     }
 
+    /// ADR-0019 sidecar reconstitution constructor. Takes pre-decoded
+    /// raw `data` directly without re-running the uniform-init path of
+    /// [`Self::new`]. Used by `decode_sidecar` to rebuild a thermal
+    /// field from on-disk slabs. The constructor validates the
+    /// expected dimensions + voxel-size + bbox + finiteness of every
+    /// voxel; the decoder also runs its own finite check per slab but
+    /// the value object re-validates here as the trust boundary.
+    pub fn from_persistence_parts(
+        nx: u32,
+        ny: u32,
+        nz: u32,
+        voxel_size_mm: f32,
+        bbox_min_mm: [f32; 3],
+        data: Array3<f32>,
+    ) -> Result<Self, ThermalFieldError> {
+        if nx == 0 || ny == 0 || nz == 0 {
+            return Err(ThermalFieldError::InvalidDimensions { nx, ny, nz });
+        }
+        if !voxel_size_mm.is_finite() || voxel_size_mm <= 0.0 {
+            return Err(ThermalFieldError::InvalidVoxelSize(voxel_size_mm));
+        }
+        if !bbox_min_mm[0].is_finite()
+            || !bbox_min_mm[1].is_finite()
+            || !bbox_min_mm[2].is_finite()
+        {
+            return Err(ThermalFieldError::InvalidBboxMin {
+                x: bbox_min_mm[0],
+                y: bbox_min_mm[1],
+                z: bbox_min_mm[2],
+            });
+        }
+        if data.dim() != (nx as usize, ny as usize, nz as usize) {
+            return Err(ThermalFieldError::InvalidDimensions { nx, ny, nz });
+        }
+        // Every voxel must be finite + above absolute zero; the decoder
+        // already runs a per-slab finite check, but the VO is the trust
+        // boundary that downstream consumers rely on.
+        for v in data.iter() {
+            if !v.is_finite() || *v <= ABSOLUTE_ZERO_C {
+                return Err(ThermalFieldError::InvalidInitialTemp(*v));
+            }
+        }
+        enforce_field_budget(
+            "ThermalField",
+            nx,
+            ny,
+            nz,
+            std::mem::size_of::<f32>() as u64,
+            voxel_size_mm,
+        )
+        .map_err(ThermalFieldError::ExceedsBudget)?;
+        Ok(Self {
+            nx,
+            ny,
+            nz,
+            voxel_size_mm,
+            bbox_min_mm,
+            data,
+        })
+    }
+
     /// Voxel-grid dimensions `(nx, ny, nz)`.
     pub fn dimensions(&self) -> (u32, u32, u32) {
         (self.nx, self.ny, self.nz)

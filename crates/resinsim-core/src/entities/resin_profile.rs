@@ -283,6 +283,22 @@ impl ResinProfile {
     pub fn density_g_cm3(&self) -> f32 {
         self.density_g_cm3
     }
+    /// ADR-0020 / t2f4 — resin thermal conductivity (W/m·K). Optional on
+    /// the struct; required at validate() time under field-sim.
+    pub fn thermal_conductivity_w_mk(&self) -> Option<f32> {
+        self.thermal_conductivity_w_mk
+    }
+    /// ADR-0020 / t2f4 — resin specific heat capacity (J/kg·K). Optional
+    /// on the struct; required at validate() time under field-sim.
+    pub fn specific_heat_j_kgk(&self) -> Option<f32> {
+        self.specific_heat_j_kgk
+    }
+    /// ADR-0020 / t2f4 — convective coefficient at the resin-air top free
+    /// surface (W/m²·K). Optional on the struct; required at validate()
+    /// time under field-sim.
+    pub fn convective_top_h_w_m2k(&self) -> Option<f32> {
+        self.convective_top_h_w_m2k
+    }
     pub fn degradation_temp_c(&self) -> f32 {
         self.degradation_temp_c
     }

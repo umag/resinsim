@@ -26,7 +26,7 @@ All multi-byte integers are **little-endian**, encoded via explicit
 | Offset | Bytes | Field | Notes |
 |--------|-------|-------|-------|
 | 0 | 8 | `magic` | `b"RSFIELD\0"` (capital ASCII + NUL). Mismatch → typed `"unknown sidecar magic"` |
-| 8 | 4 | `format_version` u32 LE | `RSFIELD_FORMAT_VERSION = 1`. Mismatch → typed `"unknown sidecar format_version"` |
+| 8 | 4 | `format_version` u32 LE | `RSFIELD_FORMAT_VERSION = 2` (bumped from 1 by **ADR-0020 / t2f4** §Decision x — clean break, no v1 read path retained). Mismatch → typed `"unknown sidecar format_version"` |
 | 12 | 4 | `field_count` u32 LE | `0 < field_count ≤ MAX_FIELD_COUNT (16)`. Overflow → typed `"implausible field_count"` |
 | 16 | 48 | `reserved` | Must be all-zero for forward extension. Decoder ignores. |
 
@@ -37,8 +37,8 @@ Each descriptor follows the previous; the first starts at byte 64.
 | Field | Bytes | Encoding | Notes |
 |-------|-------|----------|-------|
 | `name_len` | 4 | u32 LE | UTF-8 byte length of `name`. 1 ≤ name_len ≤ 64 |
-| `name` | `name_len` | UTF-8 bytes | `"cure"`, `"photoinitiator"`, `"strain"`, `"stress"` |
-| `kind_tag` | 4 | u32 LE | 0=Cure, 1=Photoinitiator, 2=Strain, 3=Stress |
+| `name` | `name_len` | UTF-8 bytes | `"cure"`, `"photoinitiator"`, `"strain"`, `"stress"`, `"thermal"` |
+| `kind_tag` | 4 | u32 LE | 0=Cure, 1=Photoinitiator, 2=Strain, 3=Stress, **4=Thermal (ADR-0020 / t2f4)** |
 | `dim_x` | 4 | u32 LE | Voxel count along X. > 0 |
 | `dim_y` | 4 | u32 LE | Voxel count along Y. > 0 |
 | `dim_z` | 4 | u32 LE | Voxel count along Z = layer count. > 0; also = `layer_count` below |
@@ -46,7 +46,7 @@ Each descriptor follows the previous; the first starts at byte 64.
 | `bbox_origin_y` | 4 | f32 LE | Bbox-min Y in mm |
 | `bbox_origin_z` | 4 | f32 LE | Bbox-min Z in mm |
 | `voxel_size_mm` | 4 | f32 LE | LCD pixel pitch on X-Y |
-| `component_size` | 4 | u32 LE | Per-voxel byte size. 4 = `f32` (cure/photoinit); 24 = `[f32; 6]` (strain/stress) |
+| `component_size` | 4 | u32 LE | Per-voxel byte size. 4 = `f32` (cure / photoinit / thermal); 24 = `[f32; 6]` (strain/stress) |
 | `compression_tag` | 4 | u32 LE | 0=none, 1=zstd. v1 always emits 1. |
 | `layout_tag` | 4 | u32 LE | 0=dense3d (unused), 1=layer_slabs. v1 always emits 1. |
 | `layer_count` | 4 | u32 LE | Equal to `dim_z`. `≤ MAX_REASONABLE_LAYER_COUNT (100_000)`. Overflow → typed `"implausible layer_count"` |

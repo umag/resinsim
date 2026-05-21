@@ -114,15 +114,33 @@ downstream impact is small.
 Multi-region α heterogeneity is filed as the `t2f4b` follow-on (see
 §Follow-ons).
 
-### (v) Single-threaded execution (no Rayon, no `par_*` iterators)
+### (v) Parallel per-voxel update via Rayon (still deterministic)
 
-The solver is single-threaded. Same input → bit-identical
-`thermal_field` bytes → stable sidecar sha256 (the existing
-load-bearing invariant). Parallel reductions break this because f32
-addition is non-associative.
+The solver's inner FTCS stencil is parallelised across voxels using
+Rayon (`ndarray::Zip::par_for_each`). **Bit-identical** output is still
+guaranteed:
 
-Parallelisation is deferred to `t2f5-gpu-acceleration-wgpu` where the
-cost-of-determinism trade is addressed by careful kernel design.
+- Each voxel reads only from the immutable `t_old` snapshot and writes
+  ONLY to its own `(ix, iy, iz)` cell — no cross-thread writes, no
+  parallel reduction.
+- Each cell's final value is a deterministic function of `t_old`
+  neighbours; thread schedule cannot reorder operations within a single
+  voxel's computation.
+- Therefore the final `thermal_field` bytes are bit-identical
+  run-to-run, preserving the sidecar sha256 invariant.
+
+The associative-float hazard only applies to **reductions** like
+`volume_mean_c` and `volume_max_c` — these are READ-ONLY reports
+(used by the run-end summary stderr line) and do NOT enter the field's
+persistent state. Reductions stay serial.
+
+Snapshot allocation is amortised via a caller-owned scratch buffer
+(`Array3<f32>` allocated once per `VoxelState`, reused for every
+`step()` call) — avoiding the per-substep `Array3::clone()` that
+was the dominant cost at Mars-class envelopes + 0.5 mm voxels.
+
+Further parallelism (GPU compute kernels for the same stencil) is
+filed under `t2f5-gpu-acceleration-wgpu`.
 
 ### (vi) Tier-1 stays as LED-case BC source, routed via LayerTimingCalculator
 

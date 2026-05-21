@@ -7,10 +7,19 @@ use serde::{Deserialize, Serialize};
 /// Sidecar header magic. ASCII `"RSFIELD\0"` (8 bytes).
 pub const RSFIELD_MAGIC: [u8; 8] = *b"RSFIELD\0";
 
-/// Sidecar format version. Bumped only on layout-breaking changes
-/// (per the format-spec doc's "Forward extensibility" section). Adding
-/// a new `kind_tag` or `compression_tag` value does NOT bump this.
-pub const RSFIELD_FORMAT_VERSION: u32 = 1;
+/// Sidecar format version. Bumped on layout-breaking changes per the
+/// format-spec doc's "Forward extensibility" section.
+///
+/// **v1 → v2 (t2f4 / ADR-0020 §Decision x)** is technically additive
+/// (one new `kind_tag = 4` variant for `FieldKind::Thermal`) but the
+/// "don't care about legacy" lifecycle direction chose to advertise
+/// the change via a version bump rather than relying on older
+/// decoders to silently fail with `UnknownFieldKindTag`. Effect: v1
+/// sidecars are now rejected with the typed `UnknownFormatVersion`
+/// error instead of partial-success-with-warn. No v1 read-path is
+/// retained; existing tests regenerate fixtures in lockstep with this
+/// constant.
+pub const RSFIELD_FORMAT_VERSION: u32 = 2;
 
 /// Fixed header length in bytes. The first descriptor begins at offset 64.
 pub const SIDECAR_HEADER_LEN: u64 = 64;
@@ -50,8 +59,11 @@ pub const FIELD_KIND_TAG_CURE: u32 = 0;
 pub const FIELD_KIND_TAG_PHOTOINITIATOR: u32 = 1;
 pub const FIELD_KIND_TAG_STRAIN: u32 = 2;
 pub const FIELD_KIND_TAG_STRESS: u32 = 3;
+/// ADR-0020 / t2f4 — Tier-2 thermal field. Per-voxel `f32` temperature
+/// in °C over the full vat envelope (NOT the part bbox).
+pub const FIELD_KIND_TAG_THERMAL: u32 = 4;
 
-/// Closed enum identifying which of the four voxel-field types a
+/// Closed enum identifying which of the five voxel-field types a
 /// descriptor refers to. Wire-tagged via `kind_tag` u32 LE.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +72,10 @@ pub enum FieldKind {
     Photoinitiator,
     Strain,
     Stress,
+    /// ADR-0020 / t2f4 — vat-envelope-anchored thermal field. f32
+    /// scalar per voxel (°C). Diverges from the layer-count-Z sibling
+    /// fields per `docs/patterns/thermal-field-z-dim-is-spatial.md`.
+    Thermal,
 }
 
 impl FieldKind {
@@ -70,6 +86,7 @@ impl FieldKind {
             Self::Photoinitiator => FIELD_KIND_TAG_PHOTOINITIATOR,
             Self::Strain => FIELD_KIND_TAG_STRAIN,
             Self::Stress => FIELD_KIND_TAG_STRESS,
+            Self::Thermal => FIELD_KIND_TAG_THERMAL,
         }
     }
 
@@ -79,6 +96,7 @@ impl FieldKind {
             FIELD_KIND_TAG_PHOTOINITIATOR => Some(Self::Photoinitiator),
             FIELD_KIND_TAG_STRAIN => Some(Self::Strain),
             FIELD_KIND_TAG_STRESS => Some(Self::Stress),
+            FIELD_KIND_TAG_THERMAL => Some(Self::Thermal),
             _ => None,
         }
     }
@@ -90,13 +108,14 @@ impl FieldKind {
             Self::Photoinitiator => "photoinitiator",
             Self::Strain => "strain",
             Self::Stress => "stress",
+            Self::Thermal => "thermal",
         }
     }
 
     /// Per-voxel byte size. Scalar fields = 4; tensor fields = 24.
     pub fn component_size(self) -> u32 {
         match self {
-            Self::Cure | Self::Photoinitiator => FIELD_COMPONENT_SIZE_SCALAR,
+            Self::Cure | Self::Photoinitiator | Self::Thermal => FIELD_COMPONENT_SIZE_SCALAR,
             Self::Strain | Self::Stress => FIELD_COMPONENT_SIZE_TENSOR,
         }
     }
@@ -139,6 +158,7 @@ mod tests {
             FieldKind::Photoinitiator,
             FieldKind::Strain,
             FieldKind::Stress,
+            FieldKind::Thermal,
         ] {
             assert_eq!(FieldKind::from_tag(k.tag()), Some(k));
         }
@@ -155,5 +175,13 @@ mod tests {
         assert_eq!(FieldKind::Photoinitiator.component_size(), 4);
         assert_eq!(FieldKind::Strain.component_size(), 24);
         assert_eq!(FieldKind::Stress.component_size(), 24);
+        assert_eq!(FieldKind::Thermal.component_size(), 4);
+    }
+
+    #[test]
+    fn rsfield_format_version_is_v2() {
+        // ADR-0020 §Decision x — bumped from 1 to 2 with t2f4. v1
+        // sidecars on disk are rejected at decode time.
+        assert_eq!(RSFIELD_FORMAT_VERSION, 2);
     }
 }

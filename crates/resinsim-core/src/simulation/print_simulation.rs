@@ -10,7 +10,8 @@ use crate::services::LayerTimingCalculator;
 use crate::values::LayerHeightProvenance;
 #[cfg(feature = "field-sim")]
 use crate::values::{
-    CureDepth, CureField, Energy, PhotoinitiatorField, StrainField, StressField, VatTemperature,
+    CureDepth, CureField, Energy, PhotoinitiatorField, StrainField, StressField, ThermalField,
+    VatTemperature,
 };
 
 /// Errors returned by [`PrintSimulation`] mutators.
@@ -111,6 +112,23 @@ pub struct PrintSimulation {
     #[cfg(feature = "field-sim")]
     #[serde(default, skip)]
     stress_field: Option<StressField>,
+    /// Per-voxel temperature field over the full vat envelope (ADR-0020 /
+    /// t2f4). Populated by `SimulationRunner` only when `--voxel-cure-mm`
+    /// is set (the auto-activation rule per ADR-0020 §Decision vii — Tier-2
+    /// thermal diffusion and Tier-2 voxel cure are physically coupled).
+    /// `None` for Tier-1 scalar runs.
+    ///
+    /// **Aggregate-shape note**: this field uses a DIFFERENT bbox + voxel
+    /// size from cure/photoinitiator/strain/stress — those are part-bbox
+    /// anchored, ThermalField is vat-envelope anchored
+    /// (`PrinterProfile.build_envelope_mm`). The aggregate invariant
+    /// allows divergent anchoring per `docs/patterns/thermal-field-z-dim-is-spatial.md`.
+    ///
+    /// ADR-0019 / t2f3.5: persisted via the paired binary sidecar
+    /// (`<stem>.fields.bin`), kind_tag = 4 = Thermal (ADR-0020 §Decision x).
+    #[cfg(feature = "field-sim")]
+    #[serde(default, skip)]
+    thermal_field: Option<ThermalField>,
     /// Reconciliation between the CTB's embedded layer-height (file-axis,
     /// runtime authority) and the resin recipe's `layer_height_um`
     /// (recipe-axis, authoring metadata). Per ADR-0005 Consequences
@@ -164,6 +182,8 @@ impl PrintSimulation {
             strain_field: None,
             #[cfg(feature = "field-sim")]
             stress_field: None,
+            #[cfg(feature = "field-sim")]
+            thermal_field: None,
             layer_height_provenance: None,
         }
     }
@@ -283,6 +303,31 @@ impl PrintSimulation {
     #[cfg(feature = "field-sim")]
     pub fn stress_field_mut(&mut self) -> Option<&mut StressField> {
         self.stress_field.as_mut()
+    }
+
+    /// Vat-envelope 3D thermal field (ADR-0020 / t2f4). Populated when
+    /// `--voxel-cure-mm` is set (auto-activation rule); `None` for
+    /// Tier-1 scalar runs.
+    #[cfg(feature = "field-sim")]
+    pub fn thermal_field(&self) -> Option<&ThermalField> {
+        self.thermal_field.as_ref()
+    }
+
+    /// Mutable borrow of the thermal field (solver entry point). Used by
+    /// `SimulationRunner::apply_voxel_thermal_for_layer`.
+    #[cfg(feature = "field-sim")]
+    pub fn thermal_field_mut(&mut self) -> Option<&mut ThermalField> {
+        self.thermal_field.as_mut()
+    }
+
+    /// Install the thermal field onto the aggregate. Called once at the
+    /// start of a Tier-2 voxel-cure run (`apply_voxel_thermal_for_layer`
+    /// allocates from `PrinterProfile.build_envelope_mm` + resin
+    /// material props, initialises to uniform ambient, then steps it
+    /// every layer).
+    #[cfg(feature = "field-sim")]
+    pub fn set_thermal_field(&mut self, field: ThermalField) {
+        self.thermal_field = Some(field);
     }
 
     /// Install strain + stress fields onto the aggregate (ADR-0018 / t2f3).

@@ -26,7 +26,7 @@
 use std::io::Write;
 
 use crate::values::field_budget::active_budget_bytes;
-use crate::values::{CureField, PhotoinitiatorField, StrainField, StressField};
+use crate::values::{CureField, PhotoinitiatorField, StrainField, StressField, ThermalField};
 
 use super::error::EncodeError;
 use super::format::{
@@ -34,14 +34,19 @@ use super::format::{
     MAX_REASONABLE_LAYER_COUNT, RSFIELD_FORMAT_VERSION, RSFIELD_MAGIC, SIDECAR_HEADER_LEN,
 };
 
-/// Convenience handle to the four field references the encoder accepts.
-/// At least one must be `Some`.
+/// Convenience handle to the five field references the encoder accepts.
+/// At least one must be `Some`. ADR-0020 / t2f4 added the `thermal`
+/// slot; it uses a DIFFERENT bbox + voxel_size from the others
+/// (vat envelope vs part bbox) and is therefore EXCLUDED from the
+/// cross-field-dimension lock — see `check_cross_field_dimensions`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SidecarFields<'a> {
     pub cure: Option<&'a CureField>,
     pub photoinitiator: Option<&'a PhotoinitiatorField>,
     pub strain: Option<&'a StrainField>,
     pub stress: Option<&'a StressField>,
+    /// ADR-0020 / t2f4. Vat-envelope-anchored thermal field.
+    pub thermal: Option<&'a ThermalField>,
 }
 
 impl<'a> SidecarFields<'a> {
@@ -51,6 +56,7 @@ impl<'a> SidecarFields<'a> {
             self.photoinitiator.is_some(),
             self.strain.is_some(),
             self.stress.is_some(),
+            self.thermal.is_some(),
         ]
         .iter()
         .filter(|b| **b)
@@ -140,6 +146,12 @@ impl FieldSidecarEncoder {
         }
         if let Some(f) = fields.stress {
             compressed_fields.push(self.compress_stress_field(f)?);
+        }
+        // ADR-0020 / t2f4 — thermal field appended last in the
+        // descriptor stream. Independent dims (vat envelope) so NOT
+        // covered by the cross-field-dim lock above.
+        if let Some(f) = fields.thermal {
+            compressed_fields.push(self.compress_thermal_field(f)?);
         }
 
         // Pass 2 — compute descriptor byte sizes + layer_offsets, write
@@ -381,6 +393,57 @@ impl FieldSidecarEncoder {
         }
         Ok(CompressedField {
             kind: FieldKind::Stress,
+            dim_x: nx,
+            dim_y: ny,
+            dim_z: nz,
+            bbox_origin: field.bbox_min_mm(),
+            voxel_size_mm: field.voxel_size_mm(),
+            uncompressed_layer_byte_size: layer_byte_size,
+            layer_offsets: vec![0u64; nz as usize],
+            layer_sizes: vec![0u32; nz as usize],
+            slabs,
+        })
+    }
+
+    /// ADR-0020 / t2f4 — compress the thermal field. Same scalar `f32`
+    /// shape as `CureField`, but the field is REQUIRED to be non-zero
+    /// everywhere at construction (initialised to `ambient_c`), so the
+    /// "all-zero slab ⇒ empty payload" optimisation that
+    /// `CureField` enjoys is NOT applicable here. Every slab compresses
+    /// through zstd unconditionally — sparsity wins via zstd on the
+    /// very smooth ambient/diffusion-warmed values.
+    fn compress_thermal_field(
+        &self,
+        field: &ThermalField,
+    ) -> Result<CompressedField, EncodeError> {
+        let (nx, ny, nz) = field.dimensions();
+        check_layer_count("thermal", nz)?;
+        let layer_byte_size =
+            layer_byte_size("thermal", nx, ny, FieldKind::Thermal.component_size())?;
+        let total = layer_byte_size.saturating_mul(u64::from(nz));
+        if total > active_budget_bytes() {
+            return Err(EncodeError::ExceedsFieldBudget {
+                field_name: "thermal",
+                bytes: layer_byte_size,
+                layers: nz,
+            });
+        }
+        let data = field.as_array_view();
+        let mut slabs = Vec::with_capacity(nz as usize);
+        for iz in 0..nz {
+            let mut uncompressed = Vec::with_capacity(layer_byte_size as usize);
+            for iy in 0..ny {
+                for ix in 0..nx {
+                    let v = data[[ix as usize, iy as usize, iz as usize]];
+                    uncompressed.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+            // ALWAYS compress — thermal field is initialised to ambient,
+            // not zero, so no slab is meaningfully empty.
+            slabs.push(self.zstd_compress(&uncompressed)?);
+        }
+        Ok(CompressedField {
+            kind: FieldKind::Thermal,
             dim_x: nx,
             dim_y: ny,
             dim_z: nz,

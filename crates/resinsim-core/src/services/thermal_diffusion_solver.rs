@@ -2,8 +2,20 @@
 //!
 //! ADR-0020, t2f4. Advances a `ThermalField` by one CFL-bound substep
 //! using a forward-time centred-space (FTCS) stencil with Dirichlet
-//! bottom + convective top/side boundary conditions. Single-threaded by
-//! design — see ADR-0020 §Decision v.
+//! bottom + convective top/side boundary conditions.
+//!
+//! # Parallelism + determinism
+//!
+//! The per-voxel update IS parallelised via Rayon (ndarray's
+//! `Zip::par_for_each`). Each voxel reads only from the immutable
+//! `t_old` snapshot and writes ONLY to its own `(ix, iy, iz)` cell —
+//! no cross-thread writes, no parallel reduction. Each cell's final
+//! value is therefore deterministic regardless of thread schedule, so
+//! the sidecar sha256 invariant (ADR-0020 §Decision v) is preserved
+//! while reaping the parallelism. The associative-floating-point hazard
+//! only applies to reductions like `volume_mean_c` / `volume_max_c`,
+//! which are READ-ONLY reports and do NOT affect the field state's
+//! bit-identical bytes.
 //!
 //! # Discretisation
 //!
@@ -124,7 +136,17 @@ impl ThermalDiffusionSolver {
 
     /// Advance `field` by one explicit-FTCS substep `dt_sec` at thermal
     /// diffusivity `alpha_m2_s`, applying the boundary conditions in
-    /// `bcs`. Single-threaded by design (ADR-0020 §Decision v).
+    /// `bcs`. Parallelised across voxels via Rayon while preserving
+    /// bit-identical output (see module docs — each voxel writes only
+    /// to its own cell from an immutable snapshot).
+    ///
+    /// `scratch` is a caller-owned buffer the solver uses to snapshot
+    /// the prior state. It MUST have the same dimensions as `field`;
+    /// the caller allocates ONCE outside the per-layer substep loop
+    /// and reuses for every step() call. Pre-allocating in the caller
+    /// avoids freeing + reallocating a multi-MB Array3 on every substep
+    /// (the dominant cost at typical Mars-class envelope + 0.5 mm
+    /// voxel resolutions). The scratch contents on entry are ignored.
     ///
     /// # Postcondition
     ///
@@ -135,6 +157,7 @@ impl ThermalDiffusionSolver {
     /// reduction result).
     pub fn step(
         field: &mut ThermalField,
+        scratch: &mut Array3<f32>,
         dt_sec: f32,
         alpha_m2_s: f32,
         bcs: &BoundaryConditions,
@@ -143,6 +166,11 @@ impl ThermalDiffusionSolver {
         let nx = nx_u as usize;
         let ny = ny_u as usize;
         let nz = nz_u as usize;
+        debug_assert_eq!(
+            scratch.dim(),
+            (nx, ny, nz),
+            "scratch buffer dims must match thermal field"
+        );
         let h_m = field.voxel_size_mm() * 1e-3;
         let h2 = h_m * h_m;
         let r = dt_sec * alpha_m2_s / h2; // dimensionless FTCS update coefficient per face
@@ -152,10 +180,12 @@ impl ThermalDiffusionSolver {
         let bi_side = bcs.side_h_w_m2k * h_m / bcs.k_resin_w_mk;
         let t_amb = bcs.ambient_c;
 
-        // Snapshot the old state into scratch storage so the stencil
-        // reads from a consistent prior step (avoid aliasing across the
-        // in-place update).
-        let t_old: Array3<f32> = field.as_array_view().to_owned();
+        // Snapshot the old state into the caller-owned scratch so the
+        // stencil reads from a consistent prior step (avoid aliasing
+        // across the in-place update). `assign` reuses the scratch's
+        // existing allocation — no malloc per substep.
+        scratch.assign(&field.as_array_view());
+        let t_old = &*scratch;
 
         // Helper: a single Laplacian-with-BC update for the given voxel.
         let update = |ix: usize, iy: usize, iz: usize| -> f32 {
@@ -209,16 +239,21 @@ impl ThermalDiffusionSolver {
             t + r * (t_xm + t_xp + t_ym + t_yp + t_zm + t_zp - 6.0 * t)
         };
 
-        // Write updated values back into the field. The `as_array_mut`
-        // view shares storage with the field — `t_old` is the snapshot.
-        let mut data = field.as_array_mut();
-        for ix in 0..nx {
-            for iy in 0..ny {
-                for iz in 0..nz {
-                    data[(ix, iy, iz)] = update(ix, iy, iz);
-                }
-            }
-        }
+        // Write updated values back into the field via Rayon's
+        // parallel indexed-write iterator. Determinism: each voxel
+        // reads only from `t_old` (immutable snapshot) and writes
+        // ONLY to its own `(ix, iy, iz)` cell — no cross-thread
+        // writes, no parallel reduction. The per-voxel update is
+        // deterministic regardless of thread schedule, so the
+        // sidecar sha256 invariant (ADR-0020 §Decision v) is
+        // preserved while reaping the parallelism. Reductions
+        // (`volume_mean_c`, `volume_max_c`) remain in serial reads
+        // since f32 sums are non-associative.
+        use ndarray::parallel::prelude::*;
+        let data = field.as_array_mut();
+        ndarray::Zip::indexed(data).par_for_each(|(ix, iy, iz), out| {
+            *out = update(ix, iy, iz);
+        });
 
         // Postcondition: no NaN/infinite values exited the step.
         debug_assert!(
@@ -251,6 +286,11 @@ mod tests {
             .expect("4×4×4 ThermalField in-domain")
     }
 
+    fn matching_scratch(field: &ThermalField) -> Array3<f32> {
+        let (nx, ny, nz) = field.dimensions();
+        Array3::<f32>::zeros((nx as usize, ny as usize, nz as usize))
+    }
+
     // --- cfl_max_dt ---
 
     #[test]
@@ -278,8 +318,9 @@ mod tests {
     #[test]
     fn step_pins_bottom_to_dirichlet() {
         let mut field = small_field(25.0);
+        let mut scratch = matching_scratch(&field);
         let dt = ThermalDiffusionSolver::cfl_max_dt(1.07e-7, 0.5);
-        ThermalDiffusionSolver::step(&mut field, dt, 1.07e-7, &default_bcs())
+        ThermalDiffusionSolver::step(&mut field, &mut scratch, dt, 1.07e-7, &default_bcs())
             .expect("first step is finite");
         // Every z=0 voxel should now equal the Dirichlet value.
         for ix in 0..4 {
@@ -298,6 +339,7 @@ mod tests {
     #[test]
     fn dirichlet_bottom_warms_interior_monotonically() {
         let mut field = small_field(22.0); // ambient
+        let mut scratch = matching_scratch(&field);
         let dt = ThermalDiffusionSolver::cfl_max_dt(1.07e-7, 0.5);
         let alpha = 1.07e-7;
         let bcs = BoundaryConditions {
@@ -313,7 +355,7 @@ mod tests {
             .temperature_at(interior_ix, interior_iy, 1)
             .expect("in-bounds");
         for _ in 0..30 {
-            ThermalDiffusionSolver::step(&mut field, dt, alpha, &bcs)
+            ThermalDiffusionSolver::step(&mut field, &mut scratch, dt, alpha, &bcs)
                 .expect("substep finite");
             let t_iz_1 = field
                 .temperature_at(interior_ix, interior_iy, 1)
@@ -345,6 +387,7 @@ mod tests {
         // temperature should stay numerically stable through many
         // substeps with insulated lateral BCs.
         let mut field = small_field(40.0);
+        let mut scratch = matching_scratch(&field);
         let dt = ThermalDiffusionSolver::cfl_max_dt(1.07e-7, 0.5);
         let bcs = BoundaryConditions {
             bottom_dirichlet_c: 40.0,
@@ -354,7 +397,7 @@ mod tests {
             k_resin_w_mk: 0.20,
         };
         for _ in 0..100 {
-            ThermalDiffusionSolver::step(&mut field, dt, 1.07e-7, &bcs)
+            ThermalDiffusionSolver::step(&mut field, &mut scratch, dt, 1.07e-7, &bcs)
                 .expect("uniform-field steady-state remains finite");
         }
         // Field is bounded; the max should be the Dirichlet 40 (or
@@ -382,9 +425,11 @@ mod tests {
         let dt = ThermalDiffusionSolver::cfl_max_dt(alpha, 0.5);
         let mut a = small_field(25.0);
         let mut b = small_field(25.0);
+        let mut scratch_a = matching_scratch(&a);
+        let mut scratch_b = matching_scratch(&b);
         for _ in 0..20 {
-            ThermalDiffusionSolver::step(&mut a, dt, alpha, &bcs).expect("a step");
-            ThermalDiffusionSolver::step(&mut b, dt, alpha, &bcs).expect("b step");
+            ThermalDiffusionSolver::step(&mut a, &mut scratch_a, dt, alpha, &bcs).expect("a step");
+            ThermalDiffusionSolver::step(&mut b, &mut scratch_b, dt, alpha, &bcs).expect("b step");
         }
         // Byte-identical comparison of the f32 representations.
         for (va, vb) in a.as_array_view().iter().zip(b.as_array_view().iter()) {
@@ -412,10 +457,11 @@ mod tests {
         let dt_unsafe = ThermalDiffusionSolver::cfl_max_dt(alpha, 0.5) * 10.0;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut field = small_field(25.0);
+            let mut scratch = matching_scratch(&field);
             let bcs = default_bcs();
             for _ in 0..500 {
                 if let Err(ThermalSolverError::NonFiniteField) =
-                    ThermalDiffusionSolver::step(&mut field, dt_unsafe, alpha, &bcs)
+                    ThermalDiffusionSolver::step(&mut field, &mut scratch, dt_unsafe, alpha, &bcs)
                 {
                     return true;
                 }
@@ -442,6 +488,7 @@ mod tests {
         // at the SAME initial temperature, the volume integral should
         // be conserved to high precision (no boundary fluxes injected).
         let mut field = small_field(40.0);
+        let mut scratch = matching_scratch(&field);
         let bcs = BoundaryConditions {
             bottom_dirichlet_c: 40.0,
             top_h_w_m2k: 0.0,
@@ -452,7 +499,7 @@ mod tests {
         let dt = ThermalDiffusionSolver::cfl_max_dt(1.07e-7, 0.5);
         let initial_total: f64 = field.as_array_view().iter().map(|&v| v as f64).sum();
         for _ in 0..100 {
-            ThermalDiffusionSolver::step(&mut field, dt, 1.07e-7, &bcs)
+            ThermalDiffusionSolver::step(&mut field, &mut scratch, dt, 1.07e-7, &bcs)
                 .expect("conservation step finite");
         }
         let final_total: f64 = field.as_array_view().iter().map(|&v| v as f64).sum();

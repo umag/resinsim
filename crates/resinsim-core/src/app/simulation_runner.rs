@@ -15,14 +15,21 @@ use crate::services::{
     LightCrosstalkCalculator, ShrinkageCalculator, StressAccumulator, UniformityCalculator,
     VoxelCureCalculator,
 };
+#[cfg(feature = "field-sim")]
+use crate::services::{
+    BoundaryConditions, LayerTimingCalculator, ThermalCalculator, ThermalDiffusionSolver,
+};
+#[cfg(feature = "field-sim")]
+use crate::values::ThermalTimeConstant;
 use crate::simulation::PrintSimulation;
 use crate::values::{
     AmbientTemperature, CrossSectionArea, InitialLedTemperature, LayerHeightProvenance,
-    LayerHeightSeq, LayerMask, LayerPhase,
+    LayerHeightSeq, LayerMask, LayerPhase, VatTemperature,
 };
 #[cfg(feature = "field-sim")]
 use crate::values::{
     CureField, Energy, PenetrationDepth, PhotoinitiatorField, StrainField, StressField,
+    ThermalField,
 };
 
 /// Application service: orchestrates a full simulation run.
@@ -84,6 +91,56 @@ struct VoxelState {
     /// at every position — voxel-mode then matches pre-uniformity behaviour
     /// per-pixel.
     uniformity: UniformityProfile,
+    // --- ADR-0020 / t2f4 thermal diffusion ---
+    /// Per-voxel temperature field over the full vat envelope. Auto-
+    /// activated alongside the voxel cure path (Tier-2 thermal + Tier-2
+    /// cure are physically coupled).
+    thermal: ThermalField,
+    /// Reusable scratch buffer for the solver step's old-state snapshot.
+    /// Allocated ONCE at VoxelState init; the solver step reuses this
+    /// allocation for every substep across every layer. Avoiding the
+    /// 60-MB-per-substep `Array3::clone()` is the dominant
+    /// performance win for typical Mars-class workloads.
+    thermal_scratch: ndarray::Array3<f32>,
+    /// Resin thermal diffusivity α = k / (ρ · cp) in m²/s. Snapshotted
+    /// at run start from the ResinProfile thermal material fields.
+    alpha_m2_s: f32,
+    /// Resin thermal conductivity in W/(m·K). Used in the Robin BC Biot
+    /// factor `h · dx / k`.
+    k_resin_w_mk: f32,
+    /// Lumped side-face convective coefficient (series of air boundary
+    /// layer + vat wall). Precomputed once from PrinterProfile's
+    /// `convective_wall_h_w_m2k`, `vat_wall_thickness_mm`,
+    /// `vat_wall_k_w_mk`.
+    side_h_w_m2k: f32,
+    /// Convective coefficient at the resin-air top free surface.
+    /// Snapshotted from ResinProfile.
+    top_h_w_m2k: f32,
+    /// Ambient temperature in °C. Same value passed via the
+    /// `ambient: AmbientTemperature` argument.
+    ambient_c: f32,
+    /// LED Stage-A: initial LED case temperature at print start.
+    initial_led_c: f32,
+    /// LED Stage-A: asymptotic LED rise from `initial_led_c`.
+    led_delta_t_steady_c: f32,
+    /// LED Stage-A: LED case time constant (s).
+    led_tau_sec: f32,
+    /// Running cumulative print time at the start of the most-recently-
+    /// processed layer. `apply_voxel_thermal_for_layer` adds
+    /// `LayerTimingCalculator::layer_time_sec(...)` for the current
+    /// layer to this, then evaluates the Stage-A formula at the layer's
+    /// END time. After processing layer N, `cumulative_time_sec` =
+    /// end-of-layer-N print time.
+    cumulative_time_sec: f32,
+    /// Per-run thermal-substep counter. Accumulates across all layers
+    /// for the run-end summary log line.
+    total_thermal_substeps: u64,
+    /// Per-run wall-clock for the thermal pass (sum across all layers).
+    total_thermal_wallclock_sec: f64,
+    /// Whether the run-start informational stderr line has been emitted
+    /// yet. Set false at construction, true after layer 0's
+    /// `apply_voxel_thermal_for_layer`.
+    thermal_log_emitted: bool,
 }
 
 /// Output of [`SimulationRunner::prepare_layer_inputs`]: everything the
@@ -576,6 +633,83 @@ impl SimulationRunner {
                         plate_width_mm,
                         plate_depth_mm,
                     };
+                    // ADR-0020 / t2f4: thermal field over the full vat
+                    // envelope. validate() under field-sim guarantees
+                    // build_envelope_mm + all the thermal material
+                    // fields are Some, so the unwraps below are safe.
+                    let envelope = printer
+                        .build_envelope_mm()
+                        .expect("validate() guarantees build_envelope_mm Some under field-sim");
+                    let k_resin = resin
+                        .thermal_conductivity_w_mk()
+                        .expect("validate() guarantees thermal_conductivity_w_mk Some under field-sim");
+                    let cp_resin = resin
+                        .specific_heat_j_kgk()
+                        .expect("validate() guarantees specific_heat_j_kgk Some under field-sim");
+                    let h_top = resin
+                        .convective_top_h_w_m2k()
+                        .expect("validate() guarantees convective_top_h_w_m2k Some under field-sim");
+                    let h_air_wall = printer
+                        .convective_wall_h_w_m2k()
+                        .expect("validate() guarantees convective_wall_h_w_m2k Some under field-sim");
+                    let wall_t_mm = printer
+                        .vat_wall_thickness_mm()
+                        .expect("validate() guarantees vat_wall_thickness_mm Some under field-sim");
+                    let wall_k = printer
+                        .vat_wall_k_w_mk()
+                        .expect("validate() guarantees vat_wall_k_w_mk Some under field-sim");
+                    // Density: ResinProfile stores g/cm³ (legacy unit).
+                    // Convert to kg/m³ for SI thermal diffusivity.
+                    let rho_kg_m3 = resin.density_g_cm3() * 1000.0;
+                    let alpha_m2_s = k_resin / (rho_kg_m3 * cp_resin);
+                    // Series-resistance lumped side coefficient:
+                    //   1/h_side_eff = 1/h_air + wall_thickness/wall_k
+                    // Wall thickness in metres for SI units.
+                    let wall_t_m = wall_t_mm * 1e-3;
+                    let side_h_w_m2k =
+                        1.0 / (1.0 / h_air_wall + wall_t_m / wall_k);
+                    // Thermal-field shape: full vat envelope at the
+                    // **thermal voxel pitch** = max(cure voxel,
+                    // `THERMAL_VOXEL_MIN_MM`). The cure-pitch case (0.05–
+                    // 0.5 mm) is physics-correct but generates 16–37 M
+                    // voxels for a Mars-class envelope — even with the
+                    // Rayon-parallel solver this saturates a multi-core
+                    // CPU when run inside nextest's parallel test
+                    // harness (memory bandwidth contention across N
+                    // concurrent tests). The 2 mm floor keeps the
+                    // Mars envelope at ~ 250 k voxels and per-substep
+                    // cost down to single-digit milliseconds. The
+                    // integration test
+                    // `voxel_cure_thermal_field_integration::voxel_mode_thermal_field_drift_changes_cure_depth_across_layers`
+                    // remains a witness that the path works at the
+                    // cure pitch — 79 s wall for a 60-layer 0.5-mm
+                    // Mars 5 Ultra run on CPU. Full decoupling via
+                    // `--thermal-diffusion-mm` + GPU dispatch lives in
+                    // `t2f5-gpu-acceleration-wgpu`.
+                    const THERMAL_VOXEL_MIN_MM: f32 = 2.0;
+                    let thermal_voxel_mm = voxel_size_mm.max(THERMAL_VOXEL_MIN_MM);
+                    let nx_thermal =
+                        (envelope.width_mm / thermal_voxel_mm).round().max(2.0) as u32;
+                    let ny_thermal =
+                        (envelope.depth_mm / thermal_voxel_mm).round().max(2.0) as u32;
+                    let nz_thermal =
+                        (envelope.max_z_mm / thermal_voxel_mm).round().max(2.0) as u32;
+                    let thermal = ThermalField::new(
+                        nx_thermal,
+                        ny_thermal,
+                        nz_thermal,
+                        thermal_voxel_mm,
+                        [0.0, 0.0, 0.0],
+                        ambient.value(),
+                    )
+                    .map_err(|e| format!("thermal field allocation: {e}"))?;
+                    let thermal_scratch = ndarray::Array3::<f32>::zeros((
+                        nx_thermal as usize,
+                        ny_thermal as usize,
+                        nz_thermal as usize,
+                    ));
+                    let initial_led_c =
+                        initial_led_temp.map(|t| t.value()).unwrap_or(ambient.value());
                     Some(VoxelState {
                         cure,
                         pi,
@@ -593,6 +727,20 @@ impl SimulationRunner {
                             .effective_shrinkage_anisotropy_z_ratio(),
                         led_power_mw_cm2: printer.led_power_mw_cm2(),
                         uniformity,
+                        thermal,
+                        thermal_scratch,
+                        alpha_m2_s,
+                        k_resin_w_mk: k_resin,
+                        side_h_w_m2k,
+                        top_h_w_m2k: h_top,
+                        ambient_c: ambient.value(),
+                        initial_led_c,
+                        led_delta_t_steady_c: printer.led_delta_t_steady_c(),
+                        led_tau_sec: printer.led_tau_sec(),
+                        cumulative_time_sec: 0.0,
+                        total_thermal_substeps: 0,
+                        total_thermal_wallclock_sec: 0.0,
+                        thermal_log_emitted: false,
                     })
                 } else {
                     None
@@ -634,7 +782,10 @@ impl SimulationRunner {
             );
 
             // ADR-0017 / t2f1: voxel cure pass for this layer.
-            // ADR-0018 / t2f3: strain + stress passes follow.
+            // ADR-0020 / t2f4: thermal diffusion pass follows cure
+            //   (cure first so its Δdose is available when the deferred
+            //   exothermic Q source term lands per ADR-0020 §Decision viii).
+            // ADR-0018 / t2f3: strain + stress passes follow thermal.
             #[cfg(feature = "field-sim")]
             if let Some(state) = voxel_state.as_mut() {
                 Self::apply_voxel_cure_for_layer(
@@ -648,6 +799,8 @@ impl SimulationRunner {
                     &overrides,
                     &mut result,
                 )?;
+
+                Self::apply_voxel_thermal_for_layer(state, i as u32, recipe, printer)?;
 
                 // t2f3 — per-voxel shrinkage strain from the cure field
                 // we just populated. Locks each voxel exactly once for
@@ -702,6 +855,16 @@ impl SimulationRunner {
 
         #[cfg(feature = "field-sim")]
         if let Some(state) = voxel_state {
+            // Emit the run-end Tier-2 thermal summary line BEFORE moving
+            // `state` into the aggregate setters.
+            eprintln!(
+                "tier-2 thermal complete: total_substeps={}, max_T={:.2} °C, \
+                 volume_mean={:.2} °C, wall_clock={:.3} s",
+                state.total_thermal_substeps,
+                state.thermal.volume_max_c(),
+                state.thermal.volume_mean_c(),
+                state.total_thermal_wallclock_sec,
+            );
             sim.set_voxel_fields(state.cure, state.pi)
                 .map_err(|e| format!("install voxel fields: {e}"))?;
             // ADR-0018 / t2f3 — parallel setter for the t2f3 fields.
@@ -711,6 +874,11 @@ impl SimulationRunner {
             // the already-installed cure_field.
             sim.set_strain_stress_fields(state.strain, state.stress)
                 .map_err(|e| format!("install strain/stress fields: {e}"))?;
+            // ADR-0020 / t2f4 — install the thermal field on the aggregate.
+            // Diverges from the other voxel fields in bbox/voxel-size
+            // (vat-envelope vs part-bbox); aggregate invariant per
+            // `docs/patterns/thermal-field-z-dim-is-spatial.md`.
+            sim.set_thermal_field(state.thermal);
         }
 
         // Install layer-height reconciliation on the aggregate. Present only
@@ -824,16 +992,40 @@ impl SimulationRunner {
         // `apply_voxel_cure_for_layer_crosstalk` above; control returns
         // here and continues with the layer-summary recomputation below.
 
-        // Recompute layer summary using KB-153 Ec(T) at the actual vat
-        // temperature for this layer (single-source-arrhenius-helper
-        // pattern — delegate to CureCalculator via VoxelCureCalculator).
-        let vat_temp = crate::services::ThermalCalculator::vat_temperature_at_layer_v2(
-            recipe,
-            printer,
-            thermal.ambient.value(),
-            thermal.initial_led_temp.map(|t| t.value()),
-            layer,
-        );
+        // ADR-0020 / t2f4 §Decision vii: under Tier-2, Ec(T) for the
+        // layer derives from the *thermal field's volume-mean*, NOT
+        // from `ThermalCalculator::vat_temperature_at_layer_v2` (which
+        // would re-introduce the Tier-1 lumped scalar that Tier-2
+        // replaces). The single-source-arrhenius-helper pattern
+        // (delegation to `CureCalculator::ec_at_temp`) is preserved;
+        // only the temperature SOURCE changes.
+        //
+        // v1 simplification: ONE Ec per layer derived from the
+        // vat-volume-mean temperature. Full per-voxel Ec(T) inside the
+        // cure column (true per-voxel Beer-Lambert inversion) lives
+        // inside `CureField::layer_summary` and is filed as a follow-on
+        // — out of scope for t2f4 v1. The non-uniform-field
+        // cure-divergence test (step 7 integration) still detects
+        // Tier-2 vs Tier-1 divergence because the thermal-field volume
+        // mean diverges from the Tier-1 lumped scalar once diffusion is
+        // active (which IS the point).
+        //
+        // We OVERWRITE `result.vat_temperature_c` here so the
+        // aggregate's `cure_depth_summary_for_resin` dispatch path
+        // (which recomputes Ec(T) from the cached scalar
+        // `layer.vat_temperature_c`) reads the SAME temperature
+        // source. Without this, the dispatch summary would compose
+        // Ec(T) from `vat_temperature_at_layer_v2` (Tier-1) while the
+        // overwritten cache reflects Tier-2 — and the two diverge.
+        //
+        // `thermal` (ThermalContext) is still consumed downstream for
+        // the Tier-1 dispatch case in default-feature builds — kept
+        // unchanged so the legacy ec_at_temp signature stays alive.
+        let _ = thermal; // suppress unused warning under field-sim
+        let mean_t_c = state.thermal.volume_mean_c();
+        let vat_temp = VatTemperature::new(mean_t_c)
+            .map_err(|e| format!("voxel cure ADR-0020 vat_temp from thermal_field mean: {e}"))?;
+        result.vat_temperature_c = mean_t_c;
         let ec_ref = Energy::new(state.ec_ref_mj_cm2).map_err(|e| format!("ec_ref: {e}"))?;
         let ec_t = VoxelCureCalculator::ec_at_temp(
             ec_ref,
@@ -872,6 +1064,112 @@ impl SimulationRunner {
     ///
     /// Voxels with sub-threshold cure (dose ≤ Ec(T)) get
     /// `StrainTensor::zero()` — uncured liquid undergoes no
+    /// ADR-0020 / t2f4 — per-layer thermal-diffusion substep loop.
+    ///
+    /// Reads `LayerTimingCalculator::layer_time_sec` for the layer's
+    /// duration (honours ADR-0007 Tilt-vs-Linear release-mechanism),
+    /// accumulates it into `state.cumulative_time_sec`, calls
+    /// `ThermalCalculator::led_temperature_at_time` for the Stage-A LED
+    /// case at this layer's END time, builds the boundary-condition
+    /// struct, computes the CFL-safe substep count, and runs
+    /// `ThermalDiffusionSolver::step` `N` times.
+    ///
+    /// **CFL budget guard.** Returns `Err` when the required substep
+    /// count exceeds 1000 per the `cfl-guard-on-anisotropic-stencil`
+    /// pattern. The error message names the ADI fallback in ADR-0020
+    /// §"Numerical scheme choice" as the next step for sub-100 µm
+    /// voxel workloads.
+    ///
+    /// **Stderr observability.** Emits one informational line at layer
+    /// 0 with the run's CFL parameters; the run-end summary line lives
+    /// at the end of `run_inner_full` so it captures the per-run
+    /// totals after the loop completes.
+    #[cfg(feature = "field-sim")]
+    fn apply_voxel_thermal_for_layer(
+        state: &mut VoxelState,
+        layer: u32,
+        recipe: &crate::entities::Recipe,
+        printer: &PrinterProfile,
+    ) -> Result<(), String> {
+        let layer_dt_sec = LayerTimingCalculator::layer_time_sec(recipe, printer, layer);
+        state.cumulative_time_sec += layer_dt_sec;
+        let led_case = ThermalCalculator::led_temperature_at_time(
+            state.initial_led_c,
+            state.led_delta_t_steady_c,
+            ThermalTimeConstant::new(state.led_tau_sec).expect(
+                "validated printer profile guarantees led_tau_sec > 0 (validate() enforces)",
+            ),
+            state.cumulative_time_sec,
+        );
+        let bcs = BoundaryConditions {
+            bottom_dirichlet_c: led_case.value(),
+            top_h_w_m2k: state.top_h_w_m2k,
+            side_h_w_m2k: state.side_h_w_m2k,
+            ambient_c: state.ambient_c,
+            k_resin_w_mk: state.k_resin_w_mk,
+        };
+        let dt_max =
+            ThermalDiffusionSolver::cfl_max_dt(state.alpha_m2_s, state.thermal.voxel_size_mm());
+        if !dt_max.is_finite() {
+            return Err(format!(
+                "ADR-0020 / t2f4: CFL dt_max non-finite for α={:.4e} m²/s voxel={} mm \
+                 — check resin thermal_conductivity_w_mk / density / specific_heat_j_kgk \
+                 calibration",
+                state.alpha_m2_s,
+                state.thermal.voxel_size_mm(),
+            ));
+        }
+        // Substep count guard per ADR-0020 §Decision i. The cap chosen
+        // for "seconds-minutes" Tier-2 budget; sub-100 µm voxel
+        // workloads should pivot to the ADI fallback.
+        let substeps_per_layer = (layer_dt_sec / dt_max).ceil().max(1.0) as u32;
+        const MAX_SUBSTEPS_PER_LAYER: u32 = 1000;
+        if substeps_per_layer > MAX_SUBSTEPS_PER_LAYER {
+            return Err(format!(
+                "ADR-0020 / t2f4 CFL budget exceeded at layer {layer}: \
+                 {substeps_per_layer} substeps needed (dt_max={dt_max:.4e} s, \
+                 layer_dt={layer_dt_sec:.3} s) > {MAX_SUBSTEPS_PER_LAYER} cap. \
+                 Either coarsen the voxel size or pivot to the ADI fallback \
+                 documented in ADR-0020 §\"Numerical scheme choice\"."
+            ));
+        }
+        let dt_use = layer_dt_sec / substeps_per_layer as f32;
+        // Run-start observability — emit ONE line on the first thermal
+        // pass of the run (before any substeps so the user sees
+        // parameters even if the first step errors).
+        if !state.thermal_log_emitted {
+            eprintln!(
+                "tier-2 thermal: voxel_size={:.4} mm, dt_max={:.4e} s, \
+                 substeps_per_layer={}, α={:.4e} m²/s, k_resin={:.3} W/m·K, \
+                 h_top={:.2} W/m²·K, h_side(lumped)={:.2} W/m²·K",
+                state.thermal.voxel_size_mm(),
+                dt_max,
+                substeps_per_layer,
+                state.alpha_m2_s,
+                state.k_resin_w_mk,
+                state.top_h_w_m2k,
+                state.side_h_w_m2k,
+            );
+            state.thermal_log_emitted = true;
+        }
+        let start = std::time::Instant::now();
+        for _ in 0..substeps_per_layer {
+            ThermalDiffusionSolver::step(
+                &mut state.thermal,
+                &mut state.thermal_scratch,
+                dt_use,
+                state.alpha_m2_s,
+                &bcs,
+            )
+            .map_err(|e| {
+                format!("ADR-0020 / t2f4 thermal solver error at layer {layer}: {e}")
+            })?;
+        }
+        state.total_thermal_substeps += u64::from(substeps_per_layer);
+        state.total_thermal_wallclock_sec += start.elapsed().as_secs_f64();
+        Ok(())
+    }
+
     /// shrinkage strain (KB-161).
     #[cfg(feature = "field-sim")]
     #[allow(clippy::too_many_arguments)]

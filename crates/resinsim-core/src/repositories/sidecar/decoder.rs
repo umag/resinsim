@@ -23,6 +23,7 @@ use ndarray::Array3;
 use crate::values::field_budget::active_budget_bytes;
 use crate::values::{
     CureField, PhotoinitiatorField, StrainField, StrainTensor, StressField, StressTensor,
+    ThermalField,
 };
 
 use super::error::DecodeError;
@@ -32,13 +33,17 @@ use super::format::{
     RSFIELD_MAGIC,
 };
 
-/// Decoded sidecar — the four optional reconstituted voxel fields.
+/// Decoded sidecar — the five optional reconstituted voxel fields.
+/// ADR-0020 / t2f4 added `thermal` which uses a different bbox + voxel
+/// size from the others (vat envelope vs part bbox).
 #[derive(Debug)]
 pub struct DecodedSidecar {
     pub cure: Option<CureField>,
     pub photoinitiator: Option<PhotoinitiatorField>,
     pub strain: Option<StrainField>,
     pub stress: Option<StressField>,
+    /// ADR-0020 / t2f4 — vat-envelope thermal field.
+    pub thermal: Option<ThermalField>,
 }
 
 /// Decode a sidecar from `reader`. The reader must support `Seek`
@@ -127,6 +132,7 @@ impl FieldSidecarDecoder {
             photoinitiator: None,
             strain: None,
             stress: None,
+            thermal: None,
         };
         for d in &descriptors {
             match d.kind {
@@ -195,6 +201,25 @@ impl FieldSidecarDecoder {
                         detail: format!("{e}"),
                     })?;
                     decoded.stress = Some(f);
+                }
+                FieldKind::Thermal => {
+                    // ADR-0020 / t2f4 — scalar f32 per voxel. Different
+                    // dims from cure/strain/stress (vat-envelope vs
+                    // part bbox); the cross-field-dim lock excludes it.
+                    let data = self.read_scalar_field(reader, d)?;
+                    let f = ThermalField::from_persistence_parts(
+                        d.dim_x,
+                        d.dim_y,
+                        d.dim_z,
+                        d.voxel_size_mm,
+                        d.bbox_origin,
+                        data,
+                    )
+                    .map_err(|e| DecodeError::Reconstitution {
+                        field_name: "thermal".into(),
+                        detail: format!("{e}"),
+                    })?;
+                    decoded.thermal = Some(f);
                 }
             }
         }
@@ -509,7 +534,14 @@ fn read_f32_le<R: Read>(reader: &mut R) -> Result<f32, DecodeError> {
 }
 
 fn check_descriptor_dimension_lock(descriptors: &[ParsedDescriptor]) -> Result<(), DecodeError> {
-    let mut iter = descriptors.iter();
+    // ADR-0020 / t2f4: ThermalField has different dims from the other
+    // fields (vat envelope vs part bbox) so it is EXCLUDED from this
+    // cross-field dimension lock. Filter out thermal descriptors here;
+    // they are checked individually by their own consistency invariants
+    // (positive dims + finite voxel_size + budget) earlier.
+    let mut iter = descriptors
+        .iter()
+        .filter(|d| !matches!(d.kind, FieldKind::Thermal));
     let first = match iter.next() {
         None => return Ok(()),
         Some(d) => d,

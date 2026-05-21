@@ -14,7 +14,7 @@ stl_io = "0.8"
 aes = "0.8"
 cbc = "0.1"
 bitvec = "1.0"
-ndarray = { version = "0.16", features = ["serde"], optional = true }
+ndarray = { version = "0.16", features = ["serde", "rayon"], optional = true }
 # t2f3.5 / ADR-0019: voxel field binary sidecar persistence.
 # zstd: vendored libzstd C source via zstd-sys. Pinned to =0.13.x because
 # bit-exact golden files in tests/golden/ depend on deterministic output
