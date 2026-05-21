@@ -16,6 +16,7 @@ use resinsim_core::repositories::{load_from_path, save_with_provenance, Provenan
 use resinsim_core::simulation::PrintSimulation;
 use resinsim_core::values::{
     CureField, PhotoinitiatorField, StrainField, StrainTensor, StressField, StressTensor,
+    ThermalField,
 };
 use std::path::{Path, PathBuf};
 
@@ -106,6 +107,27 @@ fn build_simulation_with_voxel_fields() -> PrintSimulation {
 
     sim.set_strain_stress_fields(strain, stress)
         .expect("install strain+stress");
+
+    // ADR-0020 / t2f4 — install a tiny ThermalField with INDEPENDENT
+    // dims (vat envelope at coarse resolution) and a deterministic
+    // gradient. Distinct dims exercise the encoder/decoder's
+    // exclusion of Thermal from the cross-field-dim lock.
+    let thermal_dims = (5, 4, 6); // intentionally != (nx, ny, nz)
+    let thermal_voxel_mm = 2.0;
+    let thermal_bbox = [10.0, 20.0, 30.0];
+    let thermal_data = Array3::<f32>::from_shape_fn(thermal_dims, |(x, y, z)| {
+        22.0 + (x + y * 5 + z * 20) as f32 * 0.1 // 22..~35 °C gradient
+    });
+    let thermal = ThermalField::from_persistence_parts(
+        thermal_dims.0 as u32,
+        thermal_dims.1 as u32,
+        thermal_dims.2 as u32,
+        thermal_voxel_mm,
+        thermal_bbox,
+        thermal_data,
+    )
+    .expect("thermal ctor");
+    sim.set_thermal_field(thermal);
 
     sim
 }
@@ -203,6 +225,47 @@ fn save_then_load_preserves_stress_field_bytes() {
                     a.components().map(|f| f.to_bits()),
                     b.components().map(|f| f.to_bits()),
                     "stress ({ix},{iy},{iz})"
+                );
+            }
+        }
+    }
+}
+
+/// ADR-0020 / t2f4 — ThermalField round-trips byte-identically through
+/// the sidecar. Dims diverge from the four part-bbox fields (vat
+/// envelope vs part bbox), exercising the cross-field-dim-lock
+/// exclusion path on the decoder.
+#[test]
+fn save_then_load_preserves_thermal_field_bytes() {
+    let dir = tmp_dir("thermal");
+    let path = dir.join("model.sim.json");
+    let sim = build_simulation_with_voxel_fields();
+    save_with_provenance(&path, &sim, &provenance()).expect("save");
+    let loaded = load_from_path(&path).expect("load");
+    let original = sim.thermal_field().expect("source has thermal");
+    let l = loaded.thermal_field().expect("loaded has thermal");
+    assert_eq!(l.dimensions(), original.dimensions());
+    assert_eq!(l.voxel_size_mm(), original.voxel_size_mm());
+    assert_eq!(l.bbox_min_mm(), original.bbox_min_mm());
+    // Thermal dims MUST be allowed to diverge from cure dims — the
+    // sidecar's cross-field-dim lock is excluded for Thermal. This
+    // assertion documents the divergence as load-bearing.
+    let cure_dims = sim.cure_field().expect("cure present").dimensions();
+    let thermal_dims = original.dimensions();
+    assert_ne!(
+        cure_dims, thermal_dims,
+        "thermal dims must diverge from cure dims (vat envelope vs part bbox)"
+    );
+    let (nx, ny, nz) = l.dimensions();
+    for iz in 0..nz {
+        for iy in 0..ny {
+            for ix in 0..nx {
+                let a = original.temperature_at(ix, iy, iz).expect("a");
+                let b = l.temperature_at(ix, iy, iz).expect("b");
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "thermal ({ix},{iy},{iz}): {a} != {b}"
                 );
             }
         }
