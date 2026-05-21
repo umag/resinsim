@@ -23,6 +23,8 @@ pub mod stress_field;
 #[cfg(feature = "field-sim")]
 pub mod stress_tensor;
 pub mod thermal;
+#[cfg(feature = "field-sim")]
+pub mod thermal_field;
 
 pub use area::{AreaDelta, CrossSectionArea};
 pub use cure_depth::{CureDepth, Energy, PenetrationDepth};
@@ -56,3 +58,5 @@ pub use thermal::{
     ScreenHeatFlux, SpecificHeatCapacity, ThermalConductivity, ThermalTimeConstant,
     VatTemperature, VatWallThickness,
 };
+#[cfg(feature = "field-sim")]
+pub use thermal_field::{ThermalField, ThermalFieldError};
