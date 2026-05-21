@@ -104,12 +104,28 @@ value is a user estimate, not a measurement. This gap propagates forward:
 When this KB is updated with new fitted values:
 
 1. Run the integration test
-   `crates/resinsim-core/tests/mars5_ultra_led_case_anchoring.rs` (added by
-   t2f4) — Tier-1 must reproduce LED case time-series within ±0.5 °C across
-   the 722-hour fixture.
-2. Update the `data/printers/elegoo_mars5_ultra.toml` values in lockstep.
-3. Document the recalibration date in the table above with a note about
-   what data informed the change.
+   `crates/resinsim-core/tests/mars5_ultra_led_case_anchoring.rs` (added
+   by t2f4). Three assertions guard the fit:
+   - `mars5_ultra_led_csv_idle_median_matches_kb152_initial_led` — the
+     722-hour fixture's median hourly mean is within ±1.0 °C of
+     `initial_led_c = 27 °C` (idle-standby baseline).
+   - `mars5_ultra_led_csv_active_peak_matches_kb152_plateau` — the
+     fixture's peak hourly mean is within ±1.0 °C of
+     `initial_led_c + led_delta_t_steady_c = 40.5 °C` (plateau).
+   - `thermal_calculator_far_future_matches_kb152_plateau` — the
+     `ThermalCalculator::led_temperature_at_time(10 τ)` formula
+     evaluation matches the plateau prediction within 0.01 °C
+     (formula correctness, not fit drift).
+
+   The bracket-style (idle median + active peak) shape replaces the
+   originally-planned `mean ± 0.5 °C` because the real telemetry is
+   dominated by idle hours (the printer prints intermittently); a
+   single-number mean undershoots the plateau.
+
+2. Update the `data/printers/elegoo_mars5_ultra.toml` values in
+   lockstep.
+3. Document the recalibration date in the table above with a note
+   about what data informed the change.
 
 ## See also
 
