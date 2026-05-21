@@ -49,35 +49,13 @@ telemetry (data/elegoo/, overnight Dec 2025 — Jan 2026) break this model:
 ### Two-stage thermal model
 
 Track LED case temperature (stage A) and vat temperature (stage B) as
-separate coupled surfaces. Formulas in KB-152; summary:
-
-**Stage A — LED case vs time.** Exponential approach from
-`initial_led_c` (idle-standby baseline) to `initial_led_c + led_delta_t_steady_c`
-with time constant `led_tau_sec`:
-
-```
-led_temp(t) = initial_led_c + led_delta_t_steady_c × (1 - exp(-t / led_tau_sec))
-```
-
-**Stage B — vat via coupling factor.** Dimensionless `led_to_vat_coupling`
-∈ [0, 1] captures conduction through the printer frame, radiation through
-the LCD, and convection in the vat:
-
-```
-vat_temp = ambient_c + coupling × (led_temp - ambient_c)
-```
-
-At `coupling = 0` the vat is perfectly isolated (stays at ambient); at
-`coupling = 1` the vat equals the LED case. Mars 5 Ultra's user-estimate
-coupling = 0.71 (KB-152) is the first fitted value; all other printers
-default to `led_to_vat_coupling = 0.5` until measured.
-
-Legacy KB-150 vectors pass through the new API as
-`vat_temperature_at_layer_v2(..., initial_led_c = ambient, coupling = 1.0)`,
-which collapses stage B to identity and makes stage A numerically identical
-to the old single-stage formula. Delegation test:
-`v2_legacy_delegation_matches_kb150_vector` in
-`services/thermal_calculator.rs`.
+separate coupled surfaces. **Formulas, fitted coefficients, telemetry
+provenance, and the legacy KB-150 delegation invariant all live in
+KB-152** (`docs/kb/KB-152-led-vat-thermal-coupling.md`) — lifted out of
+this ADR during the `t2f4-thermal-diffusion` lifecycle on 2026-05-21 so
+KB-152 is the single source of truth. The structural decision (two
+coupled surfaces, not one lumped node) is retained here; the formulas
+are not duplicated.
 
 ### Release mechanism as a PrinterProfile axis
 
