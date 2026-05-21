@@ -14,6 +14,8 @@ pub mod stress_accumulator;
 pub mod suction_detector;
 pub mod support_analyzer;
 pub mod thermal_calculator;
+#[cfg(feature = "field-sim")]
+pub mod thermal_diffusion_solver;
 pub mod uniformity_calculator;
 #[cfg(feature = "field-sim")]
 pub mod voxel_cure_calculator;
@@ -34,6 +36,10 @@ pub use stress_accumulator::StressAccumulator;
 pub use suction_detector::SuctionDetector;
 pub use support_analyzer::{SupportAnalyzer, SupportAssessment};
 pub use thermal_calculator::ThermalCalculator;
+#[cfg(feature = "field-sim")]
+pub use thermal_diffusion_solver::{
+    BoundaryConditions, ThermalDiffusionSolver, ThermalSolverError,
+};
 pub use uniformity_calculator::UniformityCalculator;
 #[cfg(feature = "field-sim")]
 pub use voxel_cure_calculator::{VoxelCureCalculator, VoxelCureError};
