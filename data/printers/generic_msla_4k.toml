@@ -25,6 +25,13 @@ thermal_tau_sec = 1200.0
 # LCD uniformity — KB-120
 lcd_uniformity_variation = 0.22
 
+# Vat-wall + convective BC properties (ADR-0020 / t2f4 thermal diffusion).
+# Generic 4K class — conservative literature midpoints, no per-printer calibration.
+# (Top-level scalars MUST precede any [table] block in TOML.)
+convective_wall_h_w_m2k = 8.0   # still-air natural convection (W/m²·K)
+vat_wall_thickness_mm = 2.0     # typical Al-alloy vat
+vat_wall_k_w_mk = 200.0         # Al alloy thermal conductivity (W/m·K)
+
 # Build envelope (ADR-0012). Typical 8.9" / 4K monoLCD class.
 [build_envelope_mm]
 width_mm = 192.0

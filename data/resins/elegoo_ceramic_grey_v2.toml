@@ -45,6 +45,14 @@ min_safe_temp_c = 15.0
 # estimate. Higher viscosity (KB-141) slows peel, so 30 µm + the longer cure
 # below is the calibrated operating point. Elegoo vendor recommendations for
 # ceramic-filled Mars-class resins.
+
+# Thermal material properties (ADR-0020 / t2f4 thermal diffusion).
+# Ceramic-filled: slightly higher conductivity from the ceramic phase
+# but specific heat tracks the polymer matrix.
+thermal_conductivity_w_mk = 0.25
+specific_heat_j_kgk = 1600.0
+convective_top_h_w_m2k = 10.0   # still-air natural convection at resin top
+
 [recipe]
 layer_height_um = 30.0
 bottom_layer_count = 8

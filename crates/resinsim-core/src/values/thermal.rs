@@ -41,6 +41,42 @@ pub struct ScreenHeatFlux(f32);
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ThermalTimeConstant(f32);
 
+/// Thermal conductivity. Unit: W/(m·K).
+/// Tier-2 thermal diffusion (ADR-0020, t2f4) input — set on `ResinProfile`
+/// (`thermal_conductivity_w_mk`, acrylate ~0.20) and on `PrinterProfile`
+/// (`vat_wall_k_w_mk`, Al ~200). Constructor rejects non-finite / non-
+/// positive values at the trust boundary.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct ThermalConductivity(f32);
+
+/// Mass density. Unit: kg/m³.
+/// Tier-2 thermal diffusion input — set on `ResinProfile.density_kg_m3`
+/// (acrylate ~1100). Constructor rejects non-finite / non-positive values.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct Density(f32);
+
+/// Specific heat capacity. Unit: J/(kg·K).
+/// Tier-2 thermal diffusion input — set on `ResinProfile.specific_heat_j_kgk`
+/// (acrylate ~1700). Constructor rejects non-finite / non-positive values.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct SpecificHeatCapacity(f32);
+
+/// Convective heat-transfer coefficient. Unit: W/(m²·K).
+/// Tier-2 thermal diffusion BC input — set on
+/// `ResinProfile.convective_top_h_w_m2k` (still-air ~10) and on
+/// `PrinterProfile.convective_wall_h_w_m2k` (~8). Constructor rejects
+/// non-finite / negative values (zero is allowed = perfectly insulating).
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct ConvectiveCoefficient(f32);
+
+/// Vat wall thickness. Unit: millimetres.
+/// Tier-2 thermal diffusion BC input — set on
+/// `PrinterProfile.vat_wall_thickness_mm` (~2.0 for typical MSLA vats).
+/// Lumped through `1/h_eff = 1/h_air + wall_thickness/wall_k` per ADR-0020
+/// §Decision iv. Constructor rejects non-finite / non-positive values.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct VatWallThickness(f32);
+
 impl VatTemperature {
     /// Absolute zero. Temperatures below this are unphysical.
     const ABSOLUTE_ZERO_C: f32 = -273.15;
@@ -140,6 +176,96 @@ impl ThermalTimeConstant {
             return Err(format!("thermal time constant must be positive, got {sec}"));
         }
         Ok(Self(sec))
+    }
+
+    pub fn value(&self) -> f32 {
+        self.0
+    }
+}
+
+impl ThermalConductivity {
+    pub fn new(w_mk: f32) -> Result<Self, String> {
+        if !w_mk.is_finite() {
+            return Err(format!("thermal conductivity must be finite, got {w_mk}"));
+        }
+        if w_mk <= 0.0 {
+            return Err(format!(
+                "thermal conductivity must be positive (W/m·K), got {w_mk}"
+            ));
+        }
+        Ok(Self(w_mk))
+    }
+
+    pub fn value(&self) -> f32 {
+        self.0
+    }
+}
+
+impl Density {
+    pub fn new(kg_m3: f32) -> Result<Self, String> {
+        if !kg_m3.is_finite() {
+            return Err(format!("density must be finite, got {kg_m3}"));
+        }
+        if kg_m3 <= 0.0 {
+            return Err(format!("density must be positive (kg/m³), got {kg_m3}"));
+        }
+        Ok(Self(kg_m3))
+    }
+
+    pub fn value(&self) -> f32 {
+        self.0
+    }
+}
+
+impl SpecificHeatCapacity {
+    pub fn new(j_kgk: f32) -> Result<Self, String> {
+        if !j_kgk.is_finite() {
+            return Err(format!("specific heat capacity must be finite, got {j_kgk}"));
+        }
+        if j_kgk <= 0.0 {
+            return Err(format!(
+                "specific heat capacity must be positive (J/kg·K), got {j_kgk}"
+            ));
+        }
+        Ok(Self(j_kgk))
+    }
+
+    pub fn value(&self) -> f32 {
+        self.0
+    }
+}
+
+impl ConvectiveCoefficient {
+    pub fn new(w_m2k: f32) -> Result<Self, String> {
+        if !w_m2k.is_finite() {
+            return Err(format!(
+                "convective coefficient must be finite, got {w_m2k}"
+            ));
+        }
+        if w_m2k < 0.0 {
+            return Err(format!(
+                "convective coefficient must be non-negative (W/m²·K), got {w_m2k}"
+            ));
+        }
+        Ok(Self(w_m2k))
+    }
+
+    pub fn value(&self) -> f32 {
+        self.0
+    }
+}
+
+impl VatWallThickness {
+    pub fn new(mm: f32) -> Result<Self, String> {
+        if !mm.is_finite() {
+            return Err(format!("vat wall thickness must be finite, got {mm}"));
+        }
+        if mm <= 0.0 {
+            return Err(format!(
+                "vat wall thickness must be positive (mm), got {mm}"
+            ));
+        }
+        Ok(Self(mm))
     }
 
     pub fn value(&self) -> f32 {
@@ -302,6 +428,79 @@ mod tests {
                 .expect("test fixture: 1200.0 s is in ThermalTimeConstant domain")
                 .value(),
             1200.0
+        );
+    }
+
+    // --- ADR-0020 / t2f4 typed-boundary VOs ---
+
+    #[test]
+    fn thermal_conductivity_rejects_nan_and_nonpositive() {
+        assert!(ThermalConductivity::new(f32::NAN).is_err());
+        assert!(ThermalConductivity::new(0.0).is_err());
+        assert!(ThermalConductivity::new(-0.1).is_err());
+        assert_eq!(
+            ThermalConductivity::new(0.20)
+                .expect("test fixture: 0.20 W/m·K in ThermalConductivity domain")
+                .value(),
+            0.20
+        );
+    }
+
+    #[test]
+    fn density_rejects_nan_and_nonpositive() {
+        assert!(Density::new(f32::NAN).is_err());
+        assert!(Density::new(0.0).is_err());
+        assert!(Density::new(-1.0).is_err());
+        assert_eq!(
+            Density::new(1100.0)
+                .expect("test fixture: 1100 kg/m³ in Density domain")
+                .value(),
+            1100.0
+        );
+    }
+
+    #[test]
+    fn specific_heat_capacity_rejects_nan_and_nonpositive() {
+        assert!(SpecificHeatCapacity::new(f32::NAN).is_err());
+        assert!(SpecificHeatCapacity::new(0.0).is_err());
+        assert!(SpecificHeatCapacity::new(-1.0).is_err());
+        assert_eq!(
+            SpecificHeatCapacity::new(1700.0)
+                .expect("test fixture: 1700 J/kg·K in SpecificHeatCapacity domain")
+                .value(),
+            1700.0
+        );
+    }
+
+    #[test]
+    fn convective_coefficient_rejects_nan_and_negative_but_accepts_zero() {
+        assert!(ConvectiveCoefficient::new(f32::NAN).is_err());
+        assert!(ConvectiveCoefficient::new(-0.1).is_err());
+        // Zero is allowed — represents a perfectly insulating boundary.
+        assert_eq!(
+            ConvectiveCoefficient::new(0.0)
+                .expect("test fixture: zero ConvectiveCoefficient = insulated BC")
+                .value(),
+            0.0
+        );
+        assert_eq!(
+            ConvectiveCoefficient::new(10.0)
+                .expect("test fixture: 10 W/m²·K in ConvectiveCoefficient domain")
+                .value(),
+            10.0
+        );
+    }
+
+    #[test]
+    fn vat_wall_thickness_rejects_nan_and_nonpositive() {
+        assert!(VatWallThickness::new(f32::NAN).is_err());
+        assert!(VatWallThickness::new(0.0).is_err());
+        assert!(VatWallThickness::new(-1.0).is_err());
+        assert_eq!(
+            VatWallThickness::new(2.0)
+                .expect("test fixture: 2.0 mm in VatWallThickness domain")
+                .value(),
+            2.0
         );
     }
 }

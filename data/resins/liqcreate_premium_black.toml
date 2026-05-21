@@ -37,6 +37,14 @@ min_safe_temp_c = 15.0
 # Recipe (ADR-0005 Axis 2b) — Liqcreate's published recommended recipe for Premium
 # Black on 4K-class printers. Higher viscosity (300 mPa·s) argues for slower lift.
 # Source: Liqcreate technical data sheet + KB-100 Dp/Ec for exposure calibration.
+
+# Thermal material properties (ADR-0020 / t2f4 thermal diffusion).
+# Liqcreate Premium Black — measured values not published; literature
+# midpoints for acrylate-based photopolymer pigmented with carbon black.
+thermal_conductivity_w_mk = 0.20
+specific_heat_j_kgk = 1700.0
+convective_top_h_w_m2k = 10.0   # still-air natural convection at resin top
+
 [recipe]
 layer_height_um = 50.0
 bottom_layer_count = 6

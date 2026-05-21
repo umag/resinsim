@@ -212,6 +212,33 @@ pub struct ResinProfile {
     #[serde(default)]
     pub(crate) shrinkage_anisotropy_z_ratio: Option<f32>,
 
+    /// Thermal conductivity. Unit: W/(m·K). ADR-0020 / KB-152. Tier-2
+    /// thermal diffusion (t2f4) input — used by the explicit FTCS solver
+    /// to advance the heat equation across the resin domain. Literature
+    /// midpoint for acrylate photopolymer is ~0.20 W/m·K.
+    /// **Optional on the struct** so cross-feature TOML interchange holds
+    /// (default-feature builds parse legacy TOMLs without this field);
+    /// **REQUIRED at validate() time when the `field-sim` Cargo feature
+    /// is on** — None then is a typed validate-time error per ADR-0020
+    /// §Consequences.
+    #[serde(default)]
+    pub(crate) thermal_conductivity_w_mk: Option<f32>,
+
+    /// Specific heat capacity. Unit: J/(kg·K). ADR-0020. Literature
+    /// midpoint for acrylate photopolymer is ~1700 J/kg·K. Same
+    /// Option-on-struct / required-under-field-sim semantics as
+    /// `thermal_conductivity_w_mk`.
+    #[serde(default)]
+    pub(crate) specific_heat_j_kgk: Option<f32>,
+
+    /// Convective heat-transfer coefficient at the resin-air free surface.
+    /// Unit: W/(m²·K). ADR-0020. Drives the Newton-cooling boundary
+    /// condition at the top face of the thermal field. Still-air natural
+    /// convection ~10 W/m²·K is the literature midpoint. Same Option-on-
+    /// struct / required-under-field-sim semantics.
+    #[serde(default)]
+    pub(crate) convective_top_h_w_m2k: Option<f32>,
+
     /// Concrete operating point for this resin (ADR-0005 Axis 2b).
     /// **Required** — no serde default. A legacy resin TOML missing `[recipe]` fails
     /// to deserialise, surfacing the migration loudly per ADR-0005 Consequences.
@@ -475,6 +502,55 @@ impl ResinProfile {
                  and > 0.0 (got {r})"
             ));
         }
+        // ADR-0020 / t2f4: thermal material fields are Option<f32> on the
+        // struct so cross-feature TOML interchange holds, but each present
+        // value must pass the typed-boundary VO constructor's bounds (NaN +
+        // sign). Under `field-sim`, None is ALSO rejected — see the
+        // cfg-gated block below.
+        if let Some(k) = self.thermal_conductivity_w_mk {
+            crate::values::ThermalConductivity::new(k).map_err(|e| {
+                format!("thermal_conductivity_w_mk: {e}")
+            })?;
+        }
+        if let Some(cp) = self.specific_heat_j_kgk {
+            crate::values::SpecificHeatCapacity::new(cp).map_err(|e| {
+                format!("specific_heat_j_kgk: {e}")
+            })?;
+        }
+        if let Some(h) = self.convective_top_h_w_m2k {
+            crate::values::ConvectiveCoefficient::new(h).map_err(|e| {
+                format!("convective_top_h_w_m2k: {e}")
+            })?;
+        }
+        #[cfg(feature = "field-sim")]
+        {
+            if self.thermal_conductivity_w_mk.is_none() {
+                return Err(
+                    "thermal_conductivity_w_mk is required under the field-sim \
+                     feature (ADR-0020 / KB-152). Literature midpoint for \
+                     acrylate photopolymer is ~0.20 W/m·K — set it in the \
+                     resin TOML."
+                        .into(),
+                );
+            }
+            if self.specific_heat_j_kgk.is_none() {
+                return Err(
+                    "specific_heat_j_kgk is required under the field-sim \
+                     feature (ADR-0020). Literature midpoint for acrylate \
+                     photopolymer is ~1700 J/kg·K — set it in the resin TOML."
+                        .into(),
+                );
+            }
+            if self.convective_top_h_w_m2k.is_none() {
+                return Err(
+                    "convective_top_h_w_m2k is required under the field-sim \
+                     feature (ADR-0020). Still-air natural convection ~10 \
+                     W/m²·K is the literature midpoint — set it in the resin \
+                     TOML."
+                        .into(),
+                );
+            }
+        }
         // Both fields are validated finite above, so `>=` is safe on f32.
         if self.min_safe_temp_c >= self.degradation_temp_c {
             return Err(format!(
@@ -521,6 +597,12 @@ impl ResinProfile {
             youngs_modulus_mpa: None, // KB-163: deliberately uncalibrated — see data/resins/elegoo_ceramic_grey_v2.toml comment
             poissons_ratio: None,     // KB-163: deliberately uncalibrated
             shrinkage_anisotropy_z_ratio: None, // KB-164: uncalibrated; falls back to 1.5
+            // ADR-0020 / t2f4: thermal material properties. Ceramic-filled
+            // resin has slightly higher conductivity from the ceramic phase
+            // but specific heat tracks the polymer matrix.
+            thermal_conductivity_w_mk: Some(0.25), // higher than neat acrylate due to ceramic filler
+            specific_heat_j_kgk: Some(1600.0),     // ceramic-filled, slightly lower than neat acrylate
+            convective_top_h_w_m2k: Some(10.0),    // still-air natural convection
             recipe: Recipe::elegoo_ceramic_grey(),
         }
     }
@@ -547,6 +629,10 @@ impl ResinProfile {
             youngs_modulus_mpa: Some(2000.0), // KB-163: literature-midpoint photopolymer modulus (Premium-Black-class)
             poissons_ratio: Some(0.35),       // KB-163: standard thermoset
             shrinkage_anisotropy_z_ratio: Some(1.5), // KB-164: layer-by-layer Z constraint
+            // ADR-0020 / t2f4: literature midpoint for neat acrylate photopolymer.
+            thermal_conductivity_w_mk: Some(0.20),
+            specific_heat_j_kgk: Some(1700.0),
+            convective_top_h_w_m2k: Some(10.0),
             recipe: Recipe::generic_standard(),
         }
     }
@@ -1140,6 +1226,13 @@ mod tests {
     /// table is appended. Without this split, an append-to-end pattern would place
     /// extra root fields inside the [recipe] table and they would not hit ResinProfile.
     fn legacy_toml_root_without_thermal_thresholds() -> String {
+        // ADR-0020 / t2f4: thermal material fields are REQUIRED under
+        // field-sim. They're optional on the struct so default-feature
+        // tests still parse the same fixture; under field-sim they're
+        // present so validate() passes. Tests targeting "missing optional
+        // KB-150 thermal thresholds" still assert their absence — those
+        // are `degradation_temp_c` / `min_safe_temp_c`, not the t2f4
+        // material properties.
         r#"
 name = "Legacy Resin"
 penetration_depth_um = 170.0
@@ -1152,6 +1245,9 @@ viscosity_mpa_s = 200.0
 reference_temp_c = 25.0
 activation_energy_kj_mol = 52.0
 density_g_cm3 = 1.1
+thermal_conductivity_w_mk = 0.20
+specific_heat_j_kgk = 1700.0
+convective_top_h_w_m2k = 10.0
 "#
         .to_string()
     }

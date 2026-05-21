@@ -54,7 +54,15 @@ z_stiffness_n_per_mm = 460.0
 delta_t_steady_c = 10.0
 thermal_tau_sec = 1200.0
 lcd_uniformity_variation = 0.0
-{xy_line}{z_line}"#
+# ADR-0020 / t2f4: required under field-sim.
+convective_wall_h_w_m2k = 8.0
+vat_wall_thickness_mm = 2.0
+vat_wall_k_w_mk = 200.0
+{xy_line}{z_line}[build_envelope_mm]
+width_mm = 192.0
+depth_mm = 120.0
+max_z_mm = 200.0
+"#
     );
     let p: PrinterProfile = toml::from_str(&toml_text).expect("hand-rolled TOML must parse");
     p.validate().expect("hand-rolled profile must validate");

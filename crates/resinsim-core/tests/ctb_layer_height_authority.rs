@@ -55,6 +55,10 @@ viscosity_mpa_s = 200.0
 reference_temp_c = 25.0
 activation_energy_kj_mol = 52.0
 density_g_cm3 = 1.1
+# ADR-0020 / t2f4: required under field-sim.
+thermal_conductivity_w_mk = 0.20
+specific_heat_j_kgk = 1700.0
+convective_top_h_w_m2k = 10.0
 
 [recipe]
 layer_height_um = {recipe_um}

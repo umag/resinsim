@@ -35,12 +35,6 @@ led_delta_t_steady_c = 13.5   # plateau ~40.5 °C − idle ~27 °C
 led_tau_sec = 4000.0          # 3–4 h to 95 % of plateau (3τ ≈ 3–4 h)
 led_to_vat_coupling = 0.71    # user estimate (no vat sensor); recalibrate when added
 
-# Build envelope (ADR-0012). Elegoo published spec.
-[build_envelope_mm]
-width_mm = 153.36
-depth_mm = 77.76
-max_z_mm = 165.0
-
 # Light crosstalk σ values (ADR-0018 / t2f2). Both ESTIMATE pending Athena II
 # beam-profile fit. σ values are in physical µm; converted at runtime to
 # per-axis voxel-index kernels via the storage's anisotropic conversion factors.
@@ -59,5 +53,24 @@ max_z_mm = 165.0
 #
 # Both values flagged ESTIMATE — re-fit jointly from Athena II beam-profile
 # measurement campaign (follow-up ticket).
+#
+# NB: discovered during t2f4 — these were previously placed AFTER
+# [build_envelope_mm] which silently nested them inside that table (TOML
+# scoping rule). The values were unread by serde; t2f2 crosstalk has been
+# effectively OFF for Mars 5 Ultra since shipping. Restoration here AND
+# co-located with the new t2f4 thermal scalars to prevent regression.
 crosstalk_sigma_xy_um = 8.0
 crosstalk_sigma_z_um = 40.0
+
+# Vat-wall + convective BC properties (ADR-0020 / t2f4 thermal diffusion).
+# Mars 5 Ultra has a typical Al-alloy vat frame.
+# (Top-level scalars MUST precede any [table] block in TOML.)
+convective_wall_h_w_m2k = 8.0   # still-air natural convection (W/m²·K)
+vat_wall_thickness_mm = 2.0     # typical Al-alloy vat
+vat_wall_k_w_mk = 200.0         # Al alloy thermal conductivity (W/m·K)
+
+# Build envelope (ADR-0012). Elegoo published spec.
+[build_envelope_mm]
+width_mm = 153.36
+depth_mm = 77.76
+max_z_mm = 165.0

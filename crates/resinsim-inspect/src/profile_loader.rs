@@ -226,6 +226,14 @@ z_stiffness_n_per_mm = 460.0
 delta_t_steady_c = 10.0
 thermal_tau_sec = 1200.0
 lcd_uniformity_variation = 0.22
+# ADR-0020 / t2f4: required under field-sim.
+convective_wall_h_w_m2k = 8.0
+vat_wall_thickness_mm = 2.0
+vat_wall_k_w_mk = 200.0
+[build_envelope_mm]
+width_mm = 192.0
+depth_mm = 120.0
+max_z_mm = 200.0
 "#,
         )
         .expect("write printer toml");
@@ -252,6 +260,10 @@ activation_energy_kj_mol = 52.0
 density_g_cm3 = 1.1
 degradation_temp_c = 50.0
 min_safe_temp_c = 15.0
+# ADR-0020 / t2f4: required under field-sim.
+thermal_conductivity_w_mk = 0.20
+specific_heat_j_kgk = 1700.0
+convective_top_h_w_m2k = 10.0
 
 [recipe]
 layer_height_um = 50.0
@@ -352,6 +364,14 @@ z_stiffness_n_per_mm = 460.0
 delta_t_steady_c = 10.0
 thermal_tau_sec = 1200.0
 lcd_uniformity_variation = 0.22
+# ADR-0020 / t2f4: required under field-sim.
+convective_wall_h_w_m2k = 8.0
+vat_wall_thickness_mm = 2.0
+vat_wall_k_w_mk = 200.0
+[build_envelope_mm]
+width_mm = 192.0
+depth_mm = 120.0
+max_z_mm = 200.0
 "#,
         )
         .expect("write toml");

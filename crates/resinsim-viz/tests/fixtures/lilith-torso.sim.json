@@ -45,7 +45,10 @@
         "width_mm": 192.0,
         "depth_mm": 120.0,
         "max_z_mm": 200.0
-      }
+      },
+      "convective_wall_h_w_m2k": 8.0,
+      "vat_wall_thickness_mm": 2.0,
+      "vat_wall_k_w_mk": 200.0
     },
     "layers": [
       {

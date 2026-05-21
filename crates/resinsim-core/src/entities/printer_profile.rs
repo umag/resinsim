@@ -265,6 +265,32 @@ pub struct PrinterProfile {
     /// `#[serde(default)]`.
     #[serde(default)]
     pub(crate) crosstalk_sigma_z_um: Option<f32>,
+
+    /// Convective heat-transfer coefficient at the vat outer walls. Unit:
+    /// W/(m²·K). ADR-0020 / t2f4. Drives the Newton-cooling boundary
+    /// condition at the four side faces of the thermal field, lumped
+    /// through `1/h_eff = 1/h_air + wall_thickness/wall_k`. Still-air
+    /// natural convection ~8 W/m²·K is the literature midpoint.
+    /// **Optional on the struct** so cross-feature TOML interchange holds;
+    /// **REQUIRED at validate() time under the `field-sim` feature** —
+    /// None then is a typed validate-time error per ADR-0020 §Consequences.
+    #[serde(default)]
+    pub(crate) convective_wall_h_w_m2k: Option<f32>,
+
+    /// Vat wall thickness. Unit: mm. ADR-0020. Lumped into the side-face
+    /// convective BC via the series-resistance formula above. Typical
+    /// MSLA vat walls are ~2 mm of Al alloy. Same Option-on-struct /
+    /// required-under-field-sim semantics.
+    #[serde(default)]
+    pub(crate) vat_wall_thickness_mm: Option<f32>,
+
+    /// Vat wall thermal conductivity. Unit: W/(m·K). ADR-0020. Used in
+    /// the side-face convective BC's series-resistance formula. Al alloy
+    /// ~200 W/m·K is the literature midpoint for Mars/Saturn-class
+    /// printers. Same Option-on-struct / required-under-field-sim
+    /// semantics.
+    #[serde(default)]
+    pub(crate) vat_wall_k_w_mk: Option<f32>,
 }
 
 impl PrinterProfile {
@@ -326,6 +352,18 @@ impl PrinterProfile {
     /// Per-printer voxel cure resolution override (mm). See struct doc.
     pub fn voxel_cure_resolution_mm(&self) -> Option<f32> {
         self.voxel_cure_resolution_mm
+    }
+    /// Convective heat-transfer coefficient at the vat outer walls. ADR-0020.
+    pub fn convective_wall_h_w_m2k(&self) -> Option<f32> {
+        self.convective_wall_h_w_m2k
+    }
+    /// Vat wall thickness (mm). ADR-0020.
+    pub fn vat_wall_thickness_mm(&self) -> Option<f32> {
+        self.vat_wall_thickness_mm
+    }
+    /// Vat wall thermal conductivity (W/m·K). ADR-0020.
+    pub fn vat_wall_k_w_mk(&self) -> Option<f32> {
+        self.vat_wall_k_w_mk
     }
     /// Effective voxel cure resolution after applying the precedence chain
     /// **without** the CLI level — i.e. the value the simulation uses when
@@ -454,6 +492,59 @@ impl PrinterProfile {
                 ));
             }
         }
+        // ADR-0020 / t2f4: thermal vat-wall + convective BC fields. Same
+        // Option-on-struct shape as the rest of the optional KB-derived
+        // fields; each present value passes through its typed-boundary VO
+        // constructor. NaN-two-layer-defence (finite check first).
+        if let Some(h) = self.convective_wall_h_w_m2k {
+            crate::values::ConvectiveCoefficient::new(h)
+                .map_err(|e| format!("convective_wall_h_w_m2k: {e}"))?;
+        }
+        if let Some(t) = self.vat_wall_thickness_mm {
+            crate::values::VatWallThickness::new(t)
+                .map_err(|e| format!("vat_wall_thickness_mm: {e}"))?;
+        }
+        if let Some(k) = self.vat_wall_k_w_mk {
+            crate::values::ThermalConductivity::new(k)
+                .map_err(|e| format!("vat_wall_k_w_mk: {e}"))?;
+        }
+        #[cfg(feature = "field-sim")]
+        {
+            if self.build_envelope_mm.is_none() {
+                return Err(
+                    "build_envelope_mm is required under the field-sim feature \
+                     (ADR-0020 §Decision ii — ThermalField is anchored to the \
+                     vat envelope). Add `[build_envelope_mm]` block to the \
+                     printer TOML with x_mm, y_mm, z_mm."
+                        .into(),
+                );
+            }
+            if self.convective_wall_h_w_m2k.is_none() {
+                return Err(
+                    "convective_wall_h_w_m2k is required under the field-sim \
+                     feature (ADR-0020). Still-air natural convection ~8 \
+                     W/m²·K is the literature midpoint — set it in the \
+                     printer TOML."
+                        .into(),
+                );
+            }
+            if self.vat_wall_thickness_mm.is_none() {
+                return Err(
+                    "vat_wall_thickness_mm is required under the field-sim \
+                     feature (ADR-0020). Typical MSLA vat walls are ~2.0 mm \
+                     of Al alloy — set it in the printer TOML."
+                        .into(),
+                );
+            }
+            if self.vat_wall_k_w_mk.is_none() {
+                return Err(
+                    "vat_wall_k_w_mk is required under the field-sim feature \
+                     (ADR-0020). Al alloy ~200 W/m·K is the literature \
+                     midpoint — set it in the printer TOML."
+                        .into(),
+                );
+            }
+        }
         Ok(())
     }
 
@@ -503,6 +594,11 @@ impl PrinterProfile {
             // mean-free-path (20-80 µm).
             crosstalk_sigma_xy_um: Some(8.0),
             crosstalk_sigma_z_um: Some(40.0),
+            // ADR-0020 / t2f4: vat-wall + convective BC properties.
+            // Mars 5 Ultra has a typical Al-alloy vat frame.
+            convective_wall_h_w_m2k: Some(8.0),  // still-air natural convection
+            vat_wall_thickness_mm: Some(2.0),    // typical Al-alloy vat
+            vat_wall_k_w_mk: Some(200.0),        // Al alloy thermal conductivity
         }
     }
 
@@ -542,6 +638,12 @@ impl PrinterProfile {
             // crosstalk modelling.
             crosstalk_sigma_xy_um: None,
             crosstalk_sigma_z_um: None,
+            // ADR-0020 / t2f4: vat-wall + convective BC properties.
+            // Conservative literature midpoints — no per-printer calibration
+            // for the generic 4K class.
+            convective_wall_h_w_m2k: Some(8.0),
+            vat_wall_thickness_mm: Some(2.0),
+            vat_wall_k_w_mk: Some(200.0),
         }
     }
 }
@@ -697,6 +799,11 @@ mod tests {
     // --- Parse-path (serde) tests locking that NaN bounds are caught by validate(). ---
 
     fn valid_printer_toml() -> String {
+        // SCALARS ONLY — no table headers — so callers can append additional
+        // scalar fields OR a `[build_envelope_mm]` table without TOML
+        // parse-scoping conflicts. ADR-0020 / t2f4: the new thermal
+        // scalars are included so this TOML satisfies validate() under
+        // field-sim once a `[build_envelope_mm]` block is also appended.
         r#"
 name = "Test Printer"
 led_power_mw_cm2 = 4.0
@@ -709,14 +816,27 @@ z_stiffness_n_per_mm = 460.0
 delta_t_steady_c = 10.0
 thermal_tau_sec = 1200.0
 lcd_uniformity_variation = 0.22
+convective_wall_h_w_m2k = 8.0
+vat_wall_thickness_mm = 2.0
+vat_wall_k_w_mk = 200.0
 "#
         .to_string()
     }
 
+    /// `valid_printer_toml()` + an inline `[build_envelope_mm]` table.
+    /// ADR-0020 / t2f4: a complete field-sim-valid fixture.
+    fn valid_printer_toml_with_envelope() -> String {
+        valid_printer_toml()
+            + "[build_envelope_mm]\nwidth_mm = 192.0\ndepth_mm = 120.0\nmax_z_mm = 200.0\n"
+    }
+
     #[test]
     fn parse_toml_then_validate_accepts_valid() {
-        let p: PrinterProfile =
-            toml::from_str(&valid_printer_toml()).expect("valid printer TOML must parse");
+        // ADR-0020 / t2f4: scalars-only fixture is valid under default-feature
+        // builds; field-sim builds additionally require a build_envelope_mm
+        // block. Cover both via the with_envelope helper.
+        let p: PrinterProfile = toml::from_str(&valid_printer_toml_with_envelope())
+            .expect("valid printer TOML must parse");
         p.validate().expect("valid TOML must satisfy validate()");
     }
 
@@ -791,7 +911,8 @@ lcd_uniformity_variation = 0.22
     #[test]
     fn legacy_toml_gets_conservative_led_defaults() {
         // Valid TOML without led_* fields → serde defaults kick in (10.0, 1200, 0.5).
-        let p: PrinterProfile = toml::from_str(&valid_printer_toml())
+        // Use the with_envelope variant so field-sim validate() also passes.
+        let p: PrinterProfile = toml::from_str(&valid_printer_toml_with_envelope())
             .expect("legacy printer TOML without led_* fields must parse");
         assert_eq!(p.led_delta_t_steady_c(), 10.0);
         assert_eq!(p.led_tau_sec(), 1200.0);
@@ -893,19 +1014,35 @@ lcd_uniformity_variation = 0.22
     #[test]
     fn legacy_toml_without_build_envelope_defaults_to_none() {
         // Legacy TOML profiles (athena_ii in v1) deserialise with
-        // build_envelope_mm = None via #[serde(default)]. validate() must
-        // accept None — the field is Optional per ADR-0012.
+        // build_envelope_mm = None via #[serde(default)]. The field is
+        // Optional per ADR-0012; ADR-0020 / t2f4 makes it REQUIRED under
+        // the field-sim Cargo feature only — default-feature builds still
+        // accept None.
         let p: PrinterProfile = toml::from_str(&valid_printer_toml())
             .expect("valid printer TOML without build_envelope_mm must parse");
         assert!(p.build_envelope_mm().is_none());
-        p.validate()
-            .expect("None build_envelope must satisfy validate() (Option per ADR-0012)");
+        #[cfg(not(feature = "field-sim"))]
+        {
+            p.validate()
+                .expect("None build_envelope must satisfy validate() under default builds");
+        }
+        #[cfg(feature = "field-sim")]
+        {
+            let err = p.validate().expect_err(
+                "field-sim build must reject None build_envelope per ADR-0020 §Decision ii",
+            );
+            assert!(
+                err.contains("build_envelope_mm")
+                    && err.contains("field-sim"),
+                "error must name the field + the gating feature: {err}"
+            );
+        }
     }
 
     #[test]
     fn toml_with_explicit_build_envelope_round_trips() {
         let toml_str = valid_printer_toml()
-            + "\n[build_envelope_mm]\nwidth_mm = 153.36\ndepth_mm = 77.76\nmax_z_mm = 165.0\n";
+            + "[build_envelope_mm]\nwidth_mm = 153.36\ndepth_mm = 77.76\nmax_z_mm = 165.0\n";
         let p: PrinterProfile =
             toml::from_str(&toml_str).expect("explicit build_envelope must parse");
         let env = p
@@ -1054,7 +1191,7 @@ lcd_uniformity_variation = 0.22
 
     #[test]
     fn legacy_toml_without_voxel_cure_resolution_defaults_to_none() {
-        let p: PrinterProfile = toml::from_str(&valid_printer_toml())
+        let p: PrinterProfile = toml::from_str(&valid_printer_toml_with_envelope())
             .expect("legacy TOML without voxel_cure_resolution_mm must parse");
         assert_eq!(p.voxel_cure_resolution_mm(), None);
         p.validate()
@@ -1063,7 +1200,12 @@ lcd_uniformity_variation = 0.22
 
     #[test]
     fn toml_with_explicit_voxel_cure_resolution_round_trips() {
-        let toml_str = valid_printer_toml() + "voxel_cure_resolution_mm = 0.1\n";
+        // voxel_cure_resolution_mm = 0.1 is a top-level scalar so it must
+        // precede any [table] block. Append to scalars-only TOML then add
+        // the build_envelope_mm table after.
+        let toml_str = valid_printer_toml()
+            + "voxel_cure_resolution_mm = 0.1\n"
+            + "[build_envelope_mm]\nwidth_mm = 192.0\ndepth_mm = 120.0\nmax_z_mm = 200.0\n";
         let p: PrinterProfile =
             toml::from_str(&toml_str).expect("explicit voxel_cure_resolution_mm must parse");
         assert_eq!(p.voxel_cure_resolution_mm(), Some(0.1));

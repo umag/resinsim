@@ -34,6 +34,13 @@ min_safe_temp_c = 15.0
 
 # Recipe (ADR-0005 Axis 2b) — concrete operating point for this resin
 # Matches the recipe previously baked into generic_msla_4k (KB-171 RERF defaults).
+
+# Thermal material properties (ADR-0020 / t2f4 thermal diffusion).
+# Literature midpoints for neat acrylate photopolymer.
+thermal_conductivity_w_mk = 0.20
+specific_heat_j_kgk = 1700.0
+convective_top_h_w_m2k = 10.0   # still-air natural convection at resin top
+
 [recipe]
 layer_height_um = 50.0
 bottom_layer_count = 6

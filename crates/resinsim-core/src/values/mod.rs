@@ -52,5 +52,7 @@ pub use stress_field::{StressField, StressFieldError};
 #[cfg(feature = "field-sim")]
 pub use stress_tensor::{StressTensor, StressTensorError};
 pub use thermal::{
-    AmbientTemperature, InitialLedTemperature, ScreenHeatFlux, ThermalTimeConstant, VatTemperature,
+    AmbientTemperature, ConvectiveCoefficient, Density, InitialLedTemperature,
+    ScreenHeatFlux, SpecificHeatCapacity, ThermalConductivity, ThermalTimeConstant,
+    VatTemperature, VatWallThickness,
 };
