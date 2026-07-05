@@ -1,163 +1,240 @@
-use serde::{Deserialize, Serialize};
+//! Athena II analytic force-log ingest. See ADR-0021.
+//!
+//! NanoDLP writes a real print log as a **tall** CSV (`analytic-*.csv.gz`,
+//! optionally embedded in a `.nanodlp`): one measurement per row, three columns
+//!
+//! ```text
+//! ID,T,V
+//! 1773757584788963800,6,-341.7
+//! ```
+//!
+//! - `ID` — nanosecond-epoch timestamp of the sample
+//! - `T`  — channel code (0–17); see the `CH_*` constants
+//! - `V`  — the value for that channel
+//!
+//! This is the schema the real Athena FSS (force-sensor system) emits, decoded
+//! from the `mikeporterdev/nanodlp-analyzer` channel map. The pressure channel
+//! (`CH_PRESSURE` = 6) is the load-cell reading used for peel-force validation.
+//!
+//! # Sign convention
+//!
+//! Under peel/separation the plate pulls *up* on the load cell, which reads as a
+//! **negative** raw count (samples run ~ −340). [`peel_signal`] flips the sign so
+//! a larger peel corresponds to a larger positive number. The value is still in
+//! raw load-cell counts, **not Newtons** — the absolute counts→Newton gain is
+//! unknown per printer and is fitted by
+//! [`ProfileCalibrator`](crate::services::ProfileCalibrator); comparison against
+//! the simulated peel force is done in a normalized space
+//! ([`ForceComparator`](crate::services::ForceComparator)).
 
-/// Single force measurement from Athena II sensor.
-/// Matches the CSV schema from the sensor recommendations doc.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForceRecord {
-    pub layer: u32,
-    pub force_n: f32,
-    pub timestamp_ms: u64,
-    #[serde(default)]
-    pub lift_speed_mm_min: Option<f32>,
-    #[serde(default)]
-    pub area_mm2: Option<f64>,
-    #[serde(default)]
-    pub vat_temp_c: Option<f32>,
-    #[serde(default)]
-    pub z_commanded_um: Option<f32>,
-    #[serde(default)]
-    pub z_actual_um: Option<f32>,
-    #[serde(default)]
-    pub uv_intensity_mw_cm2: Option<f32>,
+use std::io::Read;
+use std::path::Path;
+
+// --- Channel codes (nanodlp-analyzer ChartDataGenerator map) ---
+/// Layer height (mm). Emitted once per layer — used as a layer boundary marker.
+pub const CH_LAYER_HEIGHT: u8 = 0;
+pub const CH_SOLID_AREA: u8 = 1;
+pub const CH_SPEED: u8 = 4;
+pub const CH_CURE_TIME: u8 = 5;
+/// Pressure / FSS load-cell reading (peel force signal, raw counts).
+pub const CH_PRESSURE: u8 = 6;
+/// Resin temperature (inside), °C.
+pub const CH_RESIN_TEMP: u8 = 7;
+/// Ambient temperature (outside), °C.
+pub const CH_AMBIENT_TEMP: u8 = 8;
+pub const CH_LAYER_TIME: u8 = 9;
+pub const CH_LIFT_HEIGHT: u8 = 10;
+pub const CH_DYNAMIC_WAIT: u8 = 17;
+
+/// Upper bound on decompressed analytic bytes (gzip-bomb guard). A full real
+/// print is ~4 MB compressed / tens of MB raw; 512 MiB is generous headroom.
+pub const MAX_ANALYTIC_DECOMPRESSED: u64 = 512 * 1024 * 1024;
+
+/// Flip the raw load-cell sign so peel reads positive. Result is in raw counts,
+/// not Newtons (see module docs).
+pub fn peel_signal(raw: f64) -> f64 {
+    -raw
 }
 
-/// Statistics computed from a set of force records.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForceStats {
-    pub count: usize,
-    pub mean_n: f32,
-    pub max_n: f32,
-    pub max_layer: u32,
-    pub min_n: f32,
-    pub std_dev_n: f32,
+/// One decoded row of the analytic log.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AnalyticSample {
+    pub ts_ns: u64,
+    pub channel: u8,
+    pub value: f64,
 }
 
-/// Load Athena II force data from a CSV file.
-pub fn load_force_csv(path: &std::path::Path) -> Result<Vec<ForceRecord>, String> {
-    let mut reader =
-        csv::Reader::from_path(path).map_err(|e| format!("failed to open CSV: {e}"))?;
+/// A parsed Athena analytic log: the full tall sample stream in file order.
+#[derive(Debug, Clone, Default)]
+pub struct AnalyticLog {
+    pub samples: Vec<AnalyticSample>,
+}
 
-    let mut records = Vec::new();
-    for result in reader.deserialize() {
-        let record: ForceRecord = result.map_err(|e| format!("CSV parse error: {e}"))?;
-        records.push(record);
+impl AnalyticLog {
+    /// All `(ts_ns, value)` for one channel, in file order.
+    pub fn channel(&self, channel: u8) -> Vec<(u64, f64)> {
+        self.samples
+            .iter()
+            .filter(|s| s.channel == channel)
+            .map(|s| (s.ts_ns, s.value))
+            .collect()
     }
 
-    Ok(records)
-}
-
-/// Compute statistics over a slice of force records.
-pub fn force_stats(records: &[ForceRecord]) -> ForceStats {
-    if records.is_empty() {
-        return ForceStats {
-            count: 0,
-            mean_n: 0.0,
-            max_n: 0.0,
-            max_layer: 0,
-            min_n: 0.0,
-            std_dev_n: 0.0,
-        };
+    /// Sign-corrected peel-force signal (raw counts) with timestamps.
+    pub fn peel_signal_series(&self) -> Vec<(u64, f64)> {
+        self.samples
+            .iter()
+            .filter(|s| s.channel == CH_PRESSURE)
+            .map(|s| (s.ts_ns, peel_signal(s.value)))
+            .collect()
     }
 
-    let count = records.len();
-    let sum: f32 = records.iter().map(|r| r.force_n).sum();
-    let mean = sum / count as f32;
-
-    let mut max_n = f32::NEG_INFINITY;
-    let mut max_layer = 0u32;
-    let mut min_n = f32::INFINITY;
-
-    for r in records {
-        if r.force_n > max_n {
-            max_n = r.force_n;
-            max_layer = r.layer;
+    /// Mean of a channel's values, or `None` if the channel is absent.
+    pub fn channel_mean(&self, channel: u8) -> Option<f64> {
+        let vals: Vec<f64> = self
+            .samples
+            .iter()
+            .filter(|s| s.channel == channel)
+            .map(|s| s.value)
+            .collect();
+        if vals.is_empty() {
+            None
+        } else {
+            Some(vals.iter().sum::<f64>() / vals.len() as f64)
         }
-        if r.force_n < min_n {
-            min_n = r.force_n;
-        }
-    }
-
-    let variance: f32 = records
-        .iter()
-        .map(|r| (r.force_n - mean).powi(2))
-        .sum::<f32>()
-        / count as f32;
-    let std_dev = variance.sqrt();
-
-    ForceStats {
-        count,
-        mean_n: mean,
-        max_n,
-        max_layer,
-        min_n,
-        std_dev_n: std_dev,
     }
 }
 
-/// Filter records to a layer range (inclusive).
-pub fn filter_layers(records: &[ForceRecord], from: u32, to: u32) -> Vec<&ForceRecord> {
-    records
-        .iter()
-        .filter(|r| r.layer >= from && r.layer <= to)
-        .collect()
+/// Parse an already-decompressed tall `ID,T,V` stream.
+pub fn parse_analytic<R: Read>(reader: R) -> Result<AnalyticLog, String> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .flexible(false)
+        .from_reader(reader);
+
+    let mut samples = Vec::new();
+    for (row, result) in rdr.records().enumerate() {
+        let rec = result.map_err(|e| format!("analytic CSV row {}: {e}", row + 1))?;
+        if rec.len() < 3 {
+            return Err(format!(
+                "analytic CSV row {} has {} fields, need 3",
+                row + 1,
+                rec.len()
+            ));
+        }
+        let ts_ns: u64 = rec[0]
+            .trim()
+            .parse()
+            .map_err(|e| format!("analytic CSV row {}: bad ID {:?}: {e}", row + 1, &rec[0]))?;
+        let channel: u8 = rec[1]
+            .trim()
+            .parse()
+            .map_err(|e| format!("analytic CSV row {}: bad T {:?}: {e}", row + 1, &rec[1]))?;
+        let value: f64 = rec[2]
+            .trim()
+            .parse()
+            .map_err(|e| format!("analytic CSV row {}: bad V {:?}: {e}", row + 1, &rec[2]))?;
+        samples.push(AnalyticSample {
+            ts_ns,
+            channel,
+            value,
+        });
+    }
+    Ok(AnalyticLog { samples })
+}
+
+/// Load an analytic log from a `.csv` or `.csv.gz` file. Gzip is detected by
+/// magic bytes (`1f 8b`), not just the extension, and decompression is bounded
+/// against gzip bombs.
+pub fn load_analytic_csv(path: &Path) -> Result<AnalyticLog, String> {
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("failed to open analytic CSV: {e}"))?;
+    let mut magic = [0u8; 2];
+    let n = file
+        .read(&mut magic)
+        .map_err(|e| format!("analytic CSV read: {e}"))?;
+    use std::io::Seek;
+    file.rewind()
+        .map_err(|e| format!("analytic CSV rewind: {e}"))?;
+
+    if n == 2 && magic == [0x1f, 0x8b] {
+        let decoder = flate2::read::MultiGzDecoder::new(file);
+        parse_analytic(decoder.take(MAX_ANALYTIC_DECOMPRESSED))
+    } else {
+        parse_analytic(file.take(MAX_ANALYTIC_DECOMPRESSED))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::path::PathBuf;
 
-    fn sample_records() -> Vec<ForceRecord> {
-        (0..5)
-            .map(|i| ForceRecord {
-                layer: i,
-                force_n: (i as f32 + 1.0) * 2.0, // 2, 4, 6, 8, 10
-                timestamp_ms: i as u64 * 10000,
-                lift_speed_mm_min: Some(60.0),
-                area_mm2: None,
-                vat_temp_c: None,
-                z_commanded_um: None,
-                z_actual_um: None,
-                uv_intensity_mw_cm2: None,
-            })
-            .collect()
+    fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name)
+    }
+
+    const TALL: &str = "ID,T,V\n\
+        100,0,0.050\n\
+        101,6,-400.0\n\
+        102,6,-360.0\n\
+        103,7,28.0\n\
+        104,8,22.0\n";
+
+    #[test]
+    fn parse_tall_splits_channels() {
+        let log = parse_analytic(TALL.as_bytes()).expect("parses");
+        assert_eq!(log.samples.len(), 5);
+        assert_eq!(log.channel(CH_PRESSURE).len(), 2);
+        assert_eq!(log.channel(CH_LAYER_HEIGHT).len(), 1);
     }
 
     #[test]
-    fn stats_mean() {
-        let records = sample_records();
-        let s = force_stats(&records);
-        // mean of 2,4,6,8,10 = 6.0
-        assert!((s.mean_n - 6.0).abs() < 1e-6);
+    fn peel_signal_flips_sign() {
+        // Raw −400 counts (peel) → +400 signal.
+        assert_eq!(peel_signal(-400.0), 400.0);
+        let log = parse_analytic(TALL.as_bytes()).expect("parses");
+        let peel = log.peel_signal_series();
+        assert_eq!(peel[0].1, 400.0);
+        assert_eq!(peel[1].1, 360.0);
     }
 
     #[test]
-    fn stats_max() {
-        let records = sample_records();
-        let s = force_stats(&records);
-        assert!((s.max_n - 10.0).abs() < 1e-6);
-        assert_eq!(s.max_layer, 4);
+    fn channel_mean_of_pressure() {
+        let log = parse_analytic(TALL.as_bytes()).expect("parses");
+        // mean of −400 and −360 = −380.
+        let pressure_mean = log
+            .channel_mean(CH_PRESSURE)
+            .expect("pressure channel present in fixture");
+        assert!((pressure_mean + 380.0).abs() < 1e-9);
+        assert_eq!(log.channel_mean(99), None);
     }
 
     #[test]
-    fn stats_min() {
-        let records = sample_records();
-        let s = force_stats(&records);
-        assert!((s.min_n - 2.0).abs() < 1e-6);
+    fn malformed_row_rejected() {
+        let bad = "ID,T,V\n100,6,not_a_number\n";
+        assert!(parse_analytic(bad.as_bytes()).is_err());
     }
 
     #[test]
-    fn stats_empty() {
-        let s = force_stats(&[]);
-        assert_eq!(s.count, 0);
-        assert!((s.mean_n).abs() < 1e-6);
+    fn load_gzip_fixture_by_magic() {
+        let log = load_analytic_csv(&fixture("mini-analytic.csv.gz")).expect("gz parses");
+        assert!(!log.samples.is_empty());
+        assert!(!log.channel(CH_PRESSURE).is_empty(), "has pressure channel");
     }
 
     #[test]
-    fn filter_layers_range() {
-        let records = sample_records();
-        let filtered = filter_layers(&records, 1, 3);
-        assert_eq!(filtered.len(), 3);
-        assert_eq!(filtered[0].layer, 1);
-        assert_eq!(filtered[2].layer, 3);
+    fn load_plain_csv_roundtrip() {
+        let dir = std::env::temp_dir();
+        let p = dir.join("resinsim-athena-plain-test.csv");
+        let mut f = std::fs::File::create(&p).expect("create temp");
+        f.write_all(TALL.as_bytes()).expect("write");
+        let log = load_analytic_csv(&p).expect("plain parses");
+        assert_eq!(log.samples.len(), 5);
+        let _ = std::fs::remove_file(&p);
     }
 }

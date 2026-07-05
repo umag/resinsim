@@ -351,6 +351,28 @@ enum InspectDomain {
         #[arg(long)]
         json: bool,
     },
+    /// Simulate a NanoDLP job and compare/calibrate against its embedded real
+    /// Athena force log (ADR-0021)
+    Calibrate {
+        /// Path to a `.nanodlp` file (must contain an analytic-*.csv.gz log)
+        #[arg(long)]
+        file: String,
+        /// Resin profile name
+        #[arg(long, default_value = "generic_standard")]
+        resin: String,
+        /// Printer profile name
+        #[arg(long, default_value = "athena_ii")]
+        printer: String,
+        /// Ambient temperature (°C)
+        #[arg(long, default_value_t = 22.0)]
+        ambient: f32,
+        /// Data directory containing printers/ and resins/
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() {
@@ -452,6 +474,14 @@ fn main() {
                 stats,
                 json,
             } => cmd_inspect_layers(&file, from, to, stats, json),
+            InspectDomain::Calibrate {
+                file,
+                resin,
+                printer,
+                ambient,
+                data_dir,
+                json,
+            } => cmd_calibrate(&file, &resin, &printer, ambient, data_dir.as_deref(), json),
         },
         Commands::Report { report_type } => match report_type {
             ReportType::Health { r#in, json } => cmd_report_health(&r#in, json),
@@ -1151,38 +1181,49 @@ fn cmd_zaxis(
 
 fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
     use resinsim_core::io::athena;
+    use resinsim_core::services::ForceSeriesExtractor;
     use std::path::Path;
 
-    let records = match athena::load_force_csv(Path::new(file)) {
-        Ok(r) => r,
+    // Real Athena analytic log (tall ID,T,V; `.csv` or `.csv.gz`). Values are
+    // raw load-cell counts on the pressure channel (T=6), sign-corrected so
+    // peel reads positive — NOT Newtons (ADR-0021).
+    let log = match athena::load_analytic_csv(Path::new(file)) {
+        Ok(l) => l,
         Err(e) => {
             eprintln!("Error: {e}");
             std::process::exit(1);
         }
     };
+    let lo = from.unwrap_or(0);
+    let hi = to.unwrap_or(u32::MAX);
+    let layers: Vec<_> = ForceSeriesExtractor::extract_layer_forces(&log)
+        .into_iter()
+        .filter(|l| l.index >= lo && l.index <= hi)
+        .collect();
 
-    let filtered: Vec<&athena::ForceRecord> = match (from, to) {
-        (Some(f), Some(t)) => athena::filter_layers(&records, f, t),
-        (Some(f), None) => athena::filter_layers(&records, f, u32::MAX),
-        (None, Some(t)) => athena::filter_layers(&records, 0, t),
-        (None, None) => records.iter().collect(),
+    let count = layers.len();
+    let (peak_signal, peak_layer, mean_signal) = if count == 0 {
+        (0.0, None, 0.0)
+    } else {
+        let peak = layers
+            .iter()
+            .max_by(|a, b| a.peak_signal.total_cmp(&b.peak_signal))
+            .expect("non-empty");
+        let mean = layers.iter().map(|l| l.mean_signal).sum::<f64>() / count as f64;
+        (peak.peak_signal, Some(peak.index), mean)
     };
-
-    let owned: Vec<athena::ForceRecord> = filtered.into_iter().cloned().collect();
-    let stats = athena::force_stats(&owned);
 
     if json {
         let result = serde_json::json!({
             "file": file,
             "from_layer": from,
             "to_layer": to,
+            "units": "raw load-cell counts (pressure channel T=6, sign-corrected; not Newtons)",
             "stats": {
-                "count": stats.count,
-                "mean_n": stats.mean_n,
-                "max_n": stats.max_n,
-                "max_layer": stats.max_layer,
-                "min_n": stats.min_n,
-                "std_dev_n": stats.std_dev_n,
+                "layers": count,
+                "peak_signal": peak_signal,
+                "peak_layer": peak_layer,
+                "mean_signal": mean_signal,
             },
         });
         println!(
@@ -1197,12 +1238,160 @@ fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
             (None, Some(t)) => format!("layers ..{t}"),
             (None, None) => "all layers".into(),
         };
-        println!("Athena II force data: {file} ({range})");
-        println!("  Records: {}", stats.count);
-        println!("  Mean: {:.2} N", stats.mean_n);
-        println!("  Max: {:.2} N at layer {}", stats.max_n, stats.max_layer);
-        println!("  Min: {:.2} N", stats.min_n);
-        println!("  Std dev: {:.2} N", stats.std_dev_n);
+        println!("Athena II analytic force log: {file} ({range})");
+        println!("  Layers with force data: {count}");
+        match peak_layer {
+            Some(idx) => println!("  Peak peel signal: {peak_signal:.1} counts at layer {idx}"),
+            None => println!("  Peak peel signal: n/a (no layer markers found)"),
+        }
+        println!("  Mean per-layer signal: {mean_signal:.1} counts");
+        println!("  (raw load-cell counts, sign-corrected; not Newtons — see `calibrate`)");
+    }
+}
+
+// Simulate a NanoDLP job and reconcile it against its embedded real Athena
+// force log: predicted peel force (N) vs real peel signal (counts). Emits
+// suggested — never applied — profile overrides (ADR-0021).
+#[allow(clippy::too_many_arguments)]
+fn cmd_calibrate(
+    file: &str,
+    resin_name: &str,
+    printer_name: &str,
+    ambient: f32,
+    data_dir: Option<&std::path::Path>,
+    json: bool,
+) {
+    use resinsim_core::io::{nanodlp, sliced};
+    use resinsim_core::services::build_plate::PlateAdhesionProfile;
+    use resinsim_core::services::failure_predictor::SupportConfig;
+    use resinsim_core::services::{ForceComparator, ForceSeriesExtractor, ProfileCalibrator};
+    use resinsim_core::values::AmbientTemperature;
+    use std::path::Path;
+
+    let path = Path::new(file);
+    if sliced::detect_format(path) != Some("NANODLP") {
+        eprintln!("Error: calibrate expects a .nanodlp file, got {file}");
+        std::process::exit(2);
+    }
+    let ambient_typed = match AmbientTemperature::new(ambient) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("invalid --ambient: {e}");
+            std::process::exit(2);
+        }
+    };
+    let resolved = match profile_loader::resolve_profiles(data_dir, resin_name, printer_name) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    let supports = SupportConfig {
+        tip_radius_mm: 0.3,
+        n_supports: 4,
+    };
+    let plate = PlateAdhesionProfile::default_textured();
+
+    // 1) Simulate the NanoDLP job → predicted per-layer peel force (Newtons).
+    eprintln!("Simulating {file} (decoding layer PNGs — slow for large jobs)...");
+    let sim = match run_simulation_with_optional_voxel(
+        path,
+        &resolved.resin,
+        &resolved.printer,
+        &supports,
+        &plate,
+        ambient_typed,
+        None,
+        None,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error simulating {file}: {e}");
+            std::process::exit(1);
+        }
+    };
+    let predicted: Vec<f32> = sim.layers().iter().map(|l| l.peel_force_n).collect();
+
+    // 2) Real force log embedded in the same archive.
+    let log = match nanodlp::load_analytic_from_nanodlp(path) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Error reading embedded force log: {e}");
+            std::process::exit(1);
+        }
+    };
+    let actual = ForceSeriesExtractor::extract_layer_forces(&log);
+
+    // 3) Compare (normalized shape) + calibrate (suggested overrides).
+    let report = match ForceComparator::compare(&predicted, &actual) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error comparing: {e}");
+            std::process::exit(1);
+        }
+    };
+    let overrides = match ProfileCalibrator::calibrate(&predicted, &actual, &log) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("Error calibrating: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if json {
+        let result = serde_json::json!({
+            "file": file,
+            "printer": printer_name,
+            "resin": resin_name,
+            "predicted_layers": predicted.len(),
+            "real_force_layers": actual.len(),
+            "comparison": {
+                "layers_compared": report.layer_count,
+                "normalized_rmse": report.normalized_rmse,
+                "max_abs_error": report.max_abs_error,
+                "correlation": report.correlation,
+            },
+            "suggested_overrides": {
+                "note": "SUGGESTED — not applied; single-print fit",
+                "peel_gain_n_per_count": overrides.peel_gain_n_per_count,
+                "delta_t_steady_c": overrides.delta_t_steady_c,
+                "fit_quality_r2": overrides.fit_quality,
+            },
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .expect("internal error: serde_json scalar serialisation is infallible")
+        );
+    } else {
+        println!("Calibration: {file}");
+        println!(
+            "  Simulated layers: {} | real force layers: {}",
+            predicted.len(),
+            actual.len()
+        );
+        println!("  Compared {} layers", report.layer_count);
+        println!(
+            "  Correlation (predicted vs real peel): {:.3}",
+            report.correlation
+        );
+        println!(
+            "  Normalized RMSE: {:.3} (max abs {:.3})",
+            report.normalized_rmse, report.max_abs_error
+        );
+        println!("  --- Suggested athena_ii.toml overrides (NOT applied) ---");
+        println!(
+            "  peel gain: {:.6} N per raw count (fit R²={:.3})",
+            overrides.peel_gain_n_per_count, overrides.fit_quality
+        );
+        match overrides.delta_t_steady_c {
+            Some(dt) => println!("  delta_t_steady_c = {dt:.2}   # resin(T=7) − ambient(T=8)"),
+            None => println!("  delta_t_steady_c: n/a (temperature channels absent)"),
+        }
+        if overrides.fit_quality < 0.5 {
+            println!("  ! low fit quality — single print; treat as indicative only");
+        }
     }
 }
 
@@ -1284,8 +1473,8 @@ fn run_simulation_with_optional_voxel(
     if voxel_cure_mm.is_some() {
         let fmt = resinsim_core::io::sliced::detect_format(input_path)
             .ok_or_else(|| format!("unknown file format: {}", input_path.display()))?;
-        if fmt == "CTB" {
-            let (_info, layers) = resinsim_core::io::ctb::parse_ctb(input_path)?;
+        if fmt == "CTB" || fmt == "NANODLP" {
+            let (_info, layers) = resinsim_core::io::sliced::parse_sliced(input_path)?;
             return SimulationRunner::run_from_layer_inputs_with_voxel(
                 &layers,
                 resin,
@@ -1493,7 +1682,7 @@ fn cmd_inspect_layers(file: &str, from: Option<u32>, to: Option<u32>, stats: boo
     let format = sliced::detect_format(path).unwrap_or("unknown");
 
     let (info, layers) = match format {
-        "CTB" => ctb::parse_ctb(path).unwrap_or_else(|e| {
+        "CTB" | "NANODLP" => sliced::parse_sliced(path).unwrap_or_else(|e| {
             eprintln!("Error: {e}");
             std::process::exit(1);
         }),

@@ -66,7 +66,27 @@ pub fn detect_format(path: &std::path::Path) -> Option<&'static str> {
         "stl" => Some("STL"),
         "3mf" => Some("3MF"),
         "voxl" => Some("VOXL"),
+        "nanodlp" => Some("NANODLP"),
         _ => None,
+    }
+}
+
+/// Parse any supported sliced file into the common `(SlicedFileInfo,
+/// Vec<LayerInput>)` pair. This is the single dispatch point every entry
+/// point (CLI `sim`/`inspect`, `SimulationRunner`, `build_simulation_from_path`)
+/// routes through, so a new format is wired in exactly once here rather than at
+/// each call site. See ADR-0021.
+pub fn parse_sliced(path: &std::path::Path) -> Result<(SlicedFileInfo, Vec<LayerInput>), String> {
+    match detect_format(path) {
+        Some("CTB") => crate::io::ctb::parse_ctb(path),
+        Some("NANODLP") => crate::io::nanodlp::parse_nanodlp(path),
+        Some(other) => Err(format!(
+            "sliced format {other} is recognized but not yet supported for simulation"
+        )),
+        None => Err(format!(
+            "unrecognized sliced-file extension: {}",
+            path.display()
+        )),
     }
 }
 

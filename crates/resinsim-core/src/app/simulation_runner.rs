@@ -1441,8 +1441,8 @@ impl SimulationRunner {
                 ambient,
                 initial_led_temp,
             ),
-            "CTB" => {
-                let (_info, layers) = crate::io::ctb::parse_ctb(path)?;
+            "CTB" | "NANODLP" => {
+                let (_info, layers) = crate::io::sliced::parse_sliced(path)?;
                 Self::run_from_layer_inputs(
                     &layers,
                     resin,

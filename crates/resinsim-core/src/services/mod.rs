@@ -2,11 +2,14 @@ pub mod build_plate;
 pub mod cavity_detector;
 pub mod cure_calculator;
 pub mod failure_predictor;
+pub mod force_comparator;
+pub mod force_series_extractor;
 pub mod layer_timing_calculator;
 #[cfg(feature = "field-sim")]
 pub mod light_crosstalk_calculator;
 pub mod pairing_validator;
 pub mod peel_force_calculator;
+pub mod profile_calibrator;
 #[cfg(feature = "field-sim")]
 pub mod shrinkage_calculator;
 #[cfg(feature = "field-sim")]
@@ -25,10 +28,13 @@ pub use build_plate::BuildPlate;
 pub use cavity_detector::{CavityDetector, CavityError, CavityEvent};
 pub use cure_calculator::CureCalculator;
 pub use failure_predictor::FailurePredictor;
+pub use force_comparator::{ComparisonReport, ForceComparator};
+pub use force_series_extractor::{ForceSeriesExtractor, LayerForce};
 pub use layer_timing_calculator::LayerTimingCalculator;
 #[cfg(feature = "field-sim")]
 pub use light_crosstalk_calculator::{CrosstalkError, LightCrosstalkCalculator};
 pub use peel_force_calculator::PeelForceCalculator;
+pub use profile_calibrator::{ProfileCalibrator, ProfileOverrides};
 #[cfg(feature = "field-sim")]
 pub use shrinkage_calculator::ShrinkageCalculator;
 #[cfg(feature = "field-sim")]

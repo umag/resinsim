@@ -121,15 +121,17 @@ pub fn build_simulation_from_layers(
     )
 }
 
-/// Parse a CTB on disk + delegate to [`build_simulation_from_layers`].
-/// The CTB-on-disk path is the production producer for both the GUI Run
-/// button and the CLI `resinsim sim --file <ctb>`.
+/// Parse a sliced file on disk + delegate to [`build_simulation_from_layers`].
+/// This is the production producer for both the GUI Run button and the CLI
+/// `resinsim sim --file <path>`; it routes through
+/// [`crate::io::sliced::parse_sliced`] so every supported format (CTB, NanoDLP)
+/// is handled here without a per-format branch (ADR-0021).
 pub fn build_simulation_from_path(
     req: &RunRequest,
-    ctb_path: &Path,
+    path: &Path,
     repos: &ProfileRepos,
 ) -> Result<PrintSimulation, String> {
-    let (_info, layers) = ctb::parse_ctb(ctb_path)?;
+    let (_info, layers) = crate::io::sliced::parse_sliced(path)?;
     build_simulation_from_layers(req, &layers, repos)
 }
 

@@ -1,6 +1,11 @@
 # resinsim
 
-**BLUF: resinsim simulates the physics of a resin 3D print (peel forces, suction, cure depth, thermals) from a sliced CTB file, so a slicer developer can answer "is this job safe to print, and if not which layer breaks first and why" — without burning resin.**
+**BLUF: resinsim simulates the physics of a resin 3D print (peel forces, suction, cure depth, thermals) from a sliced CTB or NanoDLP file, so a slicer developer can answer "is this job safe to print, and if not which layer breaks first and why" — without burning resin.**
+
+Supported inputs: `.ctb`, `.nanodlp` (Athena II), `.stl`. A `.nanodlp` job also
+carries the real Athena force log, so `resinsim inspect calibrate --file
+job.nanodlp` reconciles the simulated peel force against what the printer
+actually measured (see [ADR-0021](docs/adr/0021-nanodlp-import-and-calibration.md)).
 
 ## What's here
 
