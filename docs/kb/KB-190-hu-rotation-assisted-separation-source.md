@@ -25,6 +25,17 @@ source that disambiguates the rotation vs. tilting force-reduction figures.
 - Uses a bilinear traction–separation cohesive-zone law; crack advances from edge
   to centre (rotation front-propagation lowers instantaneous peel-front load).
 
+## Cites (key upstream references)
+
+- Huang & Jiang, *J. Mater. Process. Technol.* 2005,
+  doi:10.1016/j.jmatprotec.2004.05.015; Liravi, Das & Zhou 2015 (KB-191),
+  doi:10.1016/j.cad.2015.05.002.
+- Ye, Venketeswaran, Das & Zhou, "Investigation of separation force for
+  constrained-surface stereolithography from a mechanics perspective," *Rapid
+  Prototyp. J.* 2017, doi:10.1108/RPJ-06-2016-0091.
+- Cohesive-zone basis: Elices et al. 2002; Xie & Waas, discrete CZM, *Eng. Fract.
+  Mech.* 2006, doi:10.1016/j.engfracmech.2006.03.006; Turon et al. 2007.
+
 ## Used by
 
 KB-117 (rotation figures), KB-185/186 (crack front, CZM).

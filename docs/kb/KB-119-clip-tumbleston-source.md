@@ -25,6 +25,18 @@ mechanism and its governing equation.
 - Gas dependence: **pure O₂ ≈ doubles** the dead zone; **N₂ makes it vanish**.
 - Eliminates per-layer separation ⇒ continuous pulling **300 → >1000 mm/hr**.
 
+## Cites (key upstream references)
+
+- Ligon et al., *Chem. Rev.* 2014, doi:10.1021/cr3005197; Dendukuri et al.,
+  *Macromolecules* 2008, doi:10.1021/ma801219w; Dendukuri et al., "Continuous-
+  flow lithography," *Nat. Mater.* 2006, doi:10.1038/nmat1617 — oxygen
+  inhibition.
+- Yagci, Jockusch & Turro, "Photoinitiated Polymerization," *Macromolecules*
+  2010, doi:10.1021/ma1007545.
+- Merkel, Pinnau, Prabhakar & Freeman, "Gas and Vapor Transport Properties of
+  Perfluoropolymers," 2006, doi:10.1002/047002903X.ch9 — the Teflon AF 2400
+  O₂-permeability basis for the window.
+
 ## Used by
 
 KB-116, KB-117 (dead-zone formula, gas dependence, CLIP as limiting case);

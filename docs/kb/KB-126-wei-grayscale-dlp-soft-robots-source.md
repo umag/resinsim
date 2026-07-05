@@ -24,6 +24,19 @@ and the σ_xy default calibration.
   **σ/pixel_pitch ≈ 0.36** (generalises to other printers).
 - Grayscale voxel control produces functionally-graded cure / stiffness.
 
+## Cites (key upstream references)
+
+- Emami & Rosen, "Modeling of light field effect in deep vat polymerization for
+  grayscale lithography," *Additive Manufacturing* 2020,
+  doi:10.1016/j.addma.2020.101595 — the Gaussian-beam light-field model.
+- Kuang et al., "Grayscale digital light processing 3D printing for highly
+  functionally graded materials," *Science Advances* 2019,
+  doi:10.1126/sciadv.aav5790.
+- Han, Lu, Chester & Lee, projection micro-SL hydrogel, *Sci. Rep.* 2018,
+  doi:10.1038/s41598-018-20385-2.
+- Wang et al., Gaussian-beam + reaction–diffusion grayscale model, *Materials &
+  Design* 2021, doi:10.1016/j.matdes.2020.109381.
+
 ## Used by
 
 ADR-0018 (crosstalk σ_xy derivation), KB-122 (beam-waist anchor).

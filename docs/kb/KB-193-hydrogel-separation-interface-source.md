@@ -24,6 +24,18 @@ force-reduction figure.
 - The compliant interface promotes edge-initiated peel (fracture regime) rather
   than whole-area suction ⇒ lower force, faster printing.
 
+## Cites (key upstream references)
+
+- Wu, Xu & Zhang, "Flexible film separation analysis of LCD based mask
+  stereolithography," *J. Mater. Process. Technol.* 2021,
+  doi:10.1016/j.jmatprotec.2020.116916; Wang et al., CFD suction in the CLIP
+  pull-up stage, *AIP Adv.* 2019, doi:10.1063/1.5080516; Pan et al. 2017
+  (KB-187).
+- Tumbleston et al. 2015 (KB-119); Walker, Hedrick & Mirkin, "Rapid,
+  large-volume, thermally controlled 3D printing using a mobile liquid
+  interface," *Science* 2019, doi:10.1126/science.aax1562; Wu et al., *Research*
+  2018, doi:10.1155/2018/4795604 (S-PDMS).
+
 ## Used by
 
 KB-116, KB-117 (hydrogel 1/3-of-FEP reduction).

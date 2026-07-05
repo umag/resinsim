@@ -30,6 +30,17 @@ commercial AM resins at 365 and 405 nm. Primary anchor for our Dp/Ec numbers.
 - Induction period modelled as oxygen inhibition; the whole surface induction is
   attributed to O₂ scavenging.
 
+## Cites (key upstream references)
+
+- **Jacobs, *Rapid Prototyping & Manufacturing: Fundamentals of
+  Stereolithography* (SME, 1992), Ch. 4** — the canonical working curve
+  `Cd = Dp·ln(E₀/Ec)` (also Jacobs 1992, SFF Symp., pp. 196–211).
+- Nguyen, Richter & Jacobs 1992 — the Dp/Ec diagnostic-testing protocol.
+- Lee, Prud'homme & Aksay, "Cure depth in photopolymerization: experiments and
+  theory," *J. Mater. Res.* 2001, doi:10.1557/JMR.2001.0485.
+- Cabral et al., "Frontal photopolymerization for microfluidic applications,"
+  *Langmuir* 2004, doi:10.1021/la049501e.
+
 ## Used by
 
 KB-122 (Dp/Ec + wavelength shift), KB-154 (induction dose order-of-magnitude);

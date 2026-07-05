@@ -24,6 +24,17 @@ peroxyl-radical scheme.
   (chain-terminating peroxyl radical).
 - Establishes O₂ as the dominant induction-period species before cure.
 
+## Cites (key upstream references)
+
+- **Decker & Jenkins, "Kinetic Approach of Oxygen Inhibition in Ultraviolet- and
+  Laser-Induced Polymerizations," *Macromolecules* 1985,
+  doi:10.1021/ma00148a034** — the O₂-scavenging rate-constant primary (the
+  keystone O₂ reference across this KB set).
+- Decker & Moussa, *Macromolecules* 1989, doi:10.1021/ma00202a013; Decker,
+  *Polym. Int.* 1998, 45:133.
+- Jacobine, "Thiol-Ene Photopolymers," in *Radiation Curing in Polymer Science &
+  Technology, Vol. III* (Elsevier, 1993) — O₂-tolerant thiol-ene chemistry.
+
 ## Used by
 
 KB-154 (mechanism, [O₂] concentration), KB-155 (solubility anchor).

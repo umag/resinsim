@@ -25,6 +25,19 @@ peel equation (the regime a flexible FEP release film actually operates in).
 - `R` is a **fracture energy** (rises with crack speed), not thermodynamic work
   of adhesion. Elastic term matters near-modulus stresses and very small angles.
 
+## Cites (its full 5-reference list)
+
+- Gent & Kinloch, "Adhesion of viscoelastic materials to rigid substrates III,"
+  *J. Polym. Sci. A-2* 1971, doi:10.1002/pol.1971.160090408.
+- Kendall, "The adhesion and surface energy of elastic solids," *J. Phys. D*
+  1971, doi:10.1088/0022-3727/4/8/320.
+- Kendall, "Transition between cohesive and interfacial failure in a laminate,"
+  *Proc. R. Soc. A* 1975, doi:10.1098/rspa.1975.0102.
+- Gordon, *The New Science of Strong Materials* (Penguin, 1968); Lindley, *J.
+  Instn Rubb. Ind.* 1971.
+- Note: this paper does **not** cite JKR (Johnson-Kendall-Roberts 1971) — that
+  appears downstream in KB-118/KB-192.
+
 ## Used by
 
 KB-185 (peel regime), KB-186 (verbatim algebra).

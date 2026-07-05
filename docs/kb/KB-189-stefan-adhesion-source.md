@@ -25,6 +25,14 @@ bottom-up separation force (Pan's Eq. 6 is this law applied to a cured disk).
 - Physical basis: resin must flow radially inward to fill the widening gap;
   suction is worst at the centre and vents at the perimeter.
 
+## Cites (original)
+
+- **Stefan, J., "Versuche über die scheinbare Adhäsion,"
+  *Sitzungsberichte der Akademie der Wissenschaften in Wien,
+  Math.-Naturwiss. Klasse* 1874, 69:713** — the original squeeze-film adhesion
+  result. (In resinsim's literature it is reached via Pan Eq. 6 / KB-187 and
+  Bruus's microfluidics treatment.)
+
 ## Used by
 
 KB-116 (dead-zone/gap force law), KB-185/186 (Stefan regime, naming the law).

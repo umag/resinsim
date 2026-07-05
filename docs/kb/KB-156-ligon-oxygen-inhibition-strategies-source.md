@@ -27,6 +27,17 @@ rate constants, and mitigation strategies. The single most-cited overview.
 - Mitigation strategies: high initiator load, amine/thiol H-donors, inert
   atmosphere, oxygen-consuming additives.
 
+## Cites (key upstream references)
+
+- **Decker & Jenkins, *Macromolecules* 1985, doi:10.1021/ma00148a034** (the
+  O₂-scavenging rate-constant primary); Decker & Moussa, *Macromolecules* 1989,
+  doi:10.1021/ma00202a013.
+- O'Brien & Bowman, "Modeling the Effect of Oxygen on Photopolymerization
+  Kinetics," *Macromol. Theory Simul.* 2006, doi:10.1002/mats.200500056.
+- Hoyle, Lee & Roper, "Thiol-enes," *J. Polym. Sci. A* 2004,
+  doi:10.1002/pola.20366; Hoyle & Bowman, "Thiol-Ene Click Chemistry," *Angew.
+  Chem. Int. Ed.* 2010, doi:10.1002/anie.200903924.
+
 ## Used by
 
 KB-154 (mechanism, rate-constant band), KB-155 (kinetics reference).

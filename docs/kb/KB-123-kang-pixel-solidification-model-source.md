@@ -27,6 +27,17 @@ at Ec" statement.
   scaled by cure-depth/penetration-depth ratio.
 - Solidifies where accumulated exposure ≥ critical exposure Ec.
 
+## Cites (key upstream references)
+
+- Sun et al. 2005 (KB-124), doi:10.1016/j.sna.2004.12.011; Jacobs 1992 (working
+  curve); Hecht, *Optics* (Addison-Wesley, 1988) — Gaussian/optical PSF basis.
+- Choi et al., "Cure depth control for complex 3D microstructure fabrication…,"
+  *Rapid Prototyp. J.* 2009, doi:10.1108/13552540910925072.
+- Zhou, Chen & Waltz, "Optimized mask image projection…," *J. Manuf. Sci. Eng.*
+  2009, doi:10.1115/1.4000416.
+- Jariwala et al., "Modeling effects of oxygen inhibition in mask-based
+  stereolithography," *Rapid Prototyp. J.* 2011, doi:10.1108/13552541111124734.
+
 ## Used by
 
 KB-122 (PSF / dose-sharing mechanism); corroborates ADR-0018.

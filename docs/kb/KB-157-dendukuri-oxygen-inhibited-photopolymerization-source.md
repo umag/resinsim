@@ -26,6 +26,18 @@ of our rate constants and the Damköhler induction-scaling laws.
 - [O₂] must fall ≥3 orders of magnitude (≲0.1%) before propagation competes;
   gelation at ξ_c = 0.98 (~2% conversion).
 
+## Cites (source papers for the Table 2 constants)
+
+- **k_O:** Decker & Jenkins, *Macromolecules* 1985, doi:10.1021/ma00148a034.
+- **k_p:** Kızılel, Pérez-Luna & Teymour, *Macromol. Theory Simul.* 2006,
+  doi:10.1002/mats.200600030.
+- **[O₂]_eqb:** Goodner & Bowman, *Chem. Eng. Sci.* 2002,
+  doi:10.1016/S0009-2509(01)00287-1.
+- **D_O:** Lin & Freeman, "Gas Permeation and Diffusion in Cross-Linked
+  Poly(ethylene glycol diacrylate)," *Macromolecules* 2006,
+  doi:10.1021/ma051686o — note this gives **D_O = 2.84×10⁻¹¹ m²/s** (O₂ in
+  PEG-DA), a *different* value/lineage from CLIP's 1.08×10⁻¹⁰ (KB-158).
+
 ## Used by
 
 KB-154 (induction scaling), KB-155 (constants + Damköhler derivation).

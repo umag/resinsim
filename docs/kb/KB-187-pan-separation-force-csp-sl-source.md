@@ -29,6 +29,19 @@ cites Liravi 2014 — no explicit "Stefan" reference.)
 - Speed linear (F–V); ~25 N rigid glass vs 0.73 N (4 mm PDMS); build drift
   2 → 20 N as O₂ depletes, held < 5 N by a porous window.
 
+## Cites (key upstream references)
+
+- **Bruus, *Theoretical Microfluidics* (OUP, 2008)** — the squeeze-film /
+  viscous-flow basis of Eq. 6 (Pan derives the viscous model from this, not from
+  an explicit "Stefan" citation).
+- Liravi, Zhou & Das, "Separation force analysis based on cohesive delamination
+  model…," SFF Symposium 2014 — the prior separation-force study it extends.
+- Huang & Jiang, "On-line force monitoring of platform ascending rapid
+  prototyping system," *J. Mater. Process. Technol.* 2005,
+  doi:10.1016/j.jmatprotec.2004.05.015 — first in-situ SL pull-force measurement.
+- Tumbleston et al. 2015 (KB-119); Jacobs 1992; Melchels, Feijen & Grijpma,
+  *Biomaterials* 2010, doi:10.1016/j.biomaterials.2010.04.050.
+
 ## Used by
 
 KB-185 (two-regime geometry), KB-186 (verbatim equations + tables).
