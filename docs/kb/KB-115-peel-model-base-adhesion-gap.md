@@ -40,6 +40,10 @@ the first N layers (N ≈ bottom_layer_count), decaying as the raft releases. Us
 `calibrate` on this reference job as the regression fixture: success = the
 predicted peak moves toward layer 0 and the gain-fit R² rises above 0.
 
+The staged plan for this fix — the chosen oxygen-freshness σ-relaxation form
+(KB-116), the peel/suction split it slots into, and the harness prerequisites —
+is recorded in [ADR-0022](../adr/0022-peel-force-model-corrections-roadmap.md).
+
 ## Provenance
 
 Evidence: `inspect calibrate --file PFA-75mm-unsplit-spike.nanodlp` (2026-07-05).

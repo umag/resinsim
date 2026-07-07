@@ -164,3 +164,5 @@ suction into one area term**. Roadmap:
 - KB-114 — peel force formula (`F_peel = σ_peel·A·f(v)` — the term to refactor).
 - KB-116 — oxygen-inhibited release layer (the film-state term, distinct from
   this geometry term).
+- [ADR-0022](../adr/0022-peel-force-model-corrections-roadmap.md) — the staged
+  correction roadmap that sequences this entry's Tier-1/Tier-2 into resinsim-core.
