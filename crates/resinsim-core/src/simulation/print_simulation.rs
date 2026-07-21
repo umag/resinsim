@@ -224,6 +224,15 @@ impl PrintSimulation {
         &self.layers
     }
 
+    /// Per-layer *total* separation force (peel + suction + base) in Newtons,
+    /// in layer order — the series `inspect calibrate` grades against the real
+    /// Athena log (ADR-0022 Stage 0). Deliberately NOT the adhesion-only
+    /// `peel_force_n`: grading `total_force_n` means future suction (Stage 2)
+    /// and base-adhesion (Stage 1) terms are scored automatically as they land.
+    pub fn total_force_series(&self) -> Vec<f32> {
+        self.layers.iter().map(|l| l.total_force_n).collect()
+    }
+
     pub fn failures(&self) -> &[FailureEvent] {
         &self.failures
     }
@@ -698,6 +707,21 @@ pub(crate) mod tests {
                 got: 5,
             }
         );
+    }
+
+    #[test]
+    fn total_force_series_reads_total_not_peel() {
+        // Two layers where total_force_n != peel_force_n (suction present).
+        let mut a = make_layer(0, 10.0, 3.0, 22.0);
+        a.suction_force_n = 3.0;
+        a.total_force_n = 13.0;
+        let mut b = make_layer(1, 20.0, 2.0, 25.0);
+        b.suction_force_n = 5.0;
+        b.total_force_n = 25.0;
+        let mut sim = PrintSimulation::new(default_recipe(), linear_printer());
+        sim.add_layer(a, vec![]).expect("index 0 on empty sim");
+        sim.add_layer(b, vec![]).expect("index 1 after layer 0");
+        assert_eq!(sim.total_force_series(), vec![13.0, 25.0]);
     }
 
     #[test]

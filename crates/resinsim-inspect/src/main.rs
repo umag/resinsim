@@ -1181,7 +1181,7 @@ fn cmd_zaxis(
 
 fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
     use resinsim_core::io::athena;
-    use resinsim_core::services::ForceSeriesExtractor;
+    use resinsim_core::services::{peak_index, ForceSeriesExtractor};
     use std::path::Path;
 
     // Real Athena analytic log (tall ID,T,V; `.csv` or `.csv.gz`). Values are
@@ -1202,15 +1202,17 @@ fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
         .collect();
 
     let count = layers.len();
-    let (peak_signal, peak_layer, mean_signal) = if count == 0 {
-        (0.0, None, 0.0)
-    } else {
-        let peak = layers
-            .iter()
-            .max_by(|a, b| a.peak_signal.total_cmp(&b.peak_signal))
-            .expect("non-empty");
-        let mean = layers.iter().map(|l| l.mean_signal).sum::<f64>() / count as f64;
-        (peak.peak_signal, Some(peak.index), mean)
+    // Peak layer via the shared argmax (services::peak_index) so this CLI and
+    // the calibrate comparator report peaks identically. Tie-break is now
+    // earliest-peak (first max); the old inline max_by returned the last max —
+    // a no-op on real (non-tying) float counts. ADR-0022 Stage 0.
+    let (peak_signal, peak_layer, mean_signal) = match peak_index(&layers) {
+        None => (0.0, None, 0.0),
+        Some(pos) => {
+            let peak = &layers[pos];
+            let mean = layers.iter().map(|l| l.mean_signal).sum::<f64>() / count as f64;
+            (peak.peak_signal, Some(peak.index), mean)
+        }
     };
 
     if json {
@@ -1311,7 +1313,9 @@ fn cmd_calibrate(
             std::process::exit(1);
         }
     };
-    let predicted: Vec<f32> = sim.layers().iter().map(|l| l.peel_force_n).collect();
+    // Grade TOTAL separation force (peel + suction + base), not adhesion-only
+    // peel_force_n, so future Stage 1/2 terms are scored automatically. ADR-0022.
+    let predicted: Vec<f32> = sim.total_force_series();
 
     // 2) Real force log embedded in the same archive.
     let log = match nanodlp::load_analytic_from_nanodlp(path) {
@@ -1339,6 +1343,14 @@ fn cmd_calibrate(
         }
     };
 
+    // Signed predicted−actual peak-layer gap; None if either window is empty.
+    // A large gap is the KB-115 base-adhesion symptom (sim peaks late). ADR-0022.
+    const PEAK_OFFSET_HINT: isize = 3;
+    let peak_offset: Option<isize> = match (report.predicted_peak_layer, report.actual_peak_layer) {
+        (Some(p), Some(a)) => Some(p as isize - a as isize),
+        _ => None,
+    };
+
     if json {
         let result = serde_json::json!({
             "file": file,
@@ -1351,6 +1363,9 @@ fn cmd_calibrate(
                 "normalized_rmse": report.normalized_rmse,
                 "max_abs_error": report.max_abs_error,
                 "correlation": report.correlation,
+                "predicted_peak_layer": report.predicted_peak_layer,
+                "actual_peak_layer": report.actual_peak_layer,
+                "peak_layer_offset": peak_offset,
             },
             "suggested_overrides": {
                 "note": "SUGGESTED — not applied; single-print fit",
@@ -1373,13 +1388,29 @@ fn cmd_calibrate(
         );
         println!("  Compared {} layers", report.layer_count);
         println!(
-            "  Correlation (predicted vs real peel): {:.3}",
+            "  Correlation (predicted total force vs real peel signal): {:.3}",
             report.correlation
         );
         println!(
             "  Normalized RMSE: {:.3} (max abs {:.3})",
             report.normalized_rmse, report.max_abs_error
         );
+        match (
+            report.predicted_peak_layer,
+            report.actual_peak_layer,
+            peak_offset,
+        ) {
+            (Some(p), Some(a), Some(off)) => {
+                println!("  Peak layer: predicted {p}, real {a} (offset {off:+})");
+                if off.abs() >= PEAK_OFFSET_HINT {
+                    println!(
+                        "  ! peak offset {off:+} layers — the sim peak sits far from the \
+                         real base-adhesion peak (KB-115); see ADR-0022"
+                    );
+                }
+            }
+            _ => println!("  Peak layer: n/a (empty comparison window)"),
+        }
         println!("  --- Suggested athena_ii.toml overrides (NOT applied) ---");
         println!(
             "  peel gain: {:.6} N per raw count (fit R²={:.3})",

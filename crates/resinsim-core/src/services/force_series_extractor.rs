@@ -4,8 +4,11 @@
 //! the layer-height channel ([`CH_LAYER_HEIGHT`]), which NanoDLP emits once at
 //! the start of each layer. Every pressure sample ([`CH_PRESSURE`]) seen before
 //! the next layer-height marker is attributed to the current layer. This is the
-//! documented heuristic; if a print lacks layer-height markers the extractor
-//! yields a single aggregate layer (callers should check `len()`).
+//! documented heuristic; if a print lacks layer-height markers no layer is ever
+//! opened and the extractor yields an **empty** series (callers should check
+//! `len()`). Pressure samples that arrive *before the first* marker cannot be
+//! attributed to any layer and are dropped; [`ForceSeriesExtractor::extract_with_prelude_count`]
+//! returns how many, so the drop is a reported diagnostic rather than silent.
 
 use crate::io::athena::{peel_signal, AnalyticLog, CH_LAYER_HEIGHT, CH_PRESSURE};
 
@@ -25,9 +28,21 @@ pub struct ForceSeriesExtractor;
 
 impl ForceSeriesExtractor {
     pub fn extract_layer_forces(log: &AnalyticLog) -> Vec<LayerForce> {
+        Self::extract_with_prelude_count(log).0
+    }
+
+    /// Like [`extract_layer_forces`](Self::extract_layer_forces), additionally
+    /// returning the count of [`CH_PRESSURE`] samples that arrived *before* the
+    /// first layer-height marker. Those samples cannot be attributed to any
+    /// layer (no layer is open yet) and are dropped from the series; callers
+    /// surface the count as a diagnostic rather than let the drop stay silent.
+    /// The `Vec<LayerForce>` returned is identical to `extract_layer_forces`.
+    pub fn extract_with_prelude_count(log: &AnalyticLog) -> (Vec<LayerForce>, usize) {
         let mut layers: Vec<LayerForce> = Vec::new();
         // Accumulator for the layer currently being filled.
         let mut cur: Option<(u32, Vec<f64>)> = None;
+        // Pressure samples seen before any layer-height marker opened a layer.
+        let mut prelude = 0usize;
 
         let finish = |layers: &mut Vec<LayerForce>, idx: u32, vals: Vec<f64>| {
             if vals.is_empty() {
@@ -59,19 +74,52 @@ impl ForceSeriesExtractor {
                     let next_idx = layers.len() as u32;
                     cur = Some((next_idx, Vec::new()));
                 }
-                CH_PRESSURE => {
-                    if let Some((_, vals)) = cur.as_mut() {
-                        vals.push(peel_signal(s.value));
-                    }
-                }
+                CH_PRESSURE => match cur.as_mut() {
+                    Some((_, vals)) => vals.push(peel_signal(s.value)),
+                    // No layer open yet — unattributable prelude sample.
+                    None => prelude += 1,
+                },
                 _ => {}
             }
         }
         if let Some((idx, vals)) = cur.take() {
             finish(&mut layers, idx, vals);
         }
-        layers
+        (layers, prelude)
     }
+}
+
+/// Core argmax: 0-based position of the item with the greatest `key`, or `None`
+/// when `items` is empty. Deterministic and NaN-tolerant via `f64::total_cmp`;
+/// ties resolve to the first (earliest) item. The single source of truth for
+/// "which position peaks" — [`peak_index`] and [`ForceComparator`] both route
+/// through it so predicted/actual/CLI peak semantics never diverge.
+///
+/// [`ForceComparator`]: crate::services::ForceComparator
+pub fn argmax_by<T>(items: &[T], key: impl Fn(&T) -> f64) -> Option<usize> {
+    items
+        .iter()
+        .enumerate()
+        .reduce(|acc, cur| {
+            // Tie-break to first: only overtake on a *strictly* greater key.
+            if key(cur.1).total_cmp(&key(acc.1)) == std::cmp::Ordering::Greater {
+                cur
+            } else {
+                acc
+            }
+        })
+        .map(|(i, _)| i)
+}
+
+/// 0-based position of the layer with the greatest `peak_signal`, or `None`
+/// when `layers` is empty. Ties resolve to the first (earliest) layer — the
+/// earliest-peak convention the peel-force base-adhesion signal cares about.
+/// Thin wrapper over [`argmax_by`]; shared by [`ForceComparator`] and
+/// `inspect athena` — do not reimplement the argmax.
+///
+/// [`ForceComparator`]: crate::services::ForceComparator
+pub fn peak_index(layers: &[LayerForce]) -> Option<usize> {
+    argmax_by(layers, |l| l.peak_signal)
 }
 
 #[cfg(test)]
@@ -110,5 +158,51 @@ mod tests {
         let log = parse_analytic("ID,T,V\n1,6,-100\n".as_bytes()).expect("parse");
         let forces = ForceSeriesExtractor::extract_layer_forces(&log);
         assert!(forces.is_empty(), "no T=0 markers → no layers segmented");
+    }
+
+    fn lf(index: u32, peak: f64) -> LayerForce {
+        LayerForce {
+            index,
+            peak_signal: peak,
+            mean_signal: peak,
+            sample_count: 1,
+        }
+    }
+
+    #[test]
+    fn peak_index_returns_position_of_max() {
+        let xs = vec![lf(0, 100.0), lf(1, 250.0), lf(2, 400.0), lf(3, 150.0)];
+        assert_eq!(peak_index(&xs), Some(2));
+    }
+
+    #[test]
+    fn peak_index_ties_break_to_first() {
+        let xs = vec![lf(0, 400.0), lf(1, 400.0), lf(2, 100.0)];
+        assert_eq!(peak_index(&xs), Some(0));
+    }
+
+    #[test]
+    fn peak_index_none_on_empty() {
+        assert_eq!(peak_index(&[]), None);
+    }
+
+    #[test]
+    fn no_prelude_when_first_sample_is_a_marker() {
+        let log = parse_analytic("ID,T,V\n1,0,0.05\n1,6,-100\n1,6,-200\n".as_bytes())
+            .expect("parse");
+        let (layers, prelude) = ForceSeriesExtractor::extract_with_prelude_count(&log);
+        assert_eq!(prelude, 0, "log opens with a marker → no prelude");
+        assert_eq!(layers.len(), 1);
+    }
+
+    #[test]
+    fn prelude_samples_before_first_marker_are_counted() {
+        // Two pressure samples arrive before the first T=0 marker → prelude.
+        let log = parse_analytic("ID,T,V\n1,6,-100\n1,6,-200\n2,0,0.05\n2,6,-50\n".as_bytes())
+            .expect("parse");
+        let (layers, prelude) = ForceSeriesExtractor::extract_with_prelude_count(&log);
+        assert_eq!(prelude, 2, "two pre-marker pressure samples are prelude");
+        assert_eq!(layers.len(), 1, "one marker → one segmented layer");
+        assert!((layers[0].peak_signal - 50.0).abs() < 1e-9);
     }
 }

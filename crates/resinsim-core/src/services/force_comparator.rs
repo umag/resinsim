@@ -7,7 +7,7 @@
 //! scored (RMSE, max error, Pearson correlation). Absolute-unit fitting is the
 //! job of [`ProfileCalibrator`](crate::services::ProfileCalibrator).
 
-use crate::services::force_series_extractor::LayerForce;
+use crate::services::force_series_extractor::{argmax_by, peak_index, LayerForce};
 
 /// Result of comparing predicted vs actual per-layer peel force.
 #[derive(Debug, Clone, PartialEq)]
@@ -19,6 +19,13 @@ pub struct ComparisonReport {
     pub max_abs_error: f64,
     /// Pearson correlation of the raw (un-normalized) aligned series.
     pub correlation: f64,
+    /// 0-based position, within the compared `[..layer_count]` window, of the
+    /// predicted series' peak; `None` when the window is empty. A large gap
+    /// between this and [`actual_peak_layer`](Self::actual_peak_layer) is the
+    /// KB-115 base-adhesion symptom (sim peaks late, real peaks at the base).
+    pub predicted_peak_layer: Option<usize>,
+    /// 0-based position of the real series' peak within the compared window.
+    pub actual_peak_layer: Option<usize>,
 }
 
 /// Scores predicted (Newtons) against actual (raw counts) per-layer peel force.
@@ -50,6 +57,10 @@ impl ForceComparator {
             normalized_rmse: (sq_sum / n as f64).sqrt(),
             max_abs_error: max_abs,
             correlation: pearson(&pred, &act),
+            // Peak positions over the same aligned [..n] window, via the shared
+            // argmax core so predicted/actual/CLI peak semantics never diverge.
+            predicted_peak_layer: argmax_by(&pred, |&v| v),
+            actual_peak_layer: peak_index(&actual[..n]),
         })
     }
 }
@@ -133,5 +144,28 @@ mod tests {
     #[test]
     fn empty_is_error() {
         assert!(ForceComparator::compare(&[], &[]).is_err());
+    }
+
+    #[test]
+    fn reports_predicted_and_actual_peak_layers() {
+        // Real (counts) peaks at layer 0 (base adhesion); predicted (N) peaks
+        // mid-print at layer 2 — the KB-115 peak-layer offset.
+        let actual = vec![lf(0, 400.0), lf(1, 250.0), lf(2, 150.0)];
+        let predicted = vec![10.0_f32, 25.0, 60.0];
+        let r = ForceComparator::compare(&predicted, &actual).expect("compares");
+        assert_eq!(r.predicted_peak_layer, Some(2));
+        assert_eq!(r.actual_peak_layer, Some(0));
+    }
+
+    #[test]
+    fn peak_layer_is_within_the_compared_window() {
+        // predicted's global max is the ignored tail (index 3); only 3 layers
+        // are compared, so the reported peak must fall within [..3].
+        let actual = vec![lf(0, 100.0), lf(1, 300.0), lf(2, 120.0)];
+        let predicted = vec![5.0_f32, 40.0, 9.0, 999.0];
+        let r = ForceComparator::compare(&predicted, &actual).expect("compares");
+        assert_eq!(r.layer_count, 3);
+        assert_eq!(r.predicted_peak_layer, Some(1), "within window, not the tail");
+        assert_eq!(r.actual_peak_layer, Some(1));
     }
 }

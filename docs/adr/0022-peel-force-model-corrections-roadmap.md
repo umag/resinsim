@@ -86,6 +86,11 @@ Make a correction *measurable* before making one:
 Rationale: without Stage 0, later stages cannot be graded and the layer-0 spike
 stays invisible to the metrics.
 
+Implemented by issue `peel-corrections-s0-harness-readiness` (peak-layer via the
+shared `services::peak_index` argmax that `inspect athena` also uses,
+`PrintSimulation::total_force_series`, the `force_comparator_golden` regression,
+and the extractor doc/prelude fix).
+
 ### Stage 1 — First-layer base adhesion via oxygen-freshness σ-relaxation (KB-116)
 
 Add the elevated-σ relaxation term. Implement it as a **separate** term/method on
