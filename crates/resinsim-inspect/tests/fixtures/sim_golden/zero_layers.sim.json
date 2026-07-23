@@ -51,7 +51,8 @@
       "crosstalk_sigma_z_um": null,
       "convective_wall_h_w_m2k": 8.0,
       "vat_wall_thickness_mm": 2.0,
-      "vat_wall_k_w_mk": 200.0
+      "vat_wall_k_w_mk": 200.0,
+      "vacuum_pressure_kpa": null
     },
     "layers": [],
     "failures": []

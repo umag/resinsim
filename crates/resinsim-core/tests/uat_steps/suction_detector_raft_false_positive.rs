@@ -15,6 +15,7 @@
 
 use cucumber::gherkin::Step;
 use cucumber::{given, then, when};
+use resinsim_core::entities::DEFAULT_VACUUM_PRESSURE_KPA;
 use resinsim_core::services::cavity_detector::{CavityDetector, MIN_SEALED_AREA_MM2};
 use resinsim_core::values::LayerMask;
 
@@ -248,13 +249,13 @@ const GRID: u32 = 5;
 const VOXEL_MM: f32 = 0.5;
 
 fn collect_events(masks: &[LayerMask]) -> Vec<CavityEventSummary> {
-    CavityDetector::detect(masks)
+    CavityDetector::detect(masks, DEFAULT_VACUUM_PRESSURE_KPA)
         .expect("fixture masks always yield a detector result")
         .iter()
         .map(|e| CavityEventSummary {
             layer: e.layer,
             area_mm2: e.sealed_area_mm2 as f32,
-            force_n: 50.0 * (e.sealed_area_mm2 as f32) * 1e-3,
+            force_n: DEFAULT_VACUUM_PRESSURE_KPA * (e.sealed_area_mm2 as f32) * 1e-3,
         })
         .collect()
 }

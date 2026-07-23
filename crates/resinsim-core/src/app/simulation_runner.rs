@@ -572,7 +572,7 @@ impl SimulationRunner {
             "internal contract: layer_heights_um indexed by layer must match areas len"
         );
         let recipe = resin.recipe();
-        let suction_map = Self::build_suction_map(masks)?;
+        let suction_map = Self::build_suction_map(masks, printer.effective_vacuum_pressure_kpa())?;
         let phases = LayerPhase::classify_sequence(areas, recipe);
 
         // Print-wide thermal context — constructed once, passed by reference
@@ -1408,8 +1408,11 @@ impl SimulationRunner {
     ///
     /// Propagates `CavityError` as a human-readable string — callers of the
     /// public `run_*` entry points already return `Result<_, String>`.
-    fn build_suction_map(masks: &[LayerMask]) -> Result<HashMap<u32, f32>, String> {
-        let risks = SuctionDetector::detect_from_masks(masks)
+    fn build_suction_map(
+        masks: &[LayerMask],
+        vacuum_pressure_kpa: f32,
+    ) -> Result<HashMap<u32, f32>, String> {
+        let risks = SuctionDetector::detect_from_masks(masks, vacuum_pressure_kpa)
             .map_err(|e| format!("suction detection: {e}"))?;
         Ok(risks
             .into_iter()
@@ -1744,6 +1747,37 @@ mod tests {
         assert!(
             closure_layer.total_force_n > closure_layer.peel_force_n,
             "total should exceed peel when suction present"
+        );
+    }
+
+    #[test]
+    fn profile_vacuum_pressure_scales_suction() {
+        // ADR-0022 Stage 2: a per-printer ΔP flows to the LayerResult suction.
+        // Same closed cup (interior 5×5 = 25 mm², closure at layer 15).
+        // Default ΔP=50 → 1.25 N; ΔP=101 → 101 × 25 × 1e-3 = 2.525 N.
+        let layers = closed_cup_layer_inputs(5, 10, 1, 2.5, 50.0, 60.0);
+        let mut printer = PrinterProfile::generic_msla_4k();
+        printer.vacuum_pressure_kpa = Some(101.0);
+        printer
+            .validate()
+            .expect("test fixture: 101 kPa is a valid vacuum_pressure_kpa");
+        let sim = SimulationRunner::run_from_layer_inputs(
+            &layers,
+            &ResinProfile::generic_standard(),
+            &printer,
+            &SupportConfig {
+                tip_radius_mm: 0.2,
+                n_supports: 10,
+            },
+            &default_plate(),
+            test_ambient(),
+            None,
+        )
+        .expect("test fixture: validated profiles satisfy run_from_layer_inputs preconditions");
+        let suction = sim.layers()[15].suction_force_n;
+        assert!(
+            (suction - 2.525).abs() < 1e-2,
+            "ΔP=101 kPa × 25 mm² × 1e-3 should be 2.525 N, got {suction}"
         );
     }
 

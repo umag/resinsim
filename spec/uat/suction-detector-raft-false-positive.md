@@ -74,7 +74,7 @@ Scenario: UAT-2 topologically-sealed cavity produces one event at closure
   Then exactly one SuctionCup failure appears in sim.failures()
   And it is at layer N (the cap layer)
   And sealed_area_mm2 equals the ring interior's cell count × voxel²
-  And suction_force_n equals 50 kPa × sealed_area_mm2 × 1e-3
+  And suction_force_n equals the printer profile's ΔP (default 50 kPa) × sealed_area_mm2 × 1e-3
 ```
 
 **Evidence:**

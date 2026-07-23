@@ -40,6 +40,20 @@ pub const DEFAULT_VOXEL_CURE_RESOLUTION_MM: f32 = 0.2;
 /// validate-time to prevent silent simulation corruption.
 pub const MAX_SIGMA_UM: f32 = 5000.0;
 
+/// Default partial-vacuum pressure ΔP assumed to form at a sealed cavity during
+/// peel, used when a [`PrinterProfile`] does not specify a measured
+/// `vacuum_pressure_kpa`. 50 kPa ≈ half atmospheric — strong enough to require
+/// non-trivial peel force at realistic cavity sizes. INDICATIVE: the true ΔP is
+/// a 50–101 kPa data gap (KB-184); E4 / KB-173 sealed-vs-drained cup calibration
+/// is future work for resin/FEP-specific tuning. ADR-0022 Stage 2. (Migrated from
+/// the former `cavity_detector::VACUUM_PRESSURE_KPA`.)
+pub const DEFAULT_VACUUM_PRESSURE_KPA: f32 = 50.0;
+
+/// Physical maximum for a sealed-cavity ΔP: one standard atmosphere. A vacuum
+/// cannot pull the plate harder than atmospheric pressure pushes it down, so
+/// `vacuum_pressure_kpa` is validated not to exceed this (KB-184). Unit: kPa.
+pub const ATMOSPHERIC_PRESSURE_KPA: f32 = 101.325;
+
 /// Hardware build envelope of a printer (ADR-0012, extends ADR-0005 Axis 1).
 ///
 /// Optional on [`PrinterProfile`] — see ADR-0012. When present, all three
@@ -291,6 +305,18 @@ pub struct PrinterProfile {
     /// semantics.
     #[serde(default)]
     pub(crate) vat_wall_k_w_mk: Option<f32>,
+
+    /// Partial-vacuum pressure ΔP assumed at a sealed cavity during peel. Unit:
+    /// kPa. ADR-0022 Stage 2 / KB-184. **Optional**; `None` inherits
+    /// [`DEFAULT_VACUUM_PRESSURE_KPA`] (50 kPa). The 50–101 kPa magnitude is a
+    /// data gap (KB-184) pending E4 / KB-173 sealed-vs-drained calibration, so the
+    /// default is INDICATIVE. When `Some`, validated finite, > 0, and <=
+    /// [`ATMOSPHERIC_PRESSURE_KPA`]. Consumed by the `CavityDetector` suction
+    /// pre-pass, which computes force via `PeelForceCalculator::suction_force`.
+    /// Existing TOML profiles without this field deserialise to `None` via
+    /// `#[serde(default)]`.
+    #[serde(default)]
+    pub(crate) vacuum_pressure_kpa: Option<f32>,
 }
 
 impl PrinterProfile {
@@ -384,6 +410,20 @@ impl PrinterProfile {
     /// Axial light crosstalk σ in µm — see struct field doc. ADR-0018 / t2f2.
     pub fn crosstalk_sigma_z_um(&self) -> Option<f32> {
         self.crosstalk_sigma_z_um
+    }
+
+    /// Suction ΔP for this printer in kPa, if explicitly set. See struct field
+    /// doc. ADR-0022 Stage 2.
+    pub fn vacuum_pressure_kpa(&self) -> Option<f32> {
+        self.vacuum_pressure_kpa
+    }
+
+    /// Effective suction ΔP (kPa): the profile override if set, else
+    /// [`DEFAULT_VACUUM_PRESSURE_KPA`]. This is the value the `CavityDetector`
+    /// suction pre-pass multiplies by the sealed area. ADR-0022 Stage 2.
+    pub fn effective_vacuum_pressure_kpa(&self) -> f32 {
+        self.vacuum_pressure_kpa
+            .unwrap_or(DEFAULT_VACUUM_PRESSURE_KPA)
     }
 
     /// Validate physical invariants. Must be called after deserialization from
@@ -508,6 +548,17 @@ impl PrinterProfile {
             crate::values::ThermalConductivity::new(k)
                 .map_err(|e| format!("vat_wall_k_w_mk: {e}"))?;
         }
+        // ADR-0022 Stage 2: optional suction ΔP. When present, must be finite,
+        // > 0, and not exceed atmospheric (a sealed-cavity vacuum cannot pull
+        // harder than one atmosphere). NaN-two-layer-defence: finite check first.
+        if let Some(p) = self.vacuum_pressure_kpa
+            && (!p.is_finite() || p <= 0.0 || p > ATMOSPHERIC_PRESSURE_KPA)
+        {
+            return Err(format!(
+                "vacuum_pressure_kpa, when present, must be finite, > 0.0 kPa, and \
+                 <= {ATMOSPHERIC_PRESSURE_KPA} kPa (atmospheric) (got {p})"
+            ));
+        }
         #[cfg(feature = "field-sim")]
         {
             if self.build_envelope_mm.is_none() {
@@ -599,6 +650,9 @@ impl PrinterProfile {
             convective_wall_h_w_m2k: Some(8.0),  // still-air natural convection
             vat_wall_thickness_mm: Some(2.0),    // typical Al-alloy vat
             vat_wall_k_w_mk: Some(200.0),        // Al alloy thermal conductivity
+            // ADR-0022 Stage 2: no measured suction ΔP yet — inherit the 50 kPa
+            // indicative default (KB-184 data gap).
+            vacuum_pressure_kpa: None,
         }
     }
 
@@ -644,6 +698,8 @@ impl PrinterProfile {
             convective_wall_h_w_m2k: Some(8.0),
             vat_wall_thickness_mm: Some(2.0),
             vat_wall_k_w_mk: Some(200.0),
+            // ADR-0022 Stage 2: inherit the 50 kPa indicative default (KB-184).
+            vacuum_pressure_kpa: None,
         }
     }
 }
@@ -1211,5 +1267,94 @@ vat_wall_k_w_mk = 200.0
         assert_eq!(p.voxel_cure_resolution_mm(), Some(0.1));
         p.validate()
             .expect("explicit 0.1 mm must satisfy validate()");
+    }
+
+    // --- ADR-0022 Stage 2: vacuum_pressure_kpa (suction ΔP) tests ---
+
+    #[test]
+    fn vacuum_pressure_default_is_50_kpa() {
+        assert!((DEFAULT_VACUUM_PRESSURE_KPA - 50.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn factories_inherit_vacuum_pressure_default() {
+        for p in [
+            PrinterProfile::generic_msla_4k(),
+            PrinterProfile::elegoo_mars5_ultra(),
+        ] {
+            assert_eq!(p.vacuum_pressure_kpa(), None);
+            assert!((p.effective_vacuum_pressure_kpa() - DEFAULT_VACUUM_PRESSURE_KPA).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn vacuum_pressure_some_overrides_default() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.vacuum_pressure_kpa = Some(80.0);
+        assert!(p.validate().is_ok());
+        assert_eq!(p.vacuum_pressure_kpa(), Some(80.0));
+        assert!((p.effective_vacuum_pressure_kpa() - 80.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn vacuum_pressure_zero_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.vacuum_pressure_kpa = Some(0.0);
+        let err = p.validate().expect_err("ΔP = 0.0 must be rejected");
+        assert!(err.contains("vacuum_pressure_kpa"), "{err}");
+    }
+
+    #[test]
+    fn vacuum_pressure_negative_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.vacuum_pressure_kpa = Some(-1.0);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn vacuum_pressure_nan_rejected() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.vacuum_pressure_kpa = Some(f32::NAN);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn vacuum_pressure_above_atmospheric_rejected() {
+        // A sealed-cavity vacuum cannot exceed one atmosphere pulling the plate.
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.vacuum_pressure_kpa = Some(ATMOSPHERIC_PRESSURE_KPA + 1.0);
+        let err = p
+            .validate()
+            .expect_err("ΔP above atmospheric must be rejected");
+        assert!(err.contains("vacuum_pressure_kpa"), "{err}");
+    }
+
+    #[test]
+    fn vacuum_pressure_at_atmospheric_accepted() {
+        let mut p = PrinterProfile::generic_msla_4k();
+        p.vacuum_pressure_kpa = Some(ATMOSPHERIC_PRESSURE_KPA);
+        p.validate()
+            .expect("ΔP exactly atmospheric is the inclusive boundary");
+    }
+
+    #[test]
+    fn legacy_toml_without_vacuum_pressure_defaults_to_none() {
+        let p: PrinterProfile = toml::from_str(&valid_printer_toml_with_envelope())
+            .expect("legacy TOML without vacuum_pressure_kpa must parse");
+        assert_eq!(p.vacuum_pressure_kpa(), None);
+        assert!((p.effective_vacuum_pressure_kpa() - DEFAULT_VACUUM_PRESSURE_KPA).abs() < 1e-6);
+        p.validate()
+            .expect("None vacuum_pressure_kpa must satisfy validate()");
+    }
+
+    #[test]
+    fn toml_with_explicit_vacuum_pressure_round_trips() {
+        let toml_str = valid_printer_toml()
+            + "vacuum_pressure_kpa = 75.0\n"
+            + "[build_envelope_mm]\nwidth_mm = 192.0\ndepth_mm = 120.0\nmax_z_mm = 200.0\n";
+        let p: PrinterProfile =
+            toml::from_str(&toml_str).expect("explicit vacuum_pressure_kpa must parse");
+        assert_eq!(p.vacuum_pressure_kpa(), Some(75.0));
+        p.validate().expect("explicit 75 kPa must satisfy validate()");
     }
 }

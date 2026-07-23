@@ -27,6 +27,12 @@ thermal_tau_sec = 1500.0
 # LCD uniformity — KB-120 (estimated, better than consumer)
 lcd_uniformity_variation = 0.10
 
+# Suction ΔP for sealed cavities (ADR-0022 Stage 2 / KB-184). Optional — when
+# unset (as here) the sim inherits the 50 kPa indicative default. The true
+# magnitude is a 50–101 kPa data gap; calibrate with sealed-vs-drained cup pairs
+# (KB-173) on the Athena II force sensor before setting a measured value.
+# vacuum_pressure_kpa = 50.0
+
 # Vat-wall + convective BC properties (ADR-0020 / t2f4 thermal diffusion).
 # Athena II vat geometry approximated as typical Al-alloy frame; recalibrate
 # once measured. (Top-level scalars MUST precede any [table] block in TOML.)

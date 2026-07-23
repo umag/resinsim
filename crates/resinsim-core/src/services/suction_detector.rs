@@ -22,7 +22,10 @@ pub struct SuctionRisk {
     /// [`LayerMask::solid_area_mm2`] and
     /// [`CavityEvent::sealed_area_mm2`](crate::services::CavityEvent) rustdoc).
     pub sealed_area_mm2: f64,
-    /// Estimated suction force in Newtons at [`VACUUM_PRESSURE_KPA`](crate::services::cavity_detector::VACUUM_PRESSURE_KPA).
+    /// Estimated suction force in Newtons at the caller's ΔP — the printer
+    /// profile's `effective_vacuum_pressure_kpa()` (default 50 kPa). Computed by
+    /// the underlying [`CavityDetector`] via `PeelForceCalculator::suction_force`.
+    /// ADR-0022 Stage 2.
     pub suction_force_n: f32,
 }
 
@@ -37,14 +40,21 @@ impl SuctionDetector {
     /// connected voids produce none). See [`CavityDetector::detect`] for
     /// algorithm details and ambient-boundary policy.
     ///
+    /// `vacuum_pressure_kpa` (ΔP) is forwarded to the detector for the
+    /// per-cavity suction-force estimate; callers pass the printer profile's
+    /// `effective_vacuum_pressure_kpa()` (default 50 kPa). ADR-0022 Stage 2.
+    ///
     /// # Errors
     ///
     /// Propagates [`CavityError`] from the underlying detector:
     /// - [`CavityError::NoMasks`] for empty input.
     /// - [`CavityError::InconsistentMasks`] for mixed voxel sizes or
     ///   dimensions across the stack.
-    pub fn detect_from_masks(masks: &[LayerMask]) -> Result<Vec<SuctionRisk>, CavityError> {
-        let events = CavityDetector::detect(masks)?;
+    pub fn detect_from_masks(
+        masks: &[LayerMask],
+        vacuum_pressure_kpa: f32,
+    ) -> Result<Vec<SuctionRisk>, CavityError> {
+        let events = CavityDetector::detect(masks, vacuum_pressure_kpa)?;
         Ok(events
             .into_iter()
             .map(|e| SuctionRisk {
@@ -59,6 +69,7 @@ impl SuctionDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entities::printer_profile::DEFAULT_VACUUM_PRESSURE_KPA;
 
     fn solid_mask(w: u32, h: u32) -> LayerMask {
         LayerMask::new_all_solid(w, h, 1.0).expect("test fixture: valid dimensions")
@@ -77,13 +88,13 @@ mod tests {
 
     #[test]
     fn detect_from_masks_empty_returns_err() {
-        assert!(SuctionDetector::detect_from_masks(&[]).is_err());
+        assert!(SuctionDetector::detect_from_masks(&[], DEFAULT_VACUUM_PRESSURE_KPA).is_err());
     }
 
     #[test]
     fn detect_from_masks_solid_stack_no_risks() {
         let stack: Vec<LayerMask> = (0..5).map(|_| solid_mask(4, 4)).collect();
-        let risks = SuctionDetector::detect_from_masks(&stack).expect("valid");
+        let risks = SuctionDetector::detect_from_masks(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid");
         assert!(risks.is_empty());
     }
 
@@ -95,7 +106,7 @@ mod tests {
             stack.push(ring_mask(5, 5));
         }
         stack.push(solid_mask(5, 5)); // cap
-        let risks = SuctionDetector::detect_from_masks(&stack).expect("valid");
+        let risks = SuctionDetector::detect_from_masks(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid");
         assert_eq!(risks.len(), 1);
         assert_eq!(risks[0].layer, 4);
         // 3×3 interior at 1mm voxel = 9 mm²
@@ -120,7 +131,7 @@ mod tests {
             columns.clone(),
             columns,
         ];
-        let risks = SuctionDetector::detect_from_masks(&stack).expect("valid");
+        let risks = SuctionDetector::detect_from_masks(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid");
         assert!(
             risks.is_empty(),
             "no false-positive on raft+columns: {risks:?}"

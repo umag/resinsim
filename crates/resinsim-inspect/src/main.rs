@@ -614,6 +614,7 @@ fn cmd_force(
     data_dir: Option<&std::path::Path>,
     json: bool,
 ) {
+    use resinsim_core::entities::DEFAULT_VACUUM_PRESSURE_KPA;
     use resinsim_core::services::PeelForceCalculator;
     use resinsim_core::values::{CrossSectionArea, SafetyFactor};
 
@@ -679,8 +680,14 @@ fn cmd_force(
         }
     };
     let peel = PeelForceCalculator::peel_force(sigma, area_val, speed_factor);
+    // Standalone force command has no printer profile in scope, so it uses the
+    // shared indicative default ΔP (ADR-0022 Stage 2). Value unchanged (50 kPa).
     let suction = PeelForceCalculator::suction_force(
-        if sealed_area > 0.0 { 50.0 } else { 0.0 },
+        if sealed_area > 0.0 {
+            DEFAULT_VACUUM_PRESSURE_KPA
+        } else {
+            0.0
+        },
         sealed_area_val,
     );
     let total = PeelForceCalculator::total_force(

@@ -4,6 +4,7 @@
 //! landed.
 
 use proptest::prelude::*;
+use resinsim_core::entities::DEFAULT_VACUUM_PRESSURE_KPA;
 use resinsim_core::services::{CavityDetector, CavityError};
 use resinsim_core::values::LayerMask;
 
@@ -96,7 +97,7 @@ fn sealed_cube_primitive_is_internally_consistent() {
         );
     }
     // Detector sees exactly one event at closure layer 6
-    let events = CavityDetector::detect(&stack).expect("valid primitive");
+    let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid primitive");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].layer, 6);
     assert!((events[0].sealed_area_mm2 - 25.0).abs() < 1e-6);
@@ -111,7 +112,7 @@ fn open_tube_primitive_is_internally_consistent() {
         assert_eq!(layer.solid_cell_count(), 24, "layer {i} ring");
     }
     // No closure → no events
-    let events = CavityDetector::detect(&stack).expect("valid primitive");
+    let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid primitive");
     assert!(events.is_empty());
 }
 
@@ -121,7 +122,7 @@ fn stacked_cups_primitive_is_internally_consistent() {
     let stack = stacked_cups(5, k, 1.0);
     // k cubes × 5 layers each = 15 total
     assert_eq!(stack.len(), 15);
-    let events = CavityDetector::detect(&stack).expect("valid primitive");
+    let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid primitive");
     assert_eq!(events.len(), k as usize, "got {events:?}");
 }
 
@@ -148,7 +149,7 @@ fn raft_plus_columns_no_suction() {
         columns.clone(),
         columns,
     ];
-    let events = CavityDetector::detect(&stack).expect("valid");
+    let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid");
     assert!(
         events.is_empty(),
         "raft+columns false-positive reproduction must emit zero: {events:?}"
@@ -157,7 +158,8 @@ fn raft_plus_columns_no_suction() {
 
 #[test]
 fn closed_cup_emits_one_event() {
-    let events = CavityDetector::detect(&sealed_cube(7, 1.0)).expect("valid");
+    let events =
+        CavityDetector::detect(&sealed_cube(7, 1.0), DEFAULT_VACUUM_PRESSURE_KPA).expect("valid");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].layer, 6);
     assert!((events[0].sealed_area_mm2 - 25.0).abs() < 1e-6);
@@ -167,7 +169,8 @@ fn closed_cup_emits_one_event() {
 
 #[test]
 fn open_topped_cup_no_events() {
-    let events = CavityDetector::detect(&open_tube(7, 1.0)).expect("valid");
+    let events =
+        CavityDetector::detect(&open_tube(7, 1.0), DEFAULT_VACUUM_PRESSURE_KPA).expect("valid");
     assert!(events.is_empty());
 }
 
@@ -176,13 +179,15 @@ fn fully_sealed_interior_pocket() {
     // Same as sealed_cube — the "floor" at layer 0 acts as the FEP-side
     // seal from the detector's perspective since we emit at the layer that
     // closes the pocket from below.
-    let events = CavityDetector::detect(&sealed_cube(5, 1.0)).expect("valid");
+    let events =
+        CavityDetector::detect(&sealed_cube(5, 1.0), DEFAULT_VACUUM_PRESSURE_KPA).expect("valid");
     assert_eq!(events.len(), 1);
 }
 
 #[test]
 fn two_disjoint_cups_two_events() {
-    let events = CavityDetector::detect(&stacked_cups(4, 2, 1.0)).expect("valid");
+    let events = CavityDetector::detect(&stacked_cups(4, 2, 1.0), DEFAULT_VACUUM_PRESSURE_KPA)
+        .expect("valid");
     assert_eq!(events.len(), 2);
     // Events should be at successive closure layers (3 and 7 for 4-layer cubes)
     let layers: Vec<u32> = events.iter().map(|e| e.layer).collect();
@@ -200,7 +205,7 @@ fn lateral_touching_void_is_exterior() {
         stack.push(m);
     }
     stack.push(solid_mask(7, 7, 1.0)); // cap
-    let events = CavityDetector::detect(&stack).expect("valid");
+    let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid");
     assert!(
         events.is_empty(),
         "lateral-edge-touching void must not emit: {events:?}"
@@ -214,7 +219,7 @@ fn lateral_touching_void_is_exterior() {
 #[test]
 fn detect_rejects_empty_input() {
     assert!(matches!(
-        CavityDetector::detect(&[]),
+        CavityDetector::detect(&[], DEFAULT_VACUUM_PRESSURE_KPA),
         Err(CavityError::NoMasks)
     ));
 }
@@ -224,7 +229,7 @@ fn detect_rejects_mixed_voxel_sizes() {
     let a = LayerMask::new(4, 4, 0.5).expect("valid");
     let b = LayerMask::new(4, 4, 1.0).expect("valid");
     assert!(matches!(
-        CavityDetector::detect(&[a, b]),
+        CavityDetector::detect(&[a, b], DEFAULT_VACUUM_PRESSURE_KPA),
         Err(CavityError::InconsistentMasks { .. })
     ));
 }
@@ -234,7 +239,7 @@ fn detect_rejects_mismatched_dimensions() {
     let a = LayerMask::new(4, 4, 0.5).expect("valid");
     let b = LayerMask::new(5, 4, 0.5).expect("valid");
     assert!(matches!(
-        CavityDetector::detect(&[a, b]),
+        CavityDetector::detect(&[a, b], DEFAULT_VACUUM_PRESSURE_KPA),
         Err(CavityError::InconsistentMasks { .. })
     ));
 }
@@ -250,17 +255,17 @@ proptest! {
     #[test]
     fn proptest_known_topology_primitives(n in 5u32..12, k in 1u32..5) {
         // sealed_cube(n): expected 1 event
-        let events = CavityDetector::detect(&sealed_cube(n, 1.0))
+        let events = CavityDetector::detect(&sealed_cube(n, 1.0), DEFAULT_VACUUM_PRESSURE_KPA)
             .expect("sealed_cube(valid n) produces valid masks");
         prop_assert_eq!(events.len(), 1, "sealed_cube({}) expected 1 event", n);
 
         // open_tube(n): expected 0 events
-        let events = CavityDetector::detect(&open_tube(n, 1.0))
+        let events = CavityDetector::detect(&open_tube(n, 1.0), DEFAULT_VACUUM_PRESSURE_KPA)
             .expect("open_tube(valid n) produces valid masks");
         prop_assert_eq!(events.len(), 0, "open_tube({}) expected 0 events", n);
 
         // stacked_cups(n, k): expected k events
-        let events = CavityDetector::detect(&stacked_cups(n, k, 1.0))
+        let events = CavityDetector::detect(&stacked_cups(n, k, 1.0), DEFAULT_VACUUM_PRESSURE_KPA)
             .expect("stacked_cups(valid n, k) produces valid masks");
         prop_assert_eq!(
             events.len(),
@@ -396,7 +401,7 @@ proptest! {
         let accepted = disjoint_cavity_specs(bed, bed, depth, &proposed);
 
         let stack = build_swiss_cheese(bed, depth, voxel, &accepted);
-        let events = CavityDetector::detect(&stack).expect("valid swiss-cheese cube");
+        let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid swiss-cheese cube");
 
         prop_assert_eq!(
             events.len(),
@@ -453,7 +458,7 @@ proptest! {
         let accepted = disjoint_cavity_specs_of_size(bed_w, bed_h, depth, &proposed, 5);
 
         let stack = build_swiss_cheese_of_size(bed_w, bed_h, depth, voxel, &accepted, 5);
-        let events = CavityDetector::detect(&stack).expect("valid build-plate stack");
+        let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid build-plate stack");
 
         prop_assert_eq!(
             events.len(),

@@ -94,14 +94,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use thiserror::Error;
 
-use crate::values::LayerMask;
-
-/// Partial-vacuum pressure assumed to form at a sealed cavity during peel.
-/// Consistent with the physics model used by the pre-existing area-based
-/// detector (50 kPa ≈ half atmospheric; strong enough to require non-trivial
-/// peel force at realistic cavity sizes). E4 Athena II calibration is future
-/// work for resin/FEP-specific tuning.
-pub const VACUUM_PRESSURE_KPA: f64 = 50.0;
+use crate::services::PeelForceCalculator;
+use crate::values::{CrossSectionArea, LayerMask};
 
 /// Minimum sealed-cavity cross-section to emit as a [`CavityEvent`].
 ///
@@ -155,7 +149,10 @@ pub struct CavityEvent {
     /// to ~10% at 0.5 mm voxels for sub-mm features. See
     /// [`LayerMask::solid_area_mm2`] rustdoc.
     pub sealed_area_mm2: f64,
-    /// Force estimate: `VACUUM_PRESSURE_KPA × sealed_area_mm2 × 1e-3`.
+    /// Force estimate: the caller's ΔP (kPa) × `sealed_area_mm2` × 1e-3,
+    /// computed via [`PeelForceCalculator::suction_force`]. ΔP is the printer
+    /// profile's `effective_vacuum_pressure_kpa()` (default 50 kPa).
+    /// ADR-0022 Stage 2.
     pub suction_force_n: f32,
     /// Layer at which the cavity first became non-empty.
     pub first_open_layer: u32,
@@ -183,12 +180,21 @@ impl CavityDetector {
     /// topologically-sealed cavity at the layer it closes. See module
     /// rustdoc for algorithm and ambient-boundary policy.
     ///
+    /// `vacuum_pressure_kpa` is the partial-vacuum ΔP (kPa) assumed at each
+    /// sealed cavity; every event's `suction_force_n` is
+    /// [`PeelForceCalculator::suction_force`]`(vacuum_pressure_kpa, sealed_area)`.
+    /// Callers pass the printer profile's `effective_vacuum_pressure_kpa()`
+    /// (default 50 kPa). ADR-0022 Stage 2.
+    ///
     /// # Errors
     ///
     /// - [`CavityError::NoMasks`] if `masks` is empty.
     /// - [`CavityError::InconsistentMasks`] if any mask has a different
     ///   `voxel_size_mm` or `(width_cells, height_cells)` than mask 0.
-    pub fn detect(masks: &[LayerMask]) -> Result<Vec<CavityEvent>, CavityError> {
+    pub fn detect(
+        masks: &[LayerMask],
+        vacuum_pressure_kpa: f32,
+    ) -> Result<Vec<CavityEvent>, CavityError> {
         if masks.is_empty() {
             return Err(CavityError::NoMasks);
         }
@@ -345,7 +351,10 @@ impl CavityDetector {
                     // the lift mechanism. See MIN_SEALED_AREA_MM2 rustdoc.
                     continue;
                 }
-                let suction_force = (VACUUM_PRESSURE_KPA * sealed_area * 1e-3) as f32;
+                let area = CrossSectionArea::new(sealed_area)
+                    .expect("sealed_area is finite and >= MIN_SEALED_AREA by construction");
+                let suction_force =
+                    PeelForceCalculator::suction_force(vacuum_pressure_kpa, area).value();
                 events.push(CavityEvent {
                     layer: k as u32,
                     sealed_area_mm2: sealed_area,
@@ -428,6 +437,7 @@ fn connected_components_of_void(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entities::printer_profile::DEFAULT_VACUUM_PRESSURE_KPA;
 
     fn mask(w: u32, h: u32) -> LayerMask {
         LayerMask::new(w, h, 1.0).expect("test fixture: valid mask dimensions")
@@ -454,7 +464,7 @@ mod tests {
     #[test]
     fn detect_rejects_empty_input() {
         assert!(matches!(
-            CavityDetector::detect(&[]),
+            CavityDetector::detect(&[], DEFAULT_VACUUM_PRESSURE_KPA),
             Err(CavityError::NoMasks)
         ));
     }
@@ -464,7 +474,7 @@ mod tests {
         let a = LayerMask::new(4, 4, 0.5).expect("valid");
         let b = LayerMask::new(4, 4, 1.0).expect("valid");
         assert!(matches!(
-            CavityDetector::detect(&[a, b]),
+            CavityDetector::detect(&[a, b], DEFAULT_VACUUM_PRESSURE_KPA),
             Err(CavityError::InconsistentMasks { .. })
         ));
     }
@@ -474,7 +484,7 @@ mod tests {
         let a = LayerMask::new(4, 4, 0.5).expect("valid");
         let b = LayerMask::new(5, 4, 0.5).expect("valid");
         assert!(matches!(
-            CavityDetector::detect(&[a, b]),
+            CavityDetector::detect(&[a, b], DEFAULT_VACUUM_PRESSURE_KPA),
             Err(CavityError::InconsistentMasks { .. })
         ));
     }
@@ -482,14 +492,14 @@ mod tests {
     #[test]
     fn solid_cube_no_events() {
         let stack: Vec<LayerMask> = (0..5).map(|_| solid_mask(4, 4)).collect();
-        let events = CavityDetector::detect(&stack).expect("valid input");
+        let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid input");
         assert!(events.is_empty());
     }
 
     #[test]
     fn all_void_no_events_lateral_exterior_everywhere() {
         let stack: Vec<LayerMask> = (0..5).map(|_| mask(4, 4)).collect();
-        let events = CavityDetector::detect(&stack).expect("valid input");
+        let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid input");
         // All-void masks → the single pocket touches lateral edges → exterior → no events.
         assert!(events.is_empty());
     }
@@ -504,7 +514,7 @@ mod tests {
             stack.push(ring_wall_mask()); // layers 1-3 walls
         }
         stack.push(solid_mask(5, 5)); // layer 4 cap
-        let events = CavityDetector::detect(&stack).expect("valid input");
+        let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid input");
         assert_eq!(events.len(), 1, "expected one event, got {events:?}");
         let e = &events[0];
         assert_eq!(e.layer, 4, "event should be at closure layer");
@@ -523,7 +533,7 @@ mod tests {
         for _ in 0..3 {
             stack.push(ring_wall_mask());
         }
-        let events = CavityDetector::detect(&stack).expect("valid input");
+        let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid input");
         // Pocket still alive at end → "open at FEP" → no event emitted.
         assert!(events.is_empty());
     }
@@ -537,7 +547,7 @@ mod tests {
             stack.push(ring_wall_mask());
         }
         stack.push(solid_mask(5, 5));
-        let events = CavityDetector::detect(&stack).expect("valid input");
+        let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid input");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].layer, 4);
     }
@@ -554,7 +564,7 @@ mod tests {
             stack.push(m);
         }
         stack.push(solid_mask(5, 5)); // cap
-        let events = CavityDetector::detect(&stack).expect("valid input");
+        let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid input");
         assert!(
             events.is_empty(),
             "lateral-edge-touching void must not emit"
@@ -587,7 +597,7 @@ mod tests {
         let cap = solid_mask(wf, hf);
         let stack = vec![floor, wall.clone(), wall.clone(), wall.clone(), cap];
 
-        let events = CavityDetector::detect(&stack).expect("valid input");
+        let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid input");
         assert_eq!(events.len(), 2, "got {events:?}");
         // Both cups close at layer 4
         for e in &events {
@@ -619,7 +629,7 @@ mod tests {
             columns.clone(),
             columns,
         ];
-        let events = CavityDetector::detect(&stack).expect("valid input");
+        let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid input");
         // Inter-column void is a single large region touching the lateral bbox
         // edge → exterior → no events. Even when the raft "seals" the void
         // from above, the lateral edge keeps it exterior.
@@ -638,7 +648,7 @@ mod tests {
         let cap = LayerMask::new_all_solid(3, 3, 0.5).expect("valid");
         let _ = floor.solid_area_mm2();
         let stack = vec![floor, wall.clone(), wall, cap];
-        let events = CavityDetector::detect(&stack).expect("valid");
+        let events = CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid");
         assert!(
             events.is_empty(),
             "sub-threshold cavity should not emit: {events:?}"
@@ -655,7 +665,7 @@ mod tests {
                 stack.push(ring_wall_mask());
             }
             stack.push(solid_mask(5, 5));
-            CavityDetector::detect(&stack).expect("valid")
+            CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid")
         };
         let large = {
             // 7×7 ring → interior 5×5 = 25 mm² (vs small 3×3 = 9 mm²)
@@ -674,12 +684,35 @@ mod tests {
                 stack.push(m.clone());
             }
             stack.push(solid_mask(7, 7));
-            CavityDetector::detect(&stack).expect("valid")
+            CavityDetector::detect(&stack, DEFAULT_VACUUM_PRESSURE_KPA).expect("valid")
         };
         assert_eq!(small.len(), 1);
         assert_eq!(large.len(), 1);
         let ratio = large[0].suction_force_n / small[0].suction_force_n;
         // 25/9 ≈ 2.78
         assert!((ratio - 25.0 / 9.0).abs() < 0.01);
+    }
+
+    // --- ADR-0022 Stage 2: ΔP is a per-call parameter, not a global const ---
+
+    #[test]
+    fn detect_scales_force_linearly_with_pressure() {
+        // Same closed cup (3×3 = 9 mm² interior), two different ΔP values.
+        let cup = || {
+            let mut stack = Vec::new();
+            stack.push(solid_mask(5, 5));
+            for _ in 0..3 {
+                stack.push(ring_wall_mask());
+            }
+            stack.push(solid_mask(5, 5));
+            stack
+        };
+        let at_50 = CavityDetector::detect(&cup(), 50.0).expect("valid");
+        let at_100 = CavityDetector::detect(&cup(), 100.0).expect("valid");
+        assert_eq!(at_50.len(), 1);
+        assert_eq!(at_100.len(), 1);
+        // 50 kPa × 9 mm² × 1e-3 = 0.45 N; doubling ΔP doubles the force.
+        assert!((at_50[0].suction_force_n - 0.45).abs() < 1e-3);
+        assert!((at_100[0].suction_force_n - 0.90).abs() < 1e-3);
     }
 }

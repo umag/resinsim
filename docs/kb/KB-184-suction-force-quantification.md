@@ -48,3 +48,20 @@ If ΔP varies with diameter → model needs geometry correction.
 
 Calibrated ΔP range for suction model.
 Validation: SuctionDetector correctly identifies sealed vs. drained geometries.
+
+## Model status (ADR-0022 Stage 2 — parametrized 2026-07-23)
+
+ΔP is now a **per-printer** value: `PrinterProfile.vacuum_pressure_kpa`
+(optional; `effective_vacuum_pressure_kpa()` falls back to
+`DEFAULT_VACUUM_PRESSURE_KPA = 50.0`). It flows through the suction pre-pass
+(`build_suction_map → SuctionDetector::detect_from_masks → CavityDetector::detect`)
+and the force is computed by the canonical `PeelForceCalculator::suction_force`
+— the former global `cavity_detector::VACUUM_PRESSURE_KPA` const and its inline
+duplicate formula are gone.
+
+The 50 kPa default remains **indicative** — this data gap is not yet closed. The
+experiment above is the way to close it: run the KB-173 sealed-vs-drained cup
+pairs on the Athena II force sensor, derive `ΔP = ΔF / A_sealed`, and set the
+measured value as `vacuum_pressure_kpa` on `data/printers/athena_ii.toml` (per
+`(resin, FEP)` stratum, KB-185). Validation bounds ΔP to `(0, 101.325]` kPa
+(atmospheric). Until then the field is left unset on all shipped profiles.
