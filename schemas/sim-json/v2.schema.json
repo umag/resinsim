@@ -142,6 +142,7 @@
         "cure_depth_um": { "type": "number" },
         "peel_force_n": { "type": "number" },
         "suction_force_n": { "type": "number" },
+        "base_force_n": { "type": "number" },
         "total_force_n": { "type": "number" },
         "support_capacity_n": { "type": "number" },
         "safety_factor": {

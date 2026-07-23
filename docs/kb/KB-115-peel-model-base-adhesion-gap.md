@@ -44,6 +44,23 @@ The staged plan for this fix — the chosen oxygen-freshness σ-relaxation form
 (KB-116), the peel/suction split it slots into, and the harness prerequisites —
 is recorded in [ADR-0022](../adr/0022-peel-force-model-corrections-roadmap.md).
 
+## Outcome (Stage 1 — gap closed 2026-07-23)
+
+ADR-0022 Stage 1 shipped the KB-116 oxygen-freshness σ-relaxation base term
+(area-scaled; a separate `PeelForceCalculator::base_adhesion_force`; opt-in per
+resin). On this exact reference job (Δσ₀ = 40 kPa, `generic_standard`):
+
+- predicted peak layer **15 → 0** (offset +15 → +0; now matches the real peak);
+- shape correlation **0.821 → 0.948**;
+- counts→N gain-fit **R² 0.000 → 0.562**.
+
+All three success criteria from "Candidate fix" are met. The Δσ₀ magnitude is
+INDICATIVE — one print, R² 0.56 — a calibration coefficient ADR-0022 defers to
+the E-series for proper per-stratum fitting; the value shipped on
+`generic_standard` is the best current estimate, not a fitted constant. Stage 2
+(peel/suction split, area-independent F₀) is the complement where an area-scaled
+term alone is geometry-limited.
+
 ## Provenance
 
 Evidence: `inspect calibrate --file PFA-75mm-unsplit-spike.nanodlp` (2026-07-05).

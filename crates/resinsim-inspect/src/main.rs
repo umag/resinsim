@@ -683,7 +683,12 @@ fn cmd_force(
         if sealed_area > 0.0 { 50.0 } else { 0.0 },
         sealed_area_val,
     );
-    let total = PeelForceCalculator::total_force(peel, suction);
+    let total = PeelForceCalculator::total_force(
+        peel,
+        suction,
+        resinsim_core::values::PeelForce::new(0.0)
+            .expect("standalone force command has no layer context ⇒ zero base adhesion"),
+    );
 
     let (capacity, safety) = match (tip_radius, n_supports) {
         (Some(r), Some(n)) => {
@@ -1350,6 +1355,13 @@ fn cmd_calibrate(
         (Some(p), Some(a)) => Some(p as isize - a as isize),
         _ => None,
     };
+    // KB-116 base-adhesion contribution at the first layer (ADR-0022 Stage 1).
+    // None when the resin doesn't opt in (elevation 0 ⇒ base 0).
+    let base_force_layer0 = sim
+        .layers()
+        .first()
+        .map(|l| l.base_force_n)
+        .filter(|&b| b > 0.0);
 
     if json {
         let result = serde_json::json!({
@@ -1358,6 +1370,7 @@ fn cmd_calibrate(
             "resin": resin_name,
             "predicted_layers": predicted.len(),
             "real_force_layers": actual.len(),
+            "predicted_base_force_n_layer0": base_force_layer0,
             "comparison": {
                 "layers_compared": report.layer_count,
                 "normalized_rmse": report.normalized_rmse,
@@ -1410,6 +1423,9 @@ fn cmd_calibrate(
                 }
             }
             _ => println!("  Peak layer: n/a (empty comparison window)"),
+        }
+        if let Some(base0) = base_force_layer0 {
+            println!("  Predicted base adhesion (layer 0): {base0:.2} N — KB-116 first-layer term (ADR-0022 Stage 1)");
         }
         println!("  --- Suggested athena_ii.toml overrides (NOT applied) ---");
         println!(

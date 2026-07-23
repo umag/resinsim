@@ -1084,6 +1084,7 @@ mod tests {
             cure_depth_um: 100.0,
             peel_force_n: 0.0,
             suction_force_n: 0.0,
+            base_force_n: 0.0,
             total_force_n: 0.0,
             support_capacity_n: 95.0,
             safety_factor: f32::INFINITY,

@@ -38,6 +38,7 @@ fn make_layer(index: u32, force_n: f32, safety_factor: f32, vat_temp_c: f32) -> 
         cure_depth_um: 100.0,
         peel_force_n: force_n,
         suction_force_n: 0.0,
+        base_force_n: 0.0,
         total_force_n: force_n,
         support_capacity_n: force_n * safety_factor,
         safety_factor,

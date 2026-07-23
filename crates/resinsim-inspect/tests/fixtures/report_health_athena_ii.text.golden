@@ -3,15 +3,25 @@ Print health report: __STL_PATH__
   Supports: 0 x 0.0mm radius
 
 Summary (1200 layers):
-  Max peel force: 46.8 N at layer 0
-  Min safety factor: 3.85 at layer 6
+  Max peel force: 190.8 N at layer 0
+  Min safety factor: 1.80 at layer 6
   Max temperature: 27.0°C
-  Max Z deflection: 31.2 µm
+  Max Z deflection: 127.2 µm
   Total time: 4:42:48
     bottom:     0:03:39
     transition: 0:01:15
     normal:     4:37:54
 
-Result: WARN — 1 warning(s)
+Result: FAIL — 10 critical failure(s), 1 warning(s)
 
+  [CRIT] Layer 0: Z deflection 127.2 µm exceeds layer height 50 µm
   [WARN] Layer 0: Area increased by 3600.0 mm² (>100 threshold)
+  [CRIT] Layer 1: Z deflection 112.5 µm exceeds layer height 50 µm
+  [CRIT] Layer 2: Z deflection 100.0 µm exceeds layer height 50 µm
+  [CRIT] Layer 3: Z deflection 89.4 µm exceeds layer height 50 µm
+  [CRIT] Layer 4: Z deflection 80.5 µm exceeds layer height 50 µm
+  [CRIT] Layer 5: Z deflection 72.9 µm exceeds layer height 50 µm
+  [CRIT] Layer 6: Z deflection 66.5 µm exceeds layer height 50 µm
+  [CRIT] Layer 7: Z deflection 61.1 µm exceeds layer height 50 µm
+  [CRIT] Layer 8: Z deflection 56.5 µm exceeds layer height 50 µm
+  [CRIT] Layer 9: Z deflection 52.6 µm exceeds layer height 50 µm

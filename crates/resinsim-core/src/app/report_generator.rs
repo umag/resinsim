@@ -252,6 +252,7 @@ mod tests {
             cure_depth_um: 100.0,
             peel_force_n: force,
             suction_force_n: 0.0,
+            base_force_n: 0.0,
             total_force_n: force,
             support_capacity_n: force * sf,
             safety_factor: sf,

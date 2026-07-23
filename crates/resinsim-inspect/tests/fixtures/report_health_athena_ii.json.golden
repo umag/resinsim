@@ -2,21 +2,81 @@
   "failures": [
     {
       "layer": 0,
+      "message": "Z deflection 127.2 µm exceeds layer height 50 µm",
+      "severity": "Critical",
+      "type": "ZAxisCatastrophic"
+    },
+    {
+      "layer": 0,
       "message": "Area increased by 3600.0 mm² (>100 threshold)",
       "severity": "Warning",
       "type": "RapidAreaIncrease"
+    },
+    {
+      "layer": 1,
+      "message": "Z deflection 112.5 µm exceeds layer height 50 µm",
+      "severity": "Critical",
+      "type": "ZAxisCatastrophic"
+    },
+    {
+      "layer": 2,
+      "message": "Z deflection 100.0 µm exceeds layer height 50 µm",
+      "severity": "Critical",
+      "type": "ZAxisCatastrophic"
+    },
+    {
+      "layer": 3,
+      "message": "Z deflection 89.4 µm exceeds layer height 50 µm",
+      "severity": "Critical",
+      "type": "ZAxisCatastrophic"
+    },
+    {
+      "layer": 4,
+      "message": "Z deflection 80.5 µm exceeds layer height 50 µm",
+      "severity": "Critical",
+      "type": "ZAxisCatastrophic"
+    },
+    {
+      "layer": 5,
+      "message": "Z deflection 72.9 µm exceeds layer height 50 µm",
+      "severity": "Critical",
+      "type": "ZAxisCatastrophic"
+    },
+    {
+      "layer": 6,
+      "message": "Z deflection 66.5 µm exceeds layer height 50 µm",
+      "severity": "Critical",
+      "type": "ZAxisCatastrophic"
+    },
+    {
+      "layer": 7,
+      "message": "Z deflection 61.1 µm exceeds layer height 50 µm",
+      "severity": "Critical",
+      "type": "ZAxisCatastrophic"
+    },
+    {
+      "layer": 8,
+      "message": "Z deflection 56.5 µm exceeds layer height 50 µm",
+      "severity": "Critical",
+      "type": "ZAxisCatastrophic"
+    },
+    {
+      "layer": 9,
+      "message": "Z deflection 52.6 µm exceeds layer height 50 µm",
+      "severity": "Critical",
+      "type": "ZAxisCatastrophic"
     }
   ],
   "resin": "Generic Standard",
   "stl": "__STL_PATH__",
   "summary": {
     "bottom_time_sec": 219.0,
-    "critical_failures": 0,
+    "critical_failures": 10,
     "max_force_layer": 0,
-    "max_peel_force_n": 46.80000305175781,
+    "max_peel_force_n": 190.8000030517578,
     "max_temperature_c": 26.999996185302734,
-    "max_z_deflection_um": 31.200002670288086,
-    "min_safety_factor": 3.846153974533081,
+    "max_z_deflection_um": 127.20000457763672,
+    "min_safety_factor": 1.8040657043457031,
     "min_safety_layer": 6,
     "normal_time_sec": 16674.0,
     "total_layers": 1200,

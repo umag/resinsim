@@ -136,6 +136,7 @@ mod tests {
             cure_depth_um,
             peel_force_n: 0.0,
             suction_force_n: 0.0,
+            base_force_n: 0.0,
             total_force_n: 0.0,
             support_capacity_n: 0.0,
             safety_factor: 1.0,

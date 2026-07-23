@@ -12,6 +12,13 @@ pub struct LayerResult {
     pub cure_depth_um: f32,
     pub peel_force_n: f32,
     pub suction_force_n: f32,
+    /// First-layer base-adhesion force (N), KB-116 oxygen-freshness
+    /// σ-relaxation (ADR-0022 Stage 1). Peer of `suction_force_n`; a component
+    /// of `total_force_n`. `0.0` unless the resin opts in via
+    /// `base_adhesion_elevation_kpa`. `#[serde(default)]` so pre-Stage-1
+    /// sim.json files deserialise unchanged.
+    #[serde(default)]
+    pub base_force_n: f32,
     pub total_force_n: f32,
     pub support_capacity_n: f32,
     /// Safety factor (capacity / load). For zero-load layers

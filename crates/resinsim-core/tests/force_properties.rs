@@ -127,3 +127,67 @@ proptest! {
         prop_assert!(c.value() >= 0.0, "capacity should be non-negative: {}", c.value());
     }
 }
+
+// KB-116 base-adhesion σ-relaxation properties (ADR-0022 Stage 1).
+proptest! {
+    /// Base adhesion is never negative for any valid input.
+    #[test]
+    fn base_adhesion_non_negative(
+        sigma in 0.0f32..100.0,
+        a in 0.0f64..10000.0,
+        layer in 0u32..500,
+        tau in 0.1f32..50.0,
+    ) {
+        let f = PeelForceCalculator::base_adhesion_force(
+            sigma,
+            CrossSectionArea::new(a).expect("proptest strategy produces non-negative finite mm²"),
+            layer,
+            tau,
+        );
+        prop_assert!(f.value() >= 0.0, "base force should be non-negative: {}", f.value());
+    }
+
+    /// At layer 0 with a positive elevation and area, the base term is positive.
+    #[test]
+    fn base_adhesion_positive_at_layer0_when_elevated(
+        sigma in 1.0f32..100.0,
+        a in 1.0f64..10000.0,
+        tau in 0.1f32..50.0,
+    ) {
+        let f = PeelForceCalculator::base_adhesion_force(
+            sigma,
+            CrossSectionArea::new(a).expect("proptest strategy produces positive finite mm²"),
+            0,
+            tau,
+        );
+        prop_assert!(f.value() > 0.0, "elevated base at layer 0 should be positive: {}", f.value());
+    }
+
+    /// Base adhesion scales linearly with area (like peel_force).
+    #[test]
+    fn base_adhesion_linear_with_area(
+        sigma in 1.0f32..100.0,
+        a in 1.0f64..5000.0,
+        factor in 1.0f64..5.0,
+        tau in 0.5f32..50.0,
+    ) {
+        let f1 = PeelForceCalculator::base_adhesion_force(
+            sigma,
+            CrossSectionArea::new(a).expect("proptest strategy produces positive finite mm²"),
+            0,
+            tau,
+        );
+        let f2 = PeelForceCalculator::base_adhesion_force(
+            sigma,
+            CrossSectionArea::new(a * factor).expect("proptest strategy: area × factor is finite non-negative mm²"),
+            0,
+            tau,
+        );
+        let expected = f1.value() * factor as f32;
+        prop_assert!(
+            (f2.value() - expected).abs() <= 0.01 * expected.max(1.0),
+            "linear in area: f2={} expected={expected}",
+            f2.value()
+        );
+    }
+}

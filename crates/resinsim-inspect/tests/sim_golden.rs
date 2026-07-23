@@ -61,6 +61,7 @@ fn synth_layer(index: u32) -> LayerResult {
         cure_depth_um: 100.0,
         peel_force_n: 1.5,
         suction_force_n: 0.0,
+        base_force_n: 0.0,
         total_force_n: 1.5,
         support_capacity_n: 30.0,
         safety_factor: 20.0,

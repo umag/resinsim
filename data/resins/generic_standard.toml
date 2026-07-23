@@ -10,6 +10,12 @@ critical_energy_mj_cm2 = 5.0
 # Mechanical — KB-140
 tensile_strength_mpa = 35.0
 peel_adhesion_kpa = 13.0    # KB-110: standard FEP
+# KB-116 / ADR-0022 Stage 1: first-layer base-adhesion σ-elevation (oxygen-freshness),
+# relaxing exponentially over ~bottom_layer_count layers. INDICATIVE — fit to a single
+# Athena print (peak layer 15→0, corr 0.821→0.948, fit R² 0→0.56); NOT yet a properly
+# fitted coefficient (ADR-0022 defers per-stratum fitting to the E-series). Treat like
+# the cure_kinetics_ea default: best current estimate, refine with calibration data.
+base_adhesion_elevation_kpa = 40.0
 ref_lift_speed_mm_min = 60.0  # measurement speed for peel_adhesion_kpa (KB-112, KB-114, ADR-0005 §3)
 
 # Shrinkage — KB-142

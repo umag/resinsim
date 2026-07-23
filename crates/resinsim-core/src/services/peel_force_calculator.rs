@@ -33,10 +33,33 @@ impl PeelForceCalculator {
             .expect("pressure differential and area are non-negative by construction")
     }
 
-    /// Total force: adhesion peel + suction.
-    pub fn total_force(peel: PeelForce, suction: PeelForce) -> PeelForce {
-        PeelForce::new(peel.value() + suction.value())
-            .expect("sum of two non-negative finite values is non-negative finite")
+    /// First-layer base-adhesion force (KB-116 oxygen-freshness σ-relaxation).
+    /// An elevated release-layer adhesion Δσ₀ (kPa) at layer 0 relaxes
+    /// exponentially over `relaxation_layers` (τ) toward zero, area-scaled:
+    ///   F_base = Δσ₀ · exp(-layer/τ) · A · 1e-3 → Newtons.
+    /// Kept SEPARATE from [`peel_force`](Self::peel_force) so the KB-114 test
+    /// vectors stay valid. ADR-0022 Stage 1. Zero when Δσ₀=0, area=0, or τ<=0.
+    pub fn base_adhesion_force(
+        base_elevation_kpa: f32,
+        area: CrossSectionArea,
+        layer: u32,
+        relaxation_layers: f32,
+    ) -> PeelForce {
+        if base_elevation_kpa <= 0.0 || relaxation_layers <= 0.0 {
+            return PeelForce::new(0.0).expect("zero is a non-negative finite PeelForce");
+        }
+        // Exponential relaxation of the elevated release-layer adhesion:
+        // full Δσ₀ at layer 0, ×(1/e) at layer == τ, →0 for deep layers.
+        let decay = (-(layer as f32) / relaxation_layers).exp();
+        PeelForce::new(base_elevation_kpa * area.value() as f32 * 1e-3 * decay)
+            .expect("elevation, area, and decay factor are non-negative by construction")
+    }
+
+    /// Total separation force: peel adhesion + suction + first-layer base
+    /// adhesion (ADR-0022 Stage 1). All three components are non-negative.
+    pub fn total_force(peel: PeelForce, suction: PeelForce, base: PeelForce) -> PeelForce {
+        PeelForce::new(peel.value() + suction.value() + base.value())
+            .expect("sum of three non-negative finite values is non-negative finite")
     }
 
     /// Lift speed factor using power-law model.
@@ -204,10 +227,65 @@ mod tests {
     // --- Total force ---
 
     #[test]
-    fn total_force_combines_peel_and_suction() {
+    fn total_force_combines_peel_suction_and_base() {
         let peel_f = peel(32.5);
         let suction = peel(10.1);
-        let total = PeelForceCalculator::total_force(peel_f, suction);
-        assert!((total.value() - 42.6).abs() < 0.01);
+        let base = peel(4.0);
+        let total = PeelForceCalculator::total_force(peel_f, suction, base);
+        assert!((total.value() - 46.6).abs() < 0.01);
+    }
+
+    // --- KB-116 base adhesion σ-relaxation (ADR-0022 Stage 1) ---
+
+    #[test]
+    fn base_adhesion_layer0_is_full_elevation() {
+        // Δσ₀=20 kPa, A=500 mm², layer 0, τ=5 → 20·500·1e-3·exp(0) = 10.0 N.
+        let f = PeelForceCalculator::base_adhesion_force(20.0, area(500.0), 0, 5.0);
+        assert!((f.value() - 10.0).abs() < 1e-4, "got {}", f.value());
+    }
+
+    #[test]
+    fn base_adhesion_decays_to_one_over_e_at_tau() {
+        // layer == τ → factor exp(-1) ≈ 0.3679.
+        let f = PeelForceCalculator::base_adhesion_force(20.0, area(500.0), 5, 5.0);
+        let expected = 20.0 * 500.0 * 1e-3 * (-1.0f32).exp();
+        assert!(
+            (f.value() - expected).abs() < 1e-4,
+            "got {} expected {expected}",
+            f.value()
+        );
+    }
+
+    #[test]
+    fn base_adhesion_zero_when_elevation_zero() {
+        assert_eq!(
+            PeelForceCalculator::base_adhesion_force(0.0, area(500.0), 0, 5.0).value(),
+            0.0
+        );
+    }
+
+    #[test]
+    fn base_adhesion_zero_when_area_zero() {
+        assert_eq!(
+            PeelForceCalculator::base_adhesion_force(20.0, area(0.0), 0, 5.0).value(),
+            0.0
+        );
+    }
+
+    #[test]
+    fn base_adhesion_zero_when_tau_non_positive() {
+        assert_eq!(
+            PeelForceCalculator::base_adhesion_force(20.0, area(500.0), 0, 0.0).value(),
+            0.0
+        );
+    }
+
+    #[test]
+    fn base_adhesion_non_increasing_in_layer() {
+        let a = area(500.0);
+        let f0 = PeelForceCalculator::base_adhesion_force(20.0, a, 0, 5.0).value();
+        let f2 = PeelForceCalculator::base_adhesion_force(20.0, a, 2, 5.0).value();
+        let f10 = PeelForceCalculator::base_adhesion_force(20.0, a, 10, 5.0).value();
+        assert!(f0 >= f2 && f2 >= f10 && f0 > f10, "f0={f0} f2={f2} f10={f10}");
     }
 }

@@ -157,6 +157,17 @@ pub struct ResinProfile {
     #[serde(default)]
     pub(crate) cure_kinetics_ea_kj_mol: Option<f32>,
 
+    /// First-layer base-adhesion σ-elevation (KB-116 oxygen-freshness). Unit:
+    /// kPa. **Optional** — when `None`, `effective_base_adhesion_elevation_kpa`
+    /// returns 0.0 (NO base term), so unset/legacy resins are behaviour-
+    /// preserving. A non-zero value adds an elevated release-layer adhesion at
+    /// layer 0 that relaxes over ~`recipe.bottom_layer_count()` layers
+    /// (ADR-0022 Stage 1). Indicative until fitted against calibration data
+    /// (single-print R²≈0); mirrors the `cure_kinetics_ea_kj_mol` Option-with-
+    /// warn precedent.
+    #[serde(default)]
+    pub(crate) base_adhesion_elevation_kpa: Option<f32>,
+
     /// Initial photoinitiator concentration as a dimensionless fraction in
     /// `[0, 1]`. KB-160. Default 1.0 (convention) via `#[serde(default = ...)]`
     /// so legacy resin TOMLs without the field parse unchanged.
@@ -317,6 +328,15 @@ impl ResinProfile {
     pub fn effective_cure_kinetics_ea_kj_mol(&self) -> f32 {
         self.cure_kinetics_ea_kj_mol
             .unwrap_or(DEFAULT_CURE_KINETICS_EA_KJ_MOL)
+    }
+    /// Base-adhesion σ-elevation (kPa) if the TOML carries a value. KB-116.
+    pub fn base_adhesion_elevation_kpa(&self) -> Option<f32> {
+        self.base_adhesion_elevation_kpa
+    }
+    /// Effective base-adhesion σ-elevation: the TOML value, or 0.0 (no base
+    /// term) when unset. Opt-in so legacy resins are behaviour-preserving.
+    pub fn effective_base_adhesion_elevation_kpa(&self) -> f32 {
+        self.base_adhesion_elevation_kpa.unwrap_or(0.0)
     }
     /// Initial photoinitiator concentration (dimensionless fraction in [0,1]).
     /// KB-160. Consumed by the voxel cure path.
@@ -608,6 +628,7 @@ impl ResinProfile {
             degradation_temp_c: default_degradation_temp_c(),
             min_safe_temp_c: default_min_safe_temp_c(),
             cure_kinetics_ea_kj_mol: None, // KB-153: no measured value — uses default 30 kJ/mol w/ loud warning
+            base_adhesion_elevation_kpa: None, // KB-116: opt-in; None ⇒ 0.0 (no base term). Calibrated value lives in the TOML.
             photoinitiator_concentration_initial: DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL,
             photoinitiator_decay_constant_k_d: None, // KB-160: no measured value — uses default 0.05 w/ ±50 % loud warning
             youngs_modulus_mpa: None, // KB-163: deliberately uncalibrated — see data/resins/elegoo_ceramic_grey_v2.toml comment
@@ -640,6 +661,7 @@ impl ResinProfile {
             degradation_temp_c: default_degradation_temp_c(),
             min_safe_temp_c: default_min_safe_temp_c(),
             cure_kinetics_ea_kj_mol: None, // KB-153: no measured value — uses default 30 kJ/mol w/ loud warning
+            base_adhesion_elevation_kpa: None, // KB-116: opt-in; None ⇒ 0.0 (no base term). Calibrated value lives in the TOML.
             photoinitiator_concentration_initial: DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL,
             photoinitiator_decay_constant_k_d: None, // KB-160: no measured value — uses default 0.05 w/ ±50 % loud warning
             youngs_modulus_mpa: Some(2000.0), // KB-163: literature-midpoint photopolymer modulus (Premium-Black-class)
@@ -670,6 +692,20 @@ mod tests {
         ResinProfile::elegoo_ceramic_grey_v2()
             .validate()
             .expect("ResinProfile::elegoo_ceramic_grey_v2() factory must satisfy validate()");
+    }
+
+    #[test]
+    fn effective_base_adhesion_elevation_defaults_to_zero_when_unset() {
+        let mut r = ResinProfile::generic_standard();
+        r.base_adhesion_elevation_kpa = None;
+        assert_eq!(r.effective_base_adhesion_elevation_kpa(), 0.0);
+    }
+
+    #[test]
+    fn effective_base_adhesion_elevation_returns_set_value() {
+        let mut r = ResinProfile::generic_standard();
+        r.base_adhesion_elevation_kpa = Some(25.0);
+        assert!((r.effective_base_adhesion_elevation_kpa() - 25.0).abs() < 1e-6);
     }
 
     #[test]

@@ -83,6 +83,10 @@ export const LayerResultV2 = z.object({
   cure_depth_um: z.number(),
   peel_force_n: z.number(),
   suction_force_n: z.number(),
+  // ADR-0022 Stage 1 (KB-116). Optional with a 0 default so pre-Stage-1 v2
+  // sim.json files (no base_force_n) still parse; mirrors the Rust
+  // `#[serde(default)]` on LayerResult.base_force_n.
+  base_force_n: z.number().default(0),
   total_force_n: z.number(),
   support_capacity_n: z.number(),
   safety_factor: z.number().nullable(),

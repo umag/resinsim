@@ -222,8 +222,10 @@ fn empty_data_dir_reports_no_available_profiles() {
 
 #[test]
 fn report_health_athena_ii_uses_toml_stiffness() {
-    // The reproduction from the triage report. Pre-fix: deflection = 101.7 µm
-    // (generic fallback). Post-fix: ≈ 31.2 µm (Athena II z_stiffness=1500).
+    // Defends the z_stiffness resolution (Athena II k=1500, not the silent generic
+    // k=460 fallback). Rebuilt for ADR-0022 Stage 1: asserts the stiffness RATIO
+    // (force/deflection), robust to the KB-116 base term's effect on the absolute
+    // first-layer force. See the detailed note at the assertion below.
     //
     // ADR-0015: drives the canonical-interchange pipeline (sim → report
     // health --in). Test both halves so a regression in either producer or
@@ -257,23 +259,26 @@ fn report_health_athena_ii_uses_toml_stiffness() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // ADR-0005 (2026-04-20): lift_speed_mm_min + ref_lift_speed_mm_min moved off
-    // PrinterProfile. With no --resin flag the CLI defaults to resin=generic_standard,
-    // whose recipe has lift_speed_mm_min=60 (matching ref_lift_speed_mm_min=60). So
-    // speed factor = 1.0, peel ≈ 46.8 N, deflection ≈ 31.2 µm (still gated by Athena II
-    // z_stiffness=1500 N/mm — the original bug this test defends against).
+    // The regression this defends: pre-ADR-0004 the CLI silently fell back to the
+    // generic_msla_4k z_stiffness (k=460) instead of Athena II's k=1500, inflating
+    // deflection (~101.7 µm on the old peel-only force).
     //
-    // Pre-ADR-0005: Athena II's baked lift_speed=90 gave speed factor 1.076 → 33.6 µm.
-    // The 31.2 µm result is the CORRECT new behaviour — the resin recipe drives lift
-    // speed, not the printer; generic_standard at 60 mm/min happens to match ref_lift.
-    //
-    // Pre-ADR-0004 (the original regression this test defends against): silent fallback
-    // to generic_msla_4k k=460 produced 101.7 µm.
-    let defl = extract_f64(&stdout, "\"max_z_deflection_um\":");
+    // Rebuilt for ADR-0022 Stage 1 (KB-116 base adhesion): generic_standard now carries
+    // a first-layer base term, so the layer-0 total force — and hence the ABSOLUTE
+    // deflection — is much larger than the old peel-only ~31 µm (its former assertion).
+    // z_deflection = total_force / z_stiffness, so total_force / deflection == z_stiffness
+    // REGARDLESS of the base magnitude. Asserting that ratio survives the base term AND
+    // any future Δσ₀ refit, while k≈460 still fails loudly. max_peel_force_n is the max
+    // TOTAL force (print_simulation summary), at the same layer as max deflection.
+    let defl_um = extract_f64(&stdout, "\"max_z_deflection_um\":");
+    let force_n = extract_f64(&stdout, "\"max_peel_force_n\":");
+    assert!(defl_um > 0.0, "deflection should be positive, got {defl_um}");
+    let stiffness_n_per_mm = force_n / (defl_um / 1000.0);
     assert!(
-        (29.0..=33.0).contains(&defl),
-        "expected ~31.2 µm Athena II deflection post-ADR-0005, got {defl} \
-         (pre-ADR-0004 silent-generic-fallback was 101.7 µm — that regression would re-appear as >100)"
+        (1400.0..=1600.0).contains(&stiffness_n_per_mm),
+        "expected Athena II z_stiffness ≈ 1500 N/mm (max total force {force_n} N / \
+         deflection {defl_um} µm = {stiffness_n_per_mm:.0}); a value near 460 means the \
+         pre-ADR-0004 silent generic_msla_4k fallback has regressed"
     );
     std::fs::remove_dir_all(&cube).ok();
 }
@@ -373,6 +378,23 @@ fn no_profile_flag_skips_resolution_even_with_bogus_env() {
 // The goldens contain `__STL_PATH__` as a placeholder for the per-run tmpdir
 // path; the test substitutes the actual path before comparing.
 
+/// Regenerate a report-health byte-identity golden when
+/// `RESINSIM_REGENERATE_REPORT_GOLDEN=1` (mirrors sim_golden's regenerate mode).
+/// Substitutes the per-run STL path back to the `__STL_PATH__` placeholder.
+/// Returns true when a golden was written (the caller then skips the assert).
+fn maybe_regenerate_report_golden(golden_name: &str, stdout: &str, stl: &Path) -> bool {
+    if std::env::var("RESINSIM_REGENERATE_REPORT_GOLDEN").is_err() {
+        return false;
+    }
+    let placeholdered = stdout.replace(stl.to_str().expect("stl path is utf-8"), "__STL_PATH__");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(golden_name);
+    std::fs::write(&path, placeholdered).expect("write golden");
+    eprintln!("regenerated {}", path.display());
+    true
+}
+
 #[test]
 fn report_health_athena_ii_text_byte_identity() {
     let cube = tmpdir("text_byte_id");
@@ -410,6 +432,10 @@ fn report_health_athena_ii_text_byte_identity() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8(out.stdout).expect("stdout is utf-8");
+    if maybe_regenerate_report_golden("report_health_athena_ii.text.golden", &stdout, &stl) {
+        std::fs::remove_dir_all(&cube).ok();
+        return;
+    }
     let golden = include_str!("fixtures/report_health_athena_ii.text.golden")
         .replace("__STL_PATH__", stl.to_str().expect("stl path is utf-8"));
     assert_eq!(
@@ -457,6 +483,10 @@ fn report_health_athena_ii_json_byte_identity() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8(out.stdout).expect("stdout is utf-8");
+    if maybe_regenerate_report_golden("report_health_athena_ii.json.golden", &stdout, &stl) {
+        std::fs::remove_dir_all(&cube).ok();
+        return;
+    }
     let golden = include_str!("fixtures/report_health_athena_ii.json.golden")
         .replace("__STL_PATH__", stl.to_str().expect("stl path is utf-8"));
     assert_eq!(

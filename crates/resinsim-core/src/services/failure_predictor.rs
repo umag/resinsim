@@ -207,7 +207,16 @@ impl FailurePredictor {
         let suction = PeelForce::new(suction_n).expect(
             "suction_force_n from SuctionDetector is non-negative; default 0.0 is non-negative",
         );
-        let total_force = PeelForceCalculator::total_force(peel, suction);
+        // KB-116 first-layer base adhesion: elevated release-layer σ at layer 0
+        // relaxing over the bottom-layer count (ADR-0022 Stage 1). Opt-in per
+        // resin; 0.0 elevation ⇒ zero base, so legacy resins are unchanged.
+        let base = PeelForceCalculator::base_adhesion_force(
+            resin.effective_base_adhesion_elevation_kpa(),
+            area,
+            layer,
+            recipe.bottom_layer_count() as f32,
+        );
+        let total_force = PeelForceCalculator::total_force(peel, suction, base);
 
         // --- Holding capacity + safety assessment (plan v3 §6) ---
         let crate::services::SupportAssessment {
@@ -282,6 +291,7 @@ impl FailurePredictor {
             cure_depth_um: cure_depth.value(),
             peel_force_n: peel.value(),
             suction_force_n: suction.value(),
+            base_force_n: base.value(),
             total_force_n: total_force.value(),
             support_capacity_n: total_capacity.value(),
             safety_factor: safety_factor.map_or(f32::INFINITY, |s| s.value()), // INFINITY = no load; print_simulation accumulator handles it correctly
@@ -501,6 +511,67 @@ mod tests {
         );
         assert!(result.safety_factor > 1.0);
         assert!(result.cure_depth_um > 50.0);
+    }
+
+    /// ADR-0022 Stage 1 MECHANISM gate: the KB-116 base term, folded into
+    /// total_force, pulls the total-force peak EARLIER than the area-driven
+    /// peel peak. Decoupled from whether the real spike geometry cooperates —
+    /// here the first layer is given a large area so an area-scaled base term
+    /// can win. Proves the wiring works in CI.
+    #[test]
+    fn base_adhesion_shifts_total_force_peak_earlier() {
+        use crate::services::argmax_by;
+        // Elevated first-layer adhesion Δσ₀ ≈ 2× the steady peel σ — plausible
+        // for the fresh, oxygen-inhibited release layer.
+        let mut resin = test_resin();
+        resin.base_adhesion_elevation_kpa = Some(25.0);
+        let recipe = test_recipe();
+        let printer = test_printer();
+        let supports = test_supports();
+        let plate = test_plate();
+        let thermal = test_thermal();
+        let height = recipe.layer_height_um();
+        // Areas so the area-driven peel peaks at a LATER layer (index 3, max
+        // area) while the large first layer lets base pull the TOTAL peak to 0.
+        let areas = [450.0, 200.0, 300.0, 500.0, 250.0];
+        let mut peel = Vec::new();
+        let mut total = Vec::new();
+        let mut prev = 0.0f64;
+        for (layer, &a) in areas.iter().enumerate() {
+            let (lr, _) = FailurePredictor::predict_layer(
+                layer as u32,
+                area(a),
+                area(prev),
+                &LayerOverrides::default(),
+                &resin,
+                &printer,
+                &recipe,
+                height,
+                &supports,
+                &plate,
+                &thermal,
+            );
+            if layer == 0 {
+                assert!(
+                    lr.base_force_n > 0.0,
+                    "base at layer 0 must be positive, got {}",
+                    lr.base_force_n
+                );
+            }
+            peel.push(lr.peel_force_n);
+            total.push(lr.total_force_n);
+            prev = a;
+        }
+        let peel_peak = argmax_by(&peel, |&v| v as f64).expect("non-empty");
+        let total_peak = argmax_by(&total, |&v| v as f64).expect("non-empty");
+        assert!(
+            peel_peak > 0,
+            "sanity: area-driven peel should peak at a later layer, got {peel_peak}"
+        );
+        assert!(
+            total_peak < peel_peak,
+            "base term must pull the total-force peak earlier: total_peak={total_peak}, peel_peak={peel_peak}"
+        );
     }
 
     #[test]
