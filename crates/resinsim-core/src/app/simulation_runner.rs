@@ -578,6 +578,11 @@ impl SimulationRunner {
         // layers → None → no correction) when the resin's strength is unset.
         let shape_factor_map =
             Self::build_shape_factor_map(masks, resin.effective_peel_shape_factor_strength());
+        // KB-188 Kendall interlayer crack front (peel-crack-propagation-tier1):
+        // real per-layer perimeter for NORMAL layers, with the same
+        // is_fully_solid placeholder guard as the shape factor. Absent for
+        // fully-solid / synthetic masks ⇒ no crack knockdown.
+        let perimeter_map = Self::build_perimeter_map(masks);
         let phases = LayerPhase::classify_sequence(areas, recipe);
 
         // Print-wide thermal context — constructed once, passed by reference
@@ -767,6 +772,7 @@ impl SimulationRunner {
                 lift_speed_mm_min: lift_speed_override,
                 suction_force_n: suction_map.get(&(i as u32)).copied(),
                 peel_shape_factor: shape_factor_map.get(&(i as u32)).copied(),
+                perimeter_mm: perimeter_map.get(&(i as u32)).copied(),
                 is_raft: matches!(phases.get(i), Some(LayerPhase::Raft)),
             };
             // Per-layer CTB-authoritative slab thickness — supports
@@ -1461,6 +1467,27 @@ impl SimulationRunner {
                 };
                 (i as u32, factor)
             })
+            .collect()
+    }
+
+    /// Per-layer REAL solid-region perimeter (mm) for the KB-188 Kendall
+    /// interlayer crack-front knockdown (peel-crack-propagation-tier1). Mirrors
+    /// [`Self::build_shape_factor_map`] and reuses the same `is_fully_solid`
+    /// placeholder guard: a fully-solid mask is a filled bounding rectangle
+    /// carrying no crack-front signal — `run_from_areas`' synthetic 1×1 and the
+    /// `run_from_layer_inputs` W×H fallback are both fully-solid — so those
+    /// layers get NO entry and `predict_layer` applies no knockdown (crack front
+    /// stays 0, `crack_front_fraction` None). Real per-layer geometry leaves void
+    /// margins around the part, so it is not fully-solid and yields its true
+    /// perimeter. A genuine grid-filling solid rectangle is therefore
+    /// under-modelled to no-crack — the accepted trade-off shared with S3, since
+    /// it is indistinguishable from a placeholder.
+    fn build_perimeter_map(masks: &[LayerMask]) -> HashMap<u32, f64> {
+        masks
+            .iter()
+            .enumerate()
+            .filter(|(_, mask)| !mask.is_fully_solid())
+            .map(|(i, mask)| (i as u32, mask.perimeter_mm()))
             .collect()
     }
 

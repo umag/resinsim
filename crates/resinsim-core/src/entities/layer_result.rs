@@ -70,6 +70,15 @@ pub struct LayerResult {
     /// no cumulative residual stress).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voxel_yield_fraction: Option<f32>,
+    /// Kendall interlayer crack-front fraction for this NORMAL layer
+    /// (peel-crack-propagation-tier1). `1 − min(1, 4√A/P)` — the share of the
+    /// interlayer bond released by the crack-front-width knockdown. `Some` only
+    /// when `> 0` (thin / high-perimeter geometry); `None` for compact/square
+    /// layers, bottom layers, and placeholder (fully-solid / synthetic) masks,
+    /// so `skip_serializing_if` keeps pre-feature sim.json files byte-identical.
+    /// KB-188 / KB-116; peer of `peel_shape_factor`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crack_front_fraction: Option<f32>,
 }
 
 /// serde adapter for an `f32` that may legitimately be `f32::INFINITY`

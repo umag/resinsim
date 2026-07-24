@@ -56,6 +56,7 @@ fn main() {
             stress_von_mises_max_mpa: None,
             strain_gradient_max_frac: None,
             voxel_yield_fraction: None,
+            crack_front_fraction: None,
         };
         sim.add_layer(lr, vec![])
             .unwrap_or_else(|e| panic!("add_layer({i}): {e:?}"));

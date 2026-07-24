@@ -268,6 +268,7 @@ mod tests {
             stress_von_mises_max_mpa: None,
             strain_gradient_max_frac: None,
             voxel_yield_fraction: None,
+            crack_front_fraction: None,
         }
     }
 

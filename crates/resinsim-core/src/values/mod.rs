@@ -1,4 +1,5 @@
 pub mod area;
+pub mod crack;
 pub mod cure_depth;
 #[cfg(feature = "field-sim")]
 pub mod cure_field;
@@ -27,6 +28,7 @@ pub mod thermal;
 pub mod thermal_field;
 
 pub use area::{AreaDelta, CrossSectionArea};
+pub use crack::CrackFront;
 pub use cure_depth::{CureDepth, Energy, PenetrationDepth};
 #[cfg(feature = "field-sim")]
 pub use cure_field::{CureField, CureFieldError, LayerSummary};

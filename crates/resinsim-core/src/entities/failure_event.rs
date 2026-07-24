@@ -26,6 +26,13 @@ pub enum FailureType {
     /// crack risk along the gradient direction (cohesive failure).
     /// ADR-0018 / t2f3. Producer: `predict_strain_failures`.
     CohesiveFailure,
+    /// The resin↔resin interlayer bond, reduced by the Kendall crack-front
+    /// knockdown, can no longer hold this NORMAL layer against the peel load —
+    /// the layer is predicted to delaminate from the one below. Emitted at
+    /// `Severity::Warning`; co-fires with `SupportOverload` when supports also
+    /// cannot make up the shortfall. KB-188 / KB-116. Producer:
+    /// `FailurePredictor::predict_layer` (normal layers with a real crack front).
+    Delamination,
 }
 
 /// Severity level.

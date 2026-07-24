@@ -2688,6 +2688,7 @@ mod tests {
                     stress_von_mises_max_mpa: None,
                     strain_gradient_max_frac: None,
                     voxel_yield_fraction: None,
+                    crack_front_fraction: None,
                 };
                 sim.add_layer(lr, vec![]).expect("sequential index");
             }
@@ -2843,6 +2844,7 @@ mod tests {
             stress_von_mises_max_mpa: None,
             strain_gradient_max_frac: None,
             voxel_yield_fraction: None,
+            crack_front_fraction: None,
         };
         sim.add_layer(lr, vec![]).expect("first index");
         let dir = std::env::temp_dir().join(format!(

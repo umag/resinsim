@@ -1,14 +1,14 @@
 use crate::entities::{
     FailureEvent, FailureType, LayerResult, PrinterProfile, Recipe, ResinProfile, Severity,
 };
-use crate::services::build_plate::PlateAdhesionProfile;
+use crate::services::build_plate::{BuildPlate, PlateAdhesionProfile};
 use crate::services::uniformity_calculator::UniformityProfile;
 use crate::services::{
-    CureCalculator, PeelForceCalculator, SupportAnalyzer, ThermalCalculator, UniformityCalculator,
-    ZAxisCompensator,
+    CrackPropagator, CureCalculator, PeelForceCalculator, SupportAnalyzer, ThermalCalculator,
+    UniformityCalculator, ZAxisCompensator,
 };
 use crate::values::{
-    AmbientTemperature, CrossSectionArea, Energy, InitialLedTemperature, PeelForce,
+    AmbientTemperature, CrackFront, CrossSectionArea, Energy, InitialLedTemperature, PeelForce,
     PenetrationDepth,
 };
 
@@ -65,6 +65,13 @@ pub struct LayerOverrides {
     /// unset) — `predict_layer` then applies factor `1.0` (no correction). Set
     /// per-layer by `SimulationRunner` from the mask geometry + resin strength.
     pub peel_shape_factor: Option<f32>,
+    /// Real per-layer solid-region perimeter in mm, from `LayerMask::perimeter_mm()`
+    /// (peel-crack-propagation-tier1). Drives the Kendall interlayer crack-front
+    /// knockdown `min(1, 4√A/P)` for NORMAL layers. `None` for placeholder
+    /// (fully-solid / synthetic) masks — the runner's `is_fully_solid` guard —
+    /// so `predict_layer` applies no knockdown (behaviour-preserving). Set
+    /// per-layer by `SimulationRunner` from the mask geometry.
+    pub perimeter_mm: Option<f64>,
     /// Whether this layer is part of the raft/support base.
     /// Z deflection on raft layers is downgraded to Info (not Critical).
     pub is_raft: bool,
@@ -229,15 +236,56 @@ impl FailurePredictor {
         );
         let total_force = PeelForceCalculator::total_force(peel, suction, base);
 
-        // --- Holding capacity + safety assessment (plan v3 §6) ---
+        // --- Interlayer crack front (KB-188 Kendall fracture-limited bond) ---
+        // For NORMAL layers only (the interlayer bond is the holding mechanism;
+        // bottom layers use plate adhesion), derive the crack front from the
+        // real per-layer perimeter threaded by the runner. Placeholder /
+        // fully-solid masks thread `None` ⇒ no crack ⇒ behaviour-preserving.
+        let crack = if BuildPlate::is_bottom_layer(layer, plate) {
+            CrackFront::no_crack()
+        } else {
+            match overrides.perimeter_mm {
+                Some(perimeter_mm) => {
+                    CrackPropagator::crack_from_geometry(area.value(), perimeter_mm)
+                }
+                None => CrackFront::no_crack(),
+            }
+        };
+
+        // --- Holding capacity + safety assessment (crack reduces interlayer) ---
+        // `plate_capacity_n` is the interlayer-bond capacity already scaled by
+        // the crack for NORMAL layers (assess's knockdown) — reused below as the
+        // single source of truth for the Delamination check, so the reduced
+        // capacity is never re-derived (and can't drift from `holding_capacity`).
         let crate::services::SupportAssessment {
             overload,
             total_capacity,
             safety_factor,
+            plate_capacity_n: reduced_interlayer_n,
             ..
-        } = SupportAnalyzer::assess(layer, area, total_force, resin, supports, plate);
+        } = SupportAnalyzer::assess(layer, area, total_force, resin, supports, plate, crack);
         if let Some(event) = overload {
             failures.push(event);
+        }
+
+        // --- Delamination (KB-188) ---
+        // When a real crack front is present, if the crack-reduced interlayer
+        // bond ALONE can no longer hold the shaped peel load, the layer is
+        // predicted to delaminate from the one below. Gated on `crack > 0` so
+        // compact/square and placeholder layers stay byte-identical (no spurious
+        // event); co-fires with SupportOverload.
+        if crack.value() > 0.0 && reduced_interlayer_n < peel.value() {
+            failures.push(FailureEvent {
+                layer,
+                failure_type: FailureType::Delamination,
+                severity: Severity::Warning,
+                message: format!(
+                    "Interlayer bond {:.1} N (crack front {}) below peel load {:.1} N — layer predicted to delaminate",
+                    reduced_interlayer_n,
+                    crack,
+                    peel.value()
+                ),
+            });
         }
 
         // --- Suction warning ---
@@ -320,6 +368,10 @@ impl FailurePredictor {
             stress_von_mises_max_mpa: None,
             strain_gradient_max_frac: None,
             voxel_yield_fraction: None,
+            // KB-188 interlayer crack front — `Some` only for thin NORMAL layers
+            // (crack > 0); `None` for compact/square/bottom/placeholder layers so
+            // `skip_serializing_if` keeps pre-feature sim.json byte-identical.
+            crack_front_fraction: (crack.value() > 0.0).then_some(crack.value()),
         };
 
         (result, failures)
@@ -939,6 +991,225 @@ mod tests {
                 .iter()
                 .any(|f| f.failure_type == FailureType::NonUniformCure),
             "expected NonUniformCure, got: {failures:?}"
+        );
+    }
+
+    // --- Kendall interlayer crack front (peel-crack-propagation-tier1) ---
+
+    /// Run one NORMAL layer (index 50) at the given area + optional real
+    /// perimeter, with the default resin/printer/recipe/plate/thermal.
+    fn run_normal_layer(
+        area_mm2: f64,
+        perimeter_mm: Option<f64>,
+        supports: &SupportConfig,
+    ) -> (LayerResult, Vec<FailureEvent>) {
+        let overrides = LayerOverrides {
+            perimeter_mm,
+            ..Default::default()
+        };
+        FailurePredictor::predict_layer(
+            50,
+            area(area_mm2),
+            area(area_mm2),
+            &overrides,
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            test_recipe().layer_height_um(),
+            supports,
+            &test_plate(),
+            &test_thermal(),
+        )
+    }
+
+    #[test]
+    fn thin_normal_layer_records_crack_and_lowers_safety_factor() {
+        // Compact 50×50 square: A=2500, P≈200 (4√A) → crack ≈ 0 → None.
+        let (compact, _) = run_normal_layer(2500.0, Some(200.0), &test_supports());
+        // Thin wall: A=2500, P=2000 → 4√A/P = 0.1 → crack ≈ 0.9.
+        let (thin, _) = run_normal_layer(2500.0, Some(2000.0), &test_supports());
+        assert_eq!(
+            compact.crack_front_fraction, None,
+            "square-ish layer must record no crack, got {:?}",
+            compact.crack_front_fraction
+        );
+        let cf = thin
+            .crack_front_fraction
+            .expect("thin normal layer must record Some(crack_front_fraction)");
+        assert!(cf > 0.8, "thin wall crack fraction should be large, got {cf}");
+        assert!(
+            thin.safety_factor < compact.safety_factor,
+            "thin (reduced interlayer capacity) must have LOWER safety factor: thin={} compact={}",
+            thin.safety_factor,
+            compact.safety_factor
+        );
+    }
+
+    #[test]
+    fn crack_knockdown_is_capacity_only_peel_and_total_force_unchanged() {
+        // Capacity-only invariant: the crack reduces holding capacity, never the
+        // peel/total LOAD — force outputs stay byte-identical vs the no-crack run.
+        let (no_perim, _) = run_normal_layer(2500.0, None, &test_supports());
+        let (thin, _) = run_normal_layer(2500.0, Some(2000.0), &test_supports());
+        assert_eq!(
+            thin.peel_force_n, no_perim.peel_force_n,
+            "peel LOAD must be crack-invariant"
+        );
+        assert_eq!(
+            thin.total_force_n, no_perim.total_force_n,
+            "total LOAD must be crack-invariant"
+        );
+    }
+
+    #[test]
+    fn compact_normal_layer_records_no_crack() {
+        // Exactly square (P = 4√A) → knockdown 1.0 → crack 0 → None → golden-safe.
+        let (compact, _) = run_normal_layer(2500.0, Some(200.0), &test_supports());
+        assert_eq!(compact.crack_front_fraction, None);
+    }
+
+    #[test]
+    fn bottom_layer_never_records_crack() {
+        // Layer 0 is a bottom layer (plate adhesion) — the interlayer crack must
+        // NOT apply even with a thin, high-perimeter mask.
+        let overrides = LayerOverrides {
+            perimeter_mm: Some(2000.0),
+            ..Default::default()
+        };
+        let (bottom, _) = FailurePredictor::predict_layer(
+            0,
+            area(2500.0),
+            area(0.0),
+            &overrides,
+            &test_resin(),
+            &test_printer(),
+            &test_recipe(),
+            test_recipe().layer_height_um(),
+            &test_supports(),
+            &test_plate(),
+            &test_thermal(),
+        );
+        assert_eq!(
+            bottom.crack_front_fraction, None,
+            "bottom layer must never record a crack, got {:?}",
+            bottom.crack_front_fraction
+        );
+    }
+
+    #[test]
+    fn delamination_fires_when_crack_reduced_interlayer_below_peel() {
+        // Thin normal layer, no supports: reduced interlayer capacity
+        // (50 kPa × 2500 × 1e-3 × 0.1 = 12.5 N) < shaped peel (~32.5 N) →
+        // Delamination Warning.
+        let no_supports = SupportConfig {
+            tip_radius_mm: 0.0,
+            n_supports: 0,
+        };
+        let (_, failures) = run_normal_layer(2500.0, Some(2000.0), &no_supports);
+        let delam: Vec<_> = failures
+            .iter()
+            .filter(|f| f.failure_type == FailureType::Delamination)
+            .collect();
+        assert_eq!(delam.len(), 1, "expected one Delamination, got: {failures:?}");
+        assert_eq!(delam[0].severity, Severity::Warning);
+        assert_eq!(delam[0].layer, 50);
+    }
+
+    #[test]
+    fn compact_normal_layer_does_not_delaminate() {
+        // Square layer: full interlayer bond (125 N) >> peel (~32.5 N), crack 0 →
+        // no Delamination (behaviour-preserving for compact geometry).
+        let (_, failures) = run_normal_layer(2500.0, Some(200.0), &test_supports());
+        assert!(
+            !failures
+                .iter()
+                .any(|f| f.failure_type == FailureType::Delamination),
+            "compact layer must not delaminate, got: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn delamination_co_fires_with_support_overload() {
+        // Thin normal layer, no supports: the crack-reduced interlayer capacity
+        // is both < the peel load (Delamination) AND < the total load, so the
+        // total capacity is insufficient (SupportOverload) — both fire.
+        let no_supports = SupportConfig {
+            tip_radius_mm: 0.0,
+            n_supports: 0,
+        };
+        let (_, failures) = run_normal_layer(2500.0, Some(2000.0), &no_supports);
+        assert!(
+            failures
+                .iter()
+                .any(|f| f.failure_type == FailureType::Delamination),
+            "expected Delamination, got: {failures:?}"
+        );
+        assert!(
+            failures
+                .iter()
+                .any(|f| f.failure_type == FailureType::SupportOverload),
+            "expected co-firing SupportOverload, got: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn mildly_thin_layer_records_crack_but_does_not_delaminate() {
+        // HIGH (adversarial): pins the Delamination GATE, not just crack>0.
+        // A mildly-thin normal layer: A=2500, P=300 → 4√A/P = 0.667 → crack
+        // ≈ 0.333 (recorded). The crack-reduced interlayer bond
+        // (50 kPa × 2500 × 1e-3 × 0.667 ≈ 83 N) still exceeds the peel load
+        // (~32.5 N, and < 75 N even at a 2.3× fast-lift factor) → NO Delamination.
+        // A buggy "fire on any crack>0" impl would fail this test.
+        let (thin, failures) = run_normal_layer(2500.0, Some(300.0), &test_supports());
+        let cf = thin
+            .crack_front_fraction
+            .expect("mildly-thin normal layer must still record a crack front");
+        assert!(
+            cf > 0.2 && cf < 0.5,
+            "expected a moderate crack (~0.33) for A=2500,P=300, got {cf}"
+        );
+        assert!(
+            !failures
+                .iter()
+                .any(|f| f.failure_type == FailureType::Delamination),
+            "interlayer bond (even crack-reduced) still holds the peel → no Delamination: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn crack_applies_at_first_normal_layer_not_last_bottom_layer() {
+        // MEDIUM (adversarial): pin the bottom/normal boundary reuse of
+        // BuildPlate::is_bottom_layer. default_textured bottom_layer_count = 6,
+        // so layer 5 is the LAST bottom layer (no crack) and layer 6 is the
+        // FIRST normal layer (crack applies). Guards a `<=` vs `<` slip.
+        let thin = LayerOverrides {
+            perimeter_mm: Some(2000.0),
+            ..Default::default()
+        };
+        let run_at = |layer: u32| {
+            FailurePredictor::predict_layer(
+                layer,
+                area(2500.0),
+                area(2500.0),
+                &thin,
+                &test_resin(),
+                &test_printer(),
+                &test_recipe(),
+                test_recipe().layer_height_um(),
+                &test_supports(),
+                &test_plate(),
+                &test_thermal(),
+            )
+            .0
+        };
+        assert_eq!(
+            run_at(5).crack_front_fraction,
+            None,
+            "layer 5 (last bottom, count=6) must NOT record a crack"
+        );
+        assert!(
+            run_at(6).crack_front_fraction.is_some(),
+            "layer 6 (first normal) MUST record a crack"
         );
     }
 

@@ -149,6 +149,8 @@ fn failure_type_label(event: &FailureEvent) -> &'static str {
         // brevity convention (≤ 20 chars).
         WarpingRisk => "warping risk",
         CohesiveFailure => "cohesive failure",
+        // peel-crack-propagation-tier1 — interlayer bond delamination.
+        Delamination => "delamination",
     }
 }
 

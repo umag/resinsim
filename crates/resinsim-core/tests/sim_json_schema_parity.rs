@@ -54,6 +54,7 @@ fn make_layer(index: u32, force_n: f32, safety_factor: f32, vat_temp_c: f32) -> 
         stress_von_mises_max_mpa: None,
         strain_gradient_max_frac: None,
         voxel_yield_fraction: None,
+        crack_front_fraction: None,
     }
 }
 

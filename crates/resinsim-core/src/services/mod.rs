@@ -1,5 +1,6 @@
 pub mod build_plate;
 pub mod cavity_detector;
+pub mod crack_propagator;
 pub mod cure_calculator;
 pub mod failure_predictor;
 pub mod force_comparator;
@@ -26,6 +27,7 @@ pub mod z_axis_compensator;
 
 pub use build_plate::BuildPlate;
 pub use cavity_detector::{CavityDetector, CavityError, CavityEvent};
+pub use crack_propagator::CrackPropagator;
 pub use cure_calculator::CureCalculator;
 pub use failure_predictor::FailurePredictor;
 pub use force_comparator::{ComparisonReport, ForceComparator};

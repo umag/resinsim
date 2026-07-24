@@ -2,7 +2,7 @@ use crate::entities::{FailureEvent, FailureType, ResinProfile, Severity};
 use crate::services::build_plate::{BuildPlate, PlateAdhesionProfile};
 use crate::services::failure_predictor::SupportConfig;
 use crate::services::peel_force_calculator::PeelForceCalculator;
-use crate::values::{CrossSectionArea, PeelForce, SafetyFactor, SupportCapacity};
+use crate::values::{CrackFront, CrossSectionArea, PeelForce, SafetyFactor, SupportCapacity};
 
 /// Domain service: single entry point for per-layer support + build-plate
 /// safety assessment. Stateless — all inputs via parameters.
@@ -64,13 +64,27 @@ impl SupportAnalyzer {
         resin: &ResinProfile,
         supports: &SupportConfig,
         plate: &PlateAdhesionProfile,
+        crack: CrackFront,
     ) -> SupportAssessment {
         let support_cap = Self::support_capacity(
             resin.tensile_strength_mpa,
             supports.tip_radius_mm,
             supports.n_supports,
         );
-        let plate_cap = BuildPlate::holding_capacity(layer, area, plate);
+        // KB-188 Kendall knockdown: the resin↔resin interlayer bond is
+        // fracture-limited, so for NORMAL layers its holding capacity is scaled
+        // by the remaining bonded fraction `1 − crack_fraction`. Bottom-layer
+        // plate adhesion (mechanical textured-plate interlock, not the
+        // interlayer bond) is NEVER knocked down. `no_crack()` ⇒ factor 1.0, so
+        // callers without crack geometry are behaviour-preserving.
+        let plate_cap = {
+            let raw = BuildPlate::holding_capacity(layer, area, plate);
+            if BuildPlate::is_bottom_layer(layer, plate) {
+                raw
+            } else {
+                raw * crack.effective_fraction()
+            }
+        };
         let total_capacity_n = BuildPlate::total_capacity(plate_cap, support_cap.value());
         let total_capacity = SupportCapacity::new(total_capacity_n)
             .expect("sum of non-negative plate and support capacity is non-negative");
@@ -170,7 +184,7 @@ mod tests {
         };
         let plate = PlateAdhesionProfile::default_textured();
         let assessment =
-            SupportAnalyzer::assess(50, area(100.0), peel(0.0), &resin, &supports, &plate);
+            SupportAnalyzer::assess(50, area(100.0), peel(0.0), &resin, &supports, &plate, CrackFront::no_crack());
         assert!(assessment.safety_factor.is_none());
         assert!(assessment.overload.is_none());
     }
@@ -188,7 +202,7 @@ mod tests {
         };
         let plate = PlateAdhesionProfile::default_textured();
         let assessment =
-            SupportAnalyzer::assess(0, area(2500.0), peel(32.5), &resin, &supports, &plate);
+            SupportAnalyzer::assess(0, area(2500.0), peel(32.5), &resin, &supports, &plate, CrackFront::no_crack());
         let sf = assessment
             .safety_factor
             .expect("non-zero force must yield Some(SafetyFactor)");
@@ -208,7 +222,7 @@ mod tests {
         };
         let plate = PlateAdhesionProfile::default_textured();
         let assessment =
-            SupportAnalyzer::assess(0, area(2500.0), peel(500.0), &resin, &supports, &plate);
+            SupportAnalyzer::assess(0, area(2500.0), peel(500.0), &resin, &supports, &plate, CrackFront::no_crack());
         let event = assessment
             .overload
             .as_ref()
@@ -259,6 +273,7 @@ mod tests {
             &resin,
             &supports,
             &plate,
+            CrackFront::no_crack(),
         );
         let sf = assessment
             .safety_factor
@@ -287,7 +302,7 @@ mod tests {
         };
         let plate = PlateAdhesionProfile::default_textured();
         let assessment =
-            SupportAnalyzer::assess(0, area(2500.0), peel(32.5), &resin, &supports, &plate);
+            SupportAnalyzer::assess(0, area(2500.0), peel(32.5), &resin, &supports, &plate, CrackFront::no_crack());
         let expected = assessment.plate_capacity_n + assessment.support_capacity.value();
         assert!(
             (assessment.total_capacity.value() - expected).abs() < 1e-4,
@@ -310,7 +325,7 @@ mod tests {
         };
         let plate = PlateAdhesionProfile::default_textured();
         let assessment =
-            SupportAnalyzer::assess(0, area(2500.0), peel(500.0), &resin, &supports, &plate);
+            SupportAnalyzer::assess(0, area(2500.0), peel(500.0), &resin, &supports, &plate, CrackFront::no_crack());
         let event = assessment.overload.expect("overload must fire");
         assert!(
             event.message.contains(" + supports ")
@@ -331,7 +346,7 @@ mod tests {
         };
         let plate = PlateAdhesionProfile::default_textured();
         let assessment =
-            SupportAnalyzer::assess(0, area(2500.0), peel(500.0), &resin, &supports, &plate);
+            SupportAnalyzer::assess(0, area(2500.0), peel(500.0), &resin, &supports, &plate, CrackFront::no_crack());
         let event = assessment.overload.expect("overload must fire");
         assert!(
             event.message.contains("plate adhesion ") && event.message.contains("(no supports)"),
@@ -350,12 +365,173 @@ mod tests {
         };
         let plate = plate_zero();
         let assessment =
-            SupportAnalyzer::assess(50, area(100.0), peel(500.0), &resin, &supports, &plate);
+            SupportAnalyzer::assess(50, area(100.0), peel(500.0), &resin, &supports, &plate, CrackFront::no_crack());
         let event = assessment.overload.expect("overload must fire");
         assert!(
             event.message.contains("supports ") && event.message.contains("(no plate adhesion)"),
             "expected 'supports X N (no plate adhesion)', got: {}",
             event.message
+        );
+    }
+
+    // --- Kendall crack knockdown (peel-crack-propagation-tier1) ---
+
+    #[test]
+    fn assess_normal_layer_crack_reduces_interlayer_capacity() {
+        // Normal layer 50 (>= bottom_layer_count 6): plate_cap is the interlayer
+        // bond 50 kPa × 2500 mm² = 125 N. A crack with effective_fraction 0.4
+        // (crack fraction 0.6) must scale the interlayer portion to 0.4 × 125 = 50 N.
+        let resin = ResinProfile::generic_standard();
+        let supports = SupportConfig {
+            tip_radius_mm: 0.2,
+            n_supports: 10,
+        };
+        let plate = PlateAdhesionProfile::default_textured();
+        let base = SupportAnalyzer::assess(
+            50,
+            area(2500.0),
+            peel(32.5),
+            &resin,
+            &supports,
+            &plate,
+            CrackFront::no_crack(),
+        );
+        let cracked = SupportAnalyzer::assess(
+            50,
+            area(2500.0),
+            peel(32.5),
+            &resin,
+            &supports,
+            &plate,
+            CrackFront::new(0.6),
+        );
+        assert!(
+            (base.plate_capacity_n - 125.0).abs() < 0.5,
+            "baseline interlayer capacity should be 125 N, got {}",
+            base.plate_capacity_n
+        );
+        assert!(
+            (cracked.plate_capacity_n - 50.0).abs() < 0.5,
+            "crack (eff 0.4) should reduce interlayer capacity to 50 N, got {}",
+            cracked.plate_capacity_n
+        );
+    }
+
+    #[test]
+    fn assess_normal_layer_crack_lowers_safety_factor() {
+        // Capacity-only: the peel LOAD is identical across both runs; only the
+        // crack-reduced interlayer capacity moves, so the safety factor drops.
+        let resin = ResinProfile::generic_standard();
+        let supports = SupportConfig {
+            tip_radius_mm: 0.2,
+            n_supports: 10,
+        };
+        let plate = PlateAdhesionProfile::default_textured();
+        let base = SupportAnalyzer::assess(
+            50,
+            area(2500.0),
+            peel(32.5),
+            &resin,
+            &supports,
+            &plate,
+            CrackFront::no_crack(),
+        );
+        let cracked = SupportAnalyzer::assess(
+            50,
+            area(2500.0),
+            peel(32.5),
+            &resin,
+            &supports,
+            &plate,
+            CrackFront::new(0.6),
+        );
+        let sf_base = base
+            .safety_factor
+            .expect("non-zero force yields Some")
+            .value();
+        let sf_cracked = cracked
+            .safety_factor
+            .expect("non-zero force yields Some")
+            .value();
+        assert!(
+            sf_cracked < sf_base,
+            "crack must lower the safety factor: base={sf_base} cracked={sf_cracked}"
+        );
+    }
+
+    #[test]
+    fn assess_bottom_layer_crack_does_not_reduce_plate_adhesion() {
+        // Bottom layer 0 (< bottom_layer_count 6): plate_cap is the plate
+        // adhesion 100 kPa × 2500 = 250 N. The crack knockdown targets the
+        // interlayer bond ONLY — bottom-layer plate adhesion is crack-invariant.
+        let resin = ResinProfile::generic_standard();
+        let supports = SupportConfig {
+            tip_radius_mm: 0.2,
+            n_supports: 10,
+        };
+        let plate = PlateAdhesionProfile::default_textured();
+        let base = SupportAnalyzer::assess(
+            0,
+            area(2500.0),
+            peel(32.5),
+            &resin,
+            &supports,
+            &plate,
+            CrackFront::no_crack(),
+        );
+        let cracked = SupportAnalyzer::assess(
+            0,
+            area(2500.0),
+            peel(32.5),
+            &resin,
+            &supports,
+            &plate,
+            CrackFront::new(0.6),
+        );
+        assert!(
+            (cracked.plate_capacity_n - base.plate_capacity_n).abs() < 1e-3,
+            "bottom-layer plate adhesion must be crack-invariant: base={} cracked={}",
+            base.plate_capacity_n,
+            cracked.plate_capacity_n
+        );
+        assert!(
+            (cracked.plate_capacity_n - 250.0).abs() < 0.5,
+            "bottom-layer plate adhesion should stay 250 N, got {}",
+            cracked.plate_capacity_n
+        );
+    }
+
+    #[test]
+    fn assess_support_capacity_invariant_under_crack() {
+        // The tips-only support capacity is never touched by the interlayer crack.
+        let resin = ResinProfile::generic_standard();
+        let supports = SupportConfig {
+            tip_radius_mm: 0.2,
+            n_supports: 10,
+        };
+        let plate = PlateAdhesionProfile::default_textured();
+        let base = SupportAnalyzer::assess(
+            50,
+            area(2500.0),
+            peel(32.5),
+            &resin,
+            &supports,
+            &plate,
+            CrackFront::no_crack(),
+        );
+        let cracked = SupportAnalyzer::assess(
+            50,
+            area(2500.0),
+            peel(32.5),
+            &resin,
+            &supports,
+            &plate,
+            CrackFront::new(0.9),
+        );
+        assert_eq!(
+            base.support_capacity.value(),
+            cracked.support_capacity.value(),
+            "support capacity must be crack-invariant"
         );
     }
 }
