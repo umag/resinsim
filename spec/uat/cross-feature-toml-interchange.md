@@ -15,10 +15,19 @@ WITH the `field-sim` feature must parse cleanly under a binary built
 WITHOUT it, and vice versa. The seven in-repo profile TOMLs in
 `data/printers/` + `data/resins/` are the canonical witnesses.
 
-Today the invariant is verified implicitly by the cross-feature
-test runs (`cargo nextest --workspace` + same with `--features
-field-sim` both pass against the same TOMLs). A dedicated UAT
-scenario protects against a future regression — e.g. adding
+UAT-1 (the interchange direction) is still verified implicitly by the
+cross-feature test runs (`cargo nextest --workspace` + same with
+`--features field-sim` both pass against the same TOMLs).
+
+UAT-2 (the rejection direction) is enforced explicitly for resins by
+`entities::resin_profile::tests::thermally_incomplete_toml_rejected_under_field_sim`,
+added by `s3-peel-shape-toml-fieldsim-thermal`. It builds a pre-t2f4
+root from `legacy_toml_root_pre_t2f4()` and asserts the TOML parses but
+`validate()` returns `Err` naming both `thermal_conductivity_w_mk` and
+the gating feature. The printer-side counterpart
+(`build_envelope_mm`) has no equivalent test yet.
+
+Both scenarios also protect against a future regression — e.g. adding
 `#[serde(deny_unknown_fields)]` to `PrinterProfile` or `ResinProfile`
 would break the interchange silently for some TOMLs.
 

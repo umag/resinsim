@@ -807,43 +807,52 @@ mod tests {
 
     #[test]
     fn peel_shape_factor_strength_round_trips_through_toml() {
-        // Minimal valid resin TOML (mirrors tests/uat_steps/legacy_resin_toml_defaults).
-        let base = r#"name = "T"
-penetration_depth_um = 170.0
-critical_energy_mj_cm2 = 5.0
-tensile_strength_mpa = 35.0
-peel_adhesion_kpa = 13.0
-ref_lift_speed_mm_min = 60.0
-linear_shrinkage_pct = 1.5
-viscosity_mpa_s = 200.0
-reference_temp_c = 25.0
-activation_energy_kj_mol = 52.0
-density_g_cm3 = 1.1
-[recipe]
-layer_height_um = 50.0
-bottom_layer_count = 6
-transition_layers = 3
-normal_exposure_sec = 2.5
-bottom_exposure_sec = 25.0
-wait_before_cure_sec = 0.5
-wait_before_release_sec = 1.0
-wait_after_release_sec = 0.0
-lift_speed_mm_min = 60.0
-lift_cycle_sec = 7.5
-lift_distance_mm = 5.0
-"#;
         // Legacy TOML (field absent) → None via #[serde(default)], still valid.
-        let legacy: ResinProfile = toml::from_str(base).expect("legacy resin TOML parses");
+        // Built from the shared helpers so the fixture inherits the ADR-0020
+        // thermal material fields validate() requires under `field-sim`.
+        let legacy: ResinProfile = toml::from_str(&legacy_toml_without_thermal_thresholds())
+            .expect("legacy resin TOML parses");
         assert_eq!(legacy.peel_shape_factor_strength(), None);
         legacy.validate().expect("legacy resin validates");
 
         // Explicit value parses + validates — guards the shipped
         // generic_standard.toml = 0.5 against a serde/validation regression.
-        let with_field = format!("peel_shape_factor_strength = 0.5\n{base}");
+        // The root/recipe split exists so extra root-level fields land before
+        // the [recipe] table rather than inside it.
+        let with_field = format!(
+            "{}\npeel_shape_factor_strength = 0.5\n{}",
+            legacy_toml_root_without_thermal_thresholds(),
+            valid_recipe_table()
+        );
         let parsed: ResinProfile =
             toml::from_str(&with_field).expect("resin TOML with the field parses");
         assert_eq!(parsed.peel_shape_factor_strength(), Some(0.5));
         parsed.validate().expect("0.5 strength validates");
+    }
+
+    /// Locks `spec/uat/cross-feature-toml-interchange.md` UAT-2: a resin TOML
+    /// authored under default builds (no thermal material fields) must PARSE
+    /// under `field-sim` — the fields are `Option` so interchange holds — but
+    /// must fail `validate()` with an error naming the missing field and the
+    /// gating feature.
+    ///
+    /// This is the only fixture in the module that reaches `validate()` while
+    /// thermally incomplete. (`legacy_toml_missing_recipe_rejected` is also
+    /// pre-t2f4 but is immune: it asserts a parse failure and never validates.)
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn thermally_incomplete_toml_rejected_under_field_sim() {
+        let toml_str = format!("{}{}", legacy_toml_root_pre_t2f4(), valid_recipe_table());
+        let p: ResinProfile =
+            toml::from_str(&toml_str).expect("TOML parse succeeds; validate() is the gate");
+        assert_eq!(p.thermal_conductivity_w_mk(), None);
+        let err = p
+            .validate()
+            .expect_err("thermally incomplete resin must fail validate() under field-sim");
+        assert!(
+            err.contains("thermal_conductivity_w_mk") && err.contains("field-sim"),
+            "error must name the field and the gating feature: {err}"
+        );
     }
 
     #[test]
@@ -1423,6 +1432,23 @@ lift_distance_mm = 5.0
         // KB-150 thermal thresholds" still assert their absence — those
         // are `degradation_temp_c` / `min_safe_temp_c`, not the t2f4
         // material properties.
+        format!(
+            "{}thermal_conductivity_w_mk = 0.20\n\
+             specific_heat_j_kgk = 1700.0\n\
+             convective_top_h_w_m2k = 10.0\n",
+            legacy_toml_root_pre_t2f4()
+        )
+    }
+
+    /// The chemistry-only root, as resin TOMLs were authored BEFORE t2f4 added
+    /// the ADR-0020 thermal material fields. Single source of truth for the
+    /// chemistry fields: `legacy_toml_root_without_thermal_thresholds()` is
+    /// this plus the three thermal lines, so a future required chemistry field
+    /// is added in exactly one place and cannot rot one fixture but not another.
+    ///
+    /// Only tests that deliberately exercise the pre-t2f4 shape should call
+    /// this directly — everything else wants the thermally complete root.
+    fn legacy_toml_root_pre_t2f4() -> String {
         r#"
 name = "Legacy Resin"
 penetration_depth_um = 170.0
@@ -1435,9 +1461,6 @@ viscosity_mpa_s = 200.0
 reference_temp_c = 25.0
 activation_energy_kj_mol = 52.0
 density_g_cm3 = 1.1
-thermal_conductivity_w_mk = 0.20
-specific_heat_j_kgk = 1700.0
-convective_top_h_w_m2k = 10.0
 "#
         .to_string()
     }
