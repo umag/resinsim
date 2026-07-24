@@ -114,9 +114,45 @@ a polish follow-on (the `.expect()` chain at simulation_runner.rs
 lines 642-660 is fragile but the runner always calls validate()
 at entry today).
 
+## Test fixtures: the trap this pattern sets
+
+Added 2026-07-24 after `s3-peel-shape-toml-fieldsim-thermal`.
+
+This pattern makes the required-ness invisible to the type system *and*
+to the default build. That is the whole point — but it means every
+hand-rolled test fixture is a latent failure that only fires under the
+gated config:
+
+- The struct field is `Option<T>`, so an incomplete fixture **compiles**.
+- `#[serde(default)]` means it **parses**.
+- Under default features it also **validates**.
+- Only under the feature does `validate()` reject it.
+
+So a fixture authored (or copied) without the new field is green in
+three of the four ADR-0017 configurations and red in the fourth. If the
+gated config isn't run against new tests at authoring time, the test
+ships born-red and the failure lands on whoever runs config 4 next.
+
+Two rules follow:
+
+1. **Every fixture for a struct carrying feature-gated required fields
+   must come from one shared builder.** Hand-copying is how they
+   desync — see `docs/patterns/anti/fixture-copy-of-shared-builder.md`,
+   written after exactly this happened to
+   `peel_shape_factor_strength_round_trips_through_toml`.
+2. **Add the negative test when you add the requirement.** The rejection
+   path is the half that proves the gate is live. When t2f4 introduced
+   the three thermal requirements, no test anywhere in `crates/` asserted
+   the rejection — `entities::resin_profile::tests::thermally_incomplete_toml_rejected_under_field_sim`
+   was not added until two months later, by the lifecycle that tripped
+   over the gap. The printer-side counterpart (`build_envelope_mm`) still
+   has none.
+
 ## See also
 
 - ADR-0020 §Consequences — the field-sim validate-time policy.
+- `docs/patterns/anti/fixture-copy-of-shared-builder.md` — the fixture
+  failure mode this pattern enables.
 - ResinProfile + PrinterProfile thermal material fields (added by
   t2f4 step 2) — the canonical implementation.
 - `docs/patterns/typed-temperature-boundary.md` — sibling pattern
