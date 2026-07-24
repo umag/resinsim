@@ -275,6 +275,7 @@ mod tests {
             peel_force_n: total_force_n,
             suction_force_n: 0.0,
             base_force_n: 0.0,
+            peel_shape_factor: None,
             total_force_n,
             support_capacity_n: 100.0,
             safety_factor,

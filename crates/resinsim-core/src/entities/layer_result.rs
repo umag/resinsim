@@ -19,6 +19,13 @@ pub struct LayerResult {
     /// sim.json files deserialise unchanged.
     #[serde(default)]
     pub base_force_n: f32,
+    /// Applied KB-185 A/L peel shape factor (ADR-0022 Stage 3), dimensionless
+    /// in `(0, 1]`. `None` when the resin's `peel_shape_factor_strength` is
+    /// unset (no correction — the factor is ≡ 1.0); `skip_serializing_if` then
+    /// omits it so pre-Stage-3 sim.json files stay byte-identical. `Some(f)`
+    /// records the factor the runner applied to `peel_force_n` this layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peel_shape_factor: Option<f32>,
     pub total_force_n: f32,
     pub support_capacity_n: f32,
     /// Safety factor (capacity / load). For zero-load layers

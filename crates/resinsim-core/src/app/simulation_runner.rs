@@ -8,6 +8,7 @@ use crate::services::failure_predictor::{
 };
 use crate::services::pairing_validator;
 use crate::services::suction_detector::SuctionDetector;
+use crate::services::PeelForceCalculator;
 #[cfg(feature = "field-sim")]
 use crate::services::uniformity_calculator::UniformityProfile;
 #[cfg(feature = "field-sim")]
@@ -573,6 +574,10 @@ impl SimulationRunner {
         );
         let recipe = resin.recipe();
         let suction_map = Self::build_suction_map(masks, printer.effective_vacuum_pressure_kpa())?;
+        // KB-185 Tier-1 A/L peel shape factor (ADR-0022 Stage 3). Empty (all
+        // layers → None → no correction) when the resin's strength is unset.
+        let shape_factor_map =
+            Self::build_shape_factor_map(masks, resin.effective_peel_shape_factor_strength());
         let phases = LayerPhase::classify_sequence(areas, recipe);
 
         // Print-wide thermal context — constructed once, passed by reference
@@ -761,6 +766,7 @@ impl SimulationRunner {
                 exposure_sec: exposure_override,
                 lift_speed_mm_min: lift_speed_override,
                 suction_force_n: suction_map.get(&(i as u32)).copied(),
+                peel_shape_factor: shape_factor_map.get(&(i as u32)).copied(),
                 is_raft: matches!(phases.get(i), Some(LayerPhase::Raft)),
             };
             // Per-layer CTB-authoritative slab thickness — supports
@@ -1420,6 +1426,44 @@ impl SimulationRunner {
             .collect())
     }
 
+    /// Build a layer→shape-factor map for the KB-185 A/L peel shape factor
+    /// (ADR-0022 Stage 3). Returns an empty map (all layers → `None` → no
+    /// correction, behaviour-preserving) when `strength <= 0` — the common case
+    /// for resins that have not opted in.
+    ///
+    /// A **fully-solid** mask is a filled bounding rectangle with no interior
+    /// shape signal, so it maps to factor `1.0`. This is what keeps the
+    /// synthetic placeholder masks honest: `run_from_areas` emits a 1×1
+    /// all-solid mask and the `run_from_layer_inputs` fallback emits a W×H
+    /// all-solid mask — neither describes the real part, so neither may apply a
+    /// spurious reduction. Real per-layer geometry leaves void margins around
+    /// the part, so it is not fully-solid and receives a proper factor. (A
+    /// genuine grid-filling solid rectangle is therefore under-modelled to 1.0 —
+    /// an accepted trade-off, since it is indistinguishable from a placeholder.)
+    fn build_shape_factor_map(masks: &[LayerMask], strength: f32) -> HashMap<u32, f32> {
+        if strength <= 0.0 {
+            return HashMap::new();
+        }
+        masks
+            .iter()
+            .enumerate()
+            .map(|(i, mask)| {
+                let factor = if mask.is_fully_solid() {
+                    1.0
+                } else {
+                    let area = CrossSectionArea::new(mask.solid_area_mm2())
+                        .expect("LayerMask::solid_area_mm2 is finite and >= 0 by construction");
+                    PeelForceCalculator::peel_shape_factor(
+                        area,
+                        mask.perimeter_mm() as f32,
+                        strength,
+                    )
+                };
+                (i as u32, factor)
+            })
+            .collect()
+    }
+
     /// Auto-detect format from file extension and run simulation.
     #[allow(clippy::too_many_arguments)]
     pub fn run_auto(
@@ -1779,6 +1823,76 @@ mod tests {
             (suction - 2.525).abs() < 1e-2,
             "ΔP=101 kPa × 25 mm² × 1e-3 should be 2.525 N, got {suction}"
         );
+    }
+
+    // --- ADR-0022 Stage 3: A/L peel shape factor ---
+
+    #[test]
+    fn build_shape_factor_map_off_fully_solid_and_thin() {
+        // m0 fully-solid placeholder (guard → 1.0); m1 compact 3×3 square block
+        // in a 5×5 grid (→ 1.0); m2 thin 1×5 line in a 3×7 grid (< 1.0).
+        let m0 = LayerMask::new_all_solid(3, 3, 1.0).expect("3×3 all-solid constructs");
+        let mut m1 = LayerMask::new(5, 5, 1.0).expect("5×5 constructs");
+        for x in 1..4 {
+            for y in 1..4 {
+                m1.set(x, y).expect("in bounds");
+            }
+        }
+        let mut m2 = LayerMask::new(3, 7, 1.0).expect("3×7 constructs");
+        for y in 1..6 {
+            m2.set(1, y).expect("in bounds");
+        }
+        let masks = [m0, m1, m2];
+
+        // strength = 0 → no correction anywhere.
+        assert!(SimulationRunner::build_shape_factor_map(&masks, 0.0).is_empty());
+
+        let map = SimulationRunner::build_shape_factor_map(&masks, 1.0);
+        assert_eq!(map.get(&0).copied(), Some(1.0), "fully-solid placeholder → 1.0");
+        assert_eq!(map.get(&1).copied(), Some(1.0), "compact square block → 1.0");
+        let thin = map.get(&2).copied().expect("thin layer present");
+        assert!(thin > 0.0 && thin < 1.0, "thin line should reduce, got {thin}");
+        assert!(map[&1] > map[&2], "compact must exceed thin");
+    }
+
+    #[test]
+    fn run_from_areas_all_solid_masks_apply_factor_one() {
+        // run_from_areas emits 1×1 all-solid masks → the is_fully_solid guard
+        // forces factor 1.0 even when the resin ships an active strength, so the
+        // peel force is unchanged and the field records Some(1.0). A strength-
+        // unset resin leaves the field None (behaviour-preserving).
+        let areas = cube_areas(20, 100.0);
+        let mut active = ResinProfile::generic_standard();
+        active.peel_shape_factor_strength = Some(0.5);
+        active
+            .validate()
+            .expect("test fixture: 0.5 is a valid peel_shape_factor_strength");
+
+        let run = |resin: &ResinProfile| {
+            SimulationRunner::run_from_areas(
+                &areas,
+                resin,
+                &PrinterProfile::generic_msla_4k(),
+                &SupportConfig { tip_radius_mm: 0.2, n_supports: 20 },
+                &default_plate(),
+                test_ambient(),
+                None,
+            )
+            .expect("test fixture: validated profiles satisfy run_from_areas preconditions")
+        };
+        let sim_active = run(&active);
+        let sim_off = run(&ResinProfile::generic_standard());
+
+        for (a, o) in sim_active.layers().iter().zip(sim_off.layers()) {
+            assert_eq!(a.peel_shape_factor, Some(1.0), "all-solid mask → factor 1.0");
+            assert_eq!(o.peel_shape_factor, None, "strength unset → no factor");
+            assert!(
+                (a.peel_force_n - o.peel_force_n).abs() < 1e-6,
+                "factor 1.0 must not change peel: active={} off={}",
+                a.peel_force_n,
+                o.peel_force_n
+            );
+        }
     }
 
     #[test]

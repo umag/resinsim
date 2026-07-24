@@ -55,6 +55,41 @@ impl PeelForceCalculator {
             .expect("elevation, area, and decay factor are non-negative by construction")
     }
 
+    /// Aspect-ratio shape factor for the peel term (ADR-0022 Stage 3, KB-185
+    /// Tier-1). Modulates σ_peel by the layer's compactness: a dimensionless
+    /// factor in `(0, 1]`, `1.0` for a square (the KB-181 baseline
+    /// cross-section) and `< 1.0` for thin / high-aspect-ratio shapes. Both
+    /// separation regimes rank thin below compact at equal area — Stefan suction
+    /// scales with A/L, and Kendall peel with the instantaneous crack-front
+    /// width (KB-185).
+    ///
+    /// Square-anchored and reduction-only:
+    /// ```text
+    ///   raw    = 4·√A / L                     (=1 square, >1 disk, <1 thin)
+    ///   factor = 1 − strength·(1 − min(1, raw))
+    /// ```
+    /// `strength ∈ [0, 1]` interpolates between no correction (`0`) and the full
+    /// square-anchored reduction (`1`); `strength = 0.5` reproduces the Pan
+    /// Fig.9 314 mm² cylinder→star force ratio (≈0.795). The `min(1, raw)` clamp
+    /// is reduction-only: shapes MORE compact than a square (a disk, `raw ≈
+    /// 1.13`) floor to `1.0` — the disk>square gradient is intentionally dropped
+    /// for this Tier-1 factor. Returns `1.0` (no correction) when `strength ≤
+    /// 0`, `perimeter_mm ≤ 0`, or `area == 0`, so an unset resin strength is
+    /// behaviour-preserving. Kept OUT of [`peel_force`](Self::peel_force) so the
+    /// KB-114 vectors + the `force_properties` area-linearity proptest stay valid.
+    pub fn peel_shape_factor(area: CrossSectionArea, perimeter_mm: f32, strength: f32) -> f32 {
+        if strength <= 0.0 || perimeter_mm <= 0.0 {
+            return 1.0;
+        }
+        let a = area.value() as f32;
+        if a <= 0.0 {
+            return 1.0;
+        }
+        let raw = 4.0 * a.sqrt() / perimeter_mm;
+        let clamped = raw.min(1.0);
+        1.0 - strength * (1.0 - clamped)
+    }
+
     /// Total separation force: peel adhesion + suction + first-layer base
     /// adhesion (ADR-0022 Stage 1). All three components are non-negative.
     pub fn total_force(peel: PeelForce, suction: PeelForce, base: PeelForce) -> PeelForce {
@@ -287,5 +322,64 @@ mod tests {
         let f2 = PeelForceCalculator::base_adhesion_force(20.0, a, 2, 5.0).value();
         let f10 = PeelForceCalculator::base_adhesion_force(20.0, a, 10, 5.0).value();
         assert!(f0 >= f2 && f2 >= f10 && f0 > f10, "f0={f0} f2={f2} f10={f10}");
+    }
+
+    // --- KB-185 A/L peel shape factor (ADR-0022 Stage 3) ---
+
+    #[test]
+    fn shape_factor_square_is_one() {
+        // 10×10 square: A=100, L=40 → raw = 4·10/40 = 1.0 → factor 1.0.
+        let f = PeelForceCalculator::peel_shape_factor(area(100.0), 40.0, 1.0);
+        assert!((f - 1.0).abs() < 1e-6, "got {f}");
+    }
+
+    #[test]
+    fn shape_factor_thin_rectangle_below_one() {
+        // 4:1 rectangle: A=4, L=10 → raw = 4·2/10 = 0.8 → factor 0.8 at full strength.
+        let f = PeelForceCalculator::peel_shape_factor(area(4.0), 10.0, 1.0);
+        assert!((f - 0.8).abs() < 1e-6, "got {f}");
+    }
+
+    #[test]
+    fn shape_factor_zero_strength_is_one() {
+        let f = PeelForceCalculator::peel_shape_factor(area(4.0), 10.0, 0.0);
+        assert_eq!(f, 1.0);
+    }
+
+    #[test]
+    fn shape_factor_zero_perimeter_is_one() {
+        let f = PeelForceCalculator::peel_shape_factor(area(4.0), 0.0, 1.0);
+        assert_eq!(f, 1.0);
+    }
+
+    #[test]
+    fn shape_factor_zero_area_is_one() {
+        let f = PeelForceCalculator::peel_shape_factor(area(0.0), 10.0, 1.0);
+        assert_eq!(f, 1.0);
+    }
+
+    #[test]
+    fn shape_factor_disk_clamps_at_one() {
+        // Disk of A=100: L = 2·√(π·100) ≈ 35.45 → raw ≈ 1.128 → clamp to 1.0.
+        let disk_perimeter = 2.0 * (std::f32::consts::PI * 100.0).sqrt();
+        let f = PeelForceCalculator::peel_shape_factor(area(100.0), disk_perimeter, 1.0);
+        assert!((f - 1.0).abs() < 1e-6, "disk should clamp to 1.0, got {f}");
+    }
+
+    #[test]
+    fn shape_factor_monotonic_in_aspect_ratio() {
+        // 4:1 (A=4,L=10) vs 9:1 (A=9,L=20): thinner → smaller factor.
+        let r4 = PeelForceCalculator::peel_shape_factor(area(4.0), 10.0, 1.0);
+        let r9 = PeelForceCalculator::peel_shape_factor(area(9.0), 20.0, 1.0);
+        assert!(r9 < r4 && r4 < 1.0, "r4={r4} r9={r9}");
+    }
+
+    #[test]
+    fn shape_factor_strength_half_matches_pan_star_ratio() {
+        // Pan Fig.9 star: A=314 mm², A/L=2.58 → L≈121.7 mm. At strength 0.5 the
+        // factor ≈ 0.79, matching the measured star/cylinder force ratio 4.9/6.16 = 0.795.
+        let f = PeelForceCalculator::peel_shape_factor(area(314.0), 121.7, 0.5);
+        assert!((f - 0.791).abs() < 0.005, "got {f}");
+        assert!((f - 0.795).abs() < 0.01, "should track Pan's 0.795, got {f}");
     }
 }

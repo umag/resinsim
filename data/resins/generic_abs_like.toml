@@ -9,6 +9,12 @@ critical_energy_mj_cm2 = 8.0
 # Mechanical — KB-140: Elegoo ABS-Like V2
 tensile_strength_mpa = 45.0
 peel_adhesion_kpa = 13.0
+# KB-185 / ADR-0022 Stage 3: aspect-ratio (A/L) peel shape-factor strength,
+# dimensionless in [0, 1] — modulates σ_peel by each layer's compactness. Opt-in
+# and left UNSET here (⇒ shape factor ≡ 1.0, no correction). See
+# generic_standard.toml for the indicative default (0.5, Pan-anchored) and the
+# calibration caveat; refine per (resin, FEP) stratum with an equal-area shape sweep.
+# peel_shape_factor_strength = 0.5
 ref_lift_speed_mm_min = 60.0       # measurement speed for peel_adhesion_kpa (KB-112, ADR-0005 §3)
 
 # Shrinkage — KB-142: Elegoo ABS-Like V2

@@ -168,6 +168,18 @@ pub struct ResinProfile {
     #[serde(default)]
     pub(crate) base_adhesion_elevation_kpa: Option<f32>,
 
+    /// Aspect-ratio peel shape-factor strength (KB-185 Tier-1, ADR-0022
+    /// Stage 3). Dimensionless in `[0, 1]`. **Optional** — when `None`,
+    /// `effective_peel_shape_factor_strength` returns `0.0` (shape factor ≡ 1.0,
+    /// NO correction), so unset/legacy resins are behaviour-preserving. A
+    /// non-zero value modulates σ_peel by the layer's compactness
+    /// (`PeelForceCalculator::peel_shape_factor`); `0.5` reproduces the Pan
+    /// Fig.9 cylinder→star force ratio (≈0.795). Indicative until fitted against
+    /// an equal-area shape sweep (ADR-0022 defers per-stratum fitting to the
+    /// E-series); mirrors the `base_adhesion_elevation_kpa` opt-in precedent.
+    #[serde(default)]
+    pub(crate) peel_shape_factor_strength: Option<f32>,
+
     /// Initial photoinitiator concentration as a dimensionless fraction in
     /// `[0, 1]`. KB-160. Default 1.0 (convention) via `#[serde(default = ...)]`
     /// so legacy resin TOMLs without the field parse unchanged.
@@ -338,6 +350,16 @@ impl ResinProfile {
     pub fn effective_base_adhesion_elevation_kpa(&self) -> f32 {
         self.base_adhesion_elevation_kpa.unwrap_or(0.0)
     }
+    /// Peel shape-factor strength if the TOML carries a value. KB-185.
+    pub fn peel_shape_factor_strength(&self) -> Option<f32> {
+        self.peel_shape_factor_strength
+    }
+    /// Effective peel shape-factor strength: the TOML value, or 0.0 (shape
+    /// factor ≡ 1.0, no correction) when unset. Opt-in so legacy resins are
+    /// behaviour-preserving.
+    pub fn effective_peel_shape_factor_strength(&self) -> f32 {
+        self.peel_shape_factor_strength.unwrap_or(0.0)
+    }
     /// Initial photoinitiator concentration (dimensionless fraction in [0,1]).
     /// KB-160. Consumed by the voxel cure path.
     pub fn photoinitiator_concentration_initial(&self) -> f32 {
@@ -477,6 +499,17 @@ impl ResinProfile {
             return Err(format!(
                 "cure_kinetics_ea_kj_mol, when present, must be finite and in \
                  (0.0, 200.0] kJ/mol (got {ea})"
+            ));
+        }
+        // KB-185 / ADR-0022 Stage 3: shape-factor strength is a dimensionless
+        // [0, 1] weight. Finite check FIRST so NaN doesn't silently satisfy the
+        // range predicate (anti-pattern rust-nan-positive-validation-gap).
+        if let Some(s) = self.peel_shape_factor_strength
+            && (!s.is_finite() || !(0.0..=1.0).contains(&s))
+        {
+            return Err(format!(
+                "peel_shape_factor_strength, when present, must be finite and in \
+                 [0.0, 1.0] (got {s})"
             ));
         }
         // KB-160: photoinitiator concentration is a dimensionless [0, 1]
@@ -629,6 +662,7 @@ impl ResinProfile {
             min_safe_temp_c: default_min_safe_temp_c(),
             cure_kinetics_ea_kj_mol: None, // KB-153: no measured value — uses default 30 kJ/mol w/ loud warning
             base_adhesion_elevation_kpa: None, // KB-116: opt-in; None ⇒ 0.0 (no base term). Calibrated value lives in the TOML.
+            peel_shape_factor_strength: None, // KB-185: opt-in; None ⇒ 0.0 (shape factor ≡ 1.0). Active value lives in the TOML.
             photoinitiator_concentration_initial: DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL,
             photoinitiator_decay_constant_k_d: None, // KB-160: no measured value — uses default 0.05 w/ ±50 % loud warning
             youngs_modulus_mpa: None, // KB-163: deliberately uncalibrated — see data/resins/elegoo_ceramic_grey_v2.toml comment
@@ -662,6 +696,7 @@ impl ResinProfile {
             min_safe_temp_c: default_min_safe_temp_c(),
             cure_kinetics_ea_kj_mol: None, // KB-153: no measured value — uses default 30 kJ/mol w/ loud warning
             base_adhesion_elevation_kpa: None, // KB-116: opt-in; None ⇒ 0.0 (no base term). Calibrated value lives in the TOML.
+            peel_shape_factor_strength: None, // KB-185: opt-in; None ⇒ 0.0 (shape factor ≡ 1.0). Active value lives in the TOML.
             photoinitiator_concentration_initial: DEFAULT_PHOTOINITIATOR_CONCENTRATION_INITIAL,
             photoinitiator_decay_constant_k_d: None, // KB-160: no measured value — uses default 0.05 w/ ±50 % loud warning
             youngs_modulus_mpa: Some(2000.0), // KB-163: literature-midpoint photopolymer modulus (Premium-Black-class)
@@ -706,6 +741,109 @@ mod tests {
         let mut r = ResinProfile::generic_standard();
         r.base_adhesion_elevation_kpa = Some(25.0);
         assert!((r.effective_base_adhesion_elevation_kpa() - 25.0).abs() < 1e-6);
+    }
+
+    // --- KB-185 peel shape-factor strength (ADR-0022 Stage 3) ---
+
+    #[test]
+    fn effective_peel_shape_factor_strength_defaults_to_zero_when_unset() {
+        let mut r = ResinProfile::generic_standard();
+        r.peel_shape_factor_strength = None;
+        assert_eq!(r.effective_peel_shape_factor_strength(), 0.0);
+    }
+
+    #[test]
+    fn effective_peel_shape_factor_strength_returns_set_value() {
+        let mut r = ResinProfile::generic_standard();
+        r.peel_shape_factor_strength = Some(0.5);
+        assert!((r.effective_peel_shape_factor_strength() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn factories_default_peel_shape_factor_strength_to_none() {
+        assert!(
+            ResinProfile::generic_standard()
+                .peel_shape_factor_strength()
+                .is_none()
+        );
+        assert!(
+            ResinProfile::elegoo_ceramic_grey_v2()
+                .peel_shape_factor_strength()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn peel_shape_factor_strength_below_zero_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.peel_shape_factor_strength = Some(-0.1);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn peel_shape_factor_strength_above_one_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.peel_shape_factor_strength = Some(1.5);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn peel_shape_factor_strength_nan_rejected() {
+        let mut p = ResinProfile::generic_standard();
+        p.peel_shape_factor_strength = Some(f32::NAN);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn peel_shape_factor_strength_bounds_accepted() {
+        let mut p = ResinProfile::generic_standard();
+        p.peel_shape_factor_strength = Some(0.0);
+        assert!(p.validate().is_ok());
+        p.peel_shape_factor_strength = Some(1.0);
+        assert!(p.validate().is_ok());
+        p.peel_shape_factor_strength = None;
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn peel_shape_factor_strength_round_trips_through_toml() {
+        // Minimal valid resin TOML (mirrors tests/uat_steps/legacy_resin_toml_defaults).
+        let base = r#"name = "T"
+penetration_depth_um = 170.0
+critical_energy_mj_cm2 = 5.0
+tensile_strength_mpa = 35.0
+peel_adhesion_kpa = 13.0
+ref_lift_speed_mm_min = 60.0
+linear_shrinkage_pct = 1.5
+viscosity_mpa_s = 200.0
+reference_temp_c = 25.0
+activation_energy_kj_mol = 52.0
+density_g_cm3 = 1.1
+[recipe]
+layer_height_um = 50.0
+bottom_layer_count = 6
+transition_layers = 3
+normal_exposure_sec = 2.5
+bottom_exposure_sec = 25.0
+wait_before_cure_sec = 0.5
+wait_before_release_sec = 1.0
+wait_after_release_sec = 0.0
+lift_speed_mm_min = 60.0
+lift_cycle_sec = 7.5
+lift_distance_mm = 5.0
+"#;
+        // Legacy TOML (field absent) → None via #[serde(default)], still valid.
+        let legacy: ResinProfile = toml::from_str(base).expect("legacy resin TOML parses");
+        assert_eq!(legacy.peel_shape_factor_strength(), None);
+        legacy.validate().expect("legacy resin validates");
+
+        // Explicit value parses + validates — guards the shipped
+        // generic_standard.toml = 0.5 against a serde/validation regression.
+        let with_field = format!("peel_shape_factor_strength = 0.5\n{base}");
+        let parsed: ResinProfile =
+            toml::from_str(&with_field).expect("resin TOML with the field parses");
+        assert_eq!(parsed.peel_shape_factor_strength(), Some(0.5));
+        parsed.validate().expect("0.5 strength validates");
     }
 
     #[test]

@@ -16,6 +16,14 @@ peel_adhesion_kpa = 13.0    # KB-110: standard FEP
 # fitted coefficient (ADR-0022 defers per-stratum fitting to the E-series). Treat like
 # the cure_kinetics_ea default: best current estimate, refine with calibration data.
 base_adhesion_elevation_kpa = 40.0
+# KB-185 / ADR-0022 Stage 3: aspect-ratio (A/L) peel shape-factor strength,
+# dimensionless in [0, 1]. Modulates σ_peel by each layer's compactness — a thin,
+# high-aspect cross-section peels at lower force than a compact one of equal area
+# (Pan Fig.9). INDICATIVE — 0.5 reproduces the measured 314 mm² cylinder→star
+# force ratio (0.795); the source is PDMS/DLP, NOT yet fit to Athena II (nFEP), so
+# treat it like base_adhesion_elevation_kpa: best current estimate, refine with an
+# equal-area shape-sweep (ADR-0022 defers per-stratum fitting to the E-series).
+peel_shape_factor_strength = 0.5
 ref_lift_speed_mm_min = 60.0  # measurement speed for peel_adhesion_kpa (KB-112, KB-114, ADR-0005 §3)
 
 # Shrinkage — KB-142

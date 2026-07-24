@@ -41,6 +41,7 @@ fn dummy_layer(index: u32) -> LayerResult {
         peel_force_n: 1.0,
         suction_force_n: 0.0,
         base_force_n: 0.0,
+        peel_shape_factor: None,
         total_force_n: 1.0,
         support_capacity_n: 10.0,
         safety_factor: 10.0,

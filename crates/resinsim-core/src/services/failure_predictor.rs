@@ -60,6 +60,11 @@ pub struct LayerOverrides {
     pub lift_speed_mm_min: Option<f32>,
     /// Suction force in Newtons from SuctionDetector pre-pass.
     pub suction_force_n: Option<f32>,
+    /// Applied KB-185 A/L peel shape factor (ADR-0022 Stage 3), dimensionless
+    /// in `(0, 1]`. `None` when the resin opts out (`peel_shape_factor_strength`
+    /// unset) — `predict_layer` then applies factor `1.0` (no correction). Set
+    /// per-layer by `SimulationRunner` from the mask geometry + resin strength.
+    pub peel_shape_factor: Option<f32>,
     /// Whether this layer is part of the raft/support base.
     /// Z deflection on raft layers is downgraded to Info (not Critical).
     pub is_raft: bool,
@@ -203,6 +208,12 @@ impl FailurePredictor {
         let speed_factor =
             PeelForceCalculator::lift_speed_factor(lift_speed, resin.ref_lift_speed_mm_min);
         let peel = PeelForceCalculator::peel_force(resin.peel_adhesion_kpa, area, speed_factor);
+        // KB-185 Tier-1 aspect-ratio shape factor (ADR-0022 Stage 3): modulate
+        // the peel term ONLY (not suction/base). 1.0 (no correction) unless the
+        // runner supplied a per-layer factor from the mask + resin strength.
+        let shape_factor = overrides.peel_shape_factor.unwrap_or(1.0);
+        let peel = PeelForce::new(peel.value() * shape_factor)
+            .expect("peel force × shape factor in (0, 1] is non-negative finite");
         let suction_n = overrides.suction_force_n.unwrap_or(0.0);
         let suction = PeelForce::new(suction_n).expect(
             "suction_force_n from SuctionDetector is non-negative; default 0.0 is non-negative",
@@ -292,6 +303,7 @@ impl FailurePredictor {
             peel_force_n: peel.value(),
             suction_force_n: suction.value(),
             base_force_n: base.value(),
+            peel_shape_factor: overrides.peel_shape_factor,
             total_force_n: total_force.value(),
             support_capacity_n: total_capacity.value(),
             safety_factor: safety_factor.map_or(f32::INFINITY, |s| s.value()), // INFINITY = no load; print_simulation accumulator handles it correctly
@@ -511,6 +523,62 @@ mod tests {
         );
         assert!(result.safety_factor > 1.0);
         assert!(result.cure_depth_um > 50.0);
+    }
+
+    /// ADR-0022 Stage 3: the peel shape factor scales the PEEL term ONLY —
+    /// suction and base forces are untouched (KB-185 Tier-1 modulates σ_peel).
+    #[test]
+    fn peel_shape_factor_scales_peel_only() {
+        let unshaped = LayerOverrides {
+            suction_force_n: Some(2.0),
+            ..Default::default()
+        };
+        let shaped = LayerOverrides {
+            suction_force_n: Some(2.0),
+            peel_shape_factor: Some(0.5),
+            ..Default::default()
+        };
+        // Layer 0 so any base-adhesion term is at full strength; it is identical
+        // across both runs since it does not depend on the shape factor.
+        let run = |ov: &LayerOverrides| {
+            FailurePredictor::predict_layer(
+                0,
+                area(500.0),
+                area(500.0),
+                ov,
+                &test_resin(),
+                &test_printer(),
+                &test_recipe(),
+                test_recipe().layer_height_um(),
+                &test_supports(),
+                &test_plate(),
+                &test_thermal(),
+            )
+            .0
+        };
+        let base_r = run(&unshaped);
+        let shaped_r = run(&shaped);
+
+        assert!(base_r.peel_force_n > 0.0, "need a non-zero peel to scale");
+        assert!(
+            (shaped_r.peel_force_n - 0.5 * base_r.peel_force_n).abs() < 1e-4,
+            "peel should halve: base={} shaped={}",
+            base_r.peel_force_n,
+            shaped_r.peel_force_n
+        );
+        // Suction + base are untouched by the peel shape factor.
+        assert_eq!(shaped_r.suction_force_n, base_r.suction_force_n);
+        assert_eq!(shaped_r.base_force_n, base_r.base_force_n);
+        // The total drops by exactly the peel reduction — nothing else moved.
+        let total_delta = base_r.total_force_n - shaped_r.total_force_n;
+        let peel_delta = base_r.peel_force_n - shaped_r.peel_force_n;
+        assert!(
+            (total_delta - peel_delta).abs() < 1e-4,
+            "total delta {total_delta} should equal peel delta {peel_delta}"
+        );
+        // Observability: the field records exactly what was applied.
+        assert_eq!(base_r.peel_shape_factor, None);
+        assert_eq!(shaped_r.peel_shape_factor, Some(0.5));
     }
 
     /// ADR-0022 Stage 1 MECHANISM gate: the KB-116 base term, folded into

@@ -116,7 +116,14 @@ suction into one area term**. Roadmap:
 - **Tier-1 (cheap):** add a **shape factor from A/L** (area÷perimeter),
   computable per layer once `LayerMask` exposes a perimeter alongside
   `solid_area_mm2`; modulate `σ_peel` by it. Captures the aspect-ratio
-  point at low cost.
+  point at low cost. **SHIPPED 2026-07-24** (ADR-0022 Stage 3,
+  `peel-corrections-s3-perimeter-shape`): `LayerMask::perimeter_mm()` +
+  `PeelForceCalculator::peel_shape_factor` as a square-anchored, reduction-only
+  factor `1 − strength·(1 − min(1, 4·√A / L))`; opt-in per resin via
+  `peel_shape_factor_strength` (`generic_standard` = indicative **0.5**, which
+  reproduces the 314 mm² cylinder→star ratio 0.795). On the Athena print it
+  improved the fit (corr 0.948→0.954, R² 0.562→0.771, peak still 0). Magnitude
+  stays indicative pending the equal-area shape sweep (E2b).
 - **Tier-2:** **split the model** into a peel-front term (Kendall,
   ∝ perimeter·G) + a suction term (Stefan/ΔP·A for sealed cavities — the
   `cavity_detector` topology pass already finds these, KB-184). This also

@@ -131,6 +131,22 @@ Add the `b_perim·P` term (Pan Eq. 13: `F ∝ A/L`), which requires exposing a
 aspect-ratio accuracy — equal-area cylinder 6.16 N vs star 4.9 N (~26% the pure
 area model misses).
 
+**Implemented 2026-07-24** (`peel-corrections-s3-perimeter-shape`) — but as the
+**KB-185 Tier-1 *multiplicative* form**, not the additive `[a_area·A + b_perim·P]`
+above. A single print cannot fit two independent coefficients, so Stage 3 ships a
+dimensionless, square-anchored, reduction-only shape factor that *modulates*
+σ_peel: `factor = 1 − strength·(1 − min(1, 4·√A / L))` (=1 for a square, <1 for
+thin; `strength = 0.5` reproduces the Pan Fig.9 cylinder→star ratio 0.795). It is
+opt-in per resin (`ResinProfile::peel_shape_factor_strength`), kept out of the
+pure `peel_force` method (KB-114 vectors preserved), threaded from the suction
+masks with a fully-solid-placeholder guard, and applied to the peel term only.
+`generic_standard` ships an **indicative 0.5** (all other profiles unset →
+behaviour-preserving). On the Athena reference print this *improved* the fit
+(`inspect calibrate`: correlation 0.948→0.954, single-gain R² 0.562→0.771, peak
+layer still 0/0) — promising but single-geometry, so it stays indicative. The
+additive `[a_area·A + b_perim·P]` (and per-`(resin, FEP)`-stratum magnitudes)
+remain **deferred to the E2b equal-area shape sweep** (`EXPERIMENT-PLAN` §E2b).
+
 ### Deferred — blocked on E-series calibration data
 
 These need per-stratum coefficients the single print cannot provide; park until

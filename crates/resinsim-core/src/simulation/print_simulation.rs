@@ -665,6 +665,7 @@ pub(crate) mod tests {
             peel_force_n: force,
             suction_force_n: 0.0,
             base_force_n: 0.0,
+            peel_shape_factor: None,
             total_force_n: force,
             support_capacity_n: force * sf,
             safety_factor: sf,

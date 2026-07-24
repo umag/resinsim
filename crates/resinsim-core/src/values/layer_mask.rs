@@ -164,6 +164,52 @@ impl LayerMask {
         self.solid_cell_count() as f64 * area_per_cell
     }
 
+    /// Perimeter of the solid region in mm, computed by counting the exposed
+    /// cell edges (each solid cell contributes one `voxel_size_mm`-long edge per
+    /// side that lacks a solid neighbour; off-grid counts as non-solid, so the
+    /// grid boundary is a perimeter). Interior holes contribute their own
+    /// boundary. Used by the ADR-0022 Stage 3 A/L peel shape factor.
+    ///
+    /// NOTE (voxel-resolution caveat): a staircased raster boundary OVER-counts
+    /// perimeter for non-axis-aligned edges, so the derived area/perimeter ratio
+    /// is biased slightly DOWN for curved shapes. The shape factor is a ratio
+    /// (`solid_area_mm2 / perimeter_mm`) so the bias partly self-cancels; it is
+    /// acceptable for the indicative Tier-1 factor (KB-185). Both quantities are
+    /// mask-derived at the same `voxel_size_mm`, keeping the ratio self-consistent.
+    pub fn perimeter_mm(&self) -> f64 {
+        let mut exposed_edges: u64 = 0;
+        for (x, y) in self.iter_solid() {
+            // A neighbour is "solid" only if in-bounds AND set; is_solid()
+            // returns false off-grid, so grid-edge sides count as exposed.
+            // Short-circuit the x==0 / y==0 cases before the u32 subtraction.
+            if x == 0 || !self.is_solid(x - 1, y) {
+                exposed_edges += 1; // west
+            }
+            if !self.is_solid(x + 1, y) {
+                exposed_edges += 1; // east
+            }
+            if y == 0 || !self.is_solid(x, y - 1) {
+                exposed_edges += 1; // north
+            }
+            if !self.is_solid(x, y + 1) {
+                exposed_edges += 1; // south
+            }
+        }
+        exposed_edges as f64 * self.voxel_size_mm as f64
+    }
+
+    /// Returns `true` if every cell is solid (the mask fills its whole grid).
+    ///
+    /// A fully-solid mask is a filled bounding rectangle carrying no interior
+    /// shape signal, so ADR-0022 Stage 3 treats it as shape factor 1.0. This
+    /// discriminates the synthetic all-solid placeholder masks that
+    /// `SimulationRunner::run_from_areas` (1×1) and the `run_from_layer_inputs`
+    /// fallback (W×H) emit from real per-layer geometry (which leaves void
+    /// margins around the part).
+    pub fn is_fully_solid(&self) -> bool {
+        self.solid_cell_count() == (self.width_cells as usize) * (self.height_cells as usize)
+    }
+
     /// Iterate over (x, y) of all solid cells in row-major order.
     pub fn iter_solid(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
         let w = self.width_cells;
@@ -407,5 +453,82 @@ mod tests {
         let geom = LayerGeometry::new(area, mask.clone());
         assert_eq!(geom.area, area);
         assert_eq!(geom.mask, mask);
+    }
+
+    // --- perimeter_mm (ADR-0022 Stage 3) ---
+
+    #[test]
+    fn perimeter_single_cell_is_four_sides() {
+        let mut m = LayerMask::new(1, 1, 0.5).expect("1×1 @ 0.5mm constructs");
+        m.set(0, 0).expect("in bounds");
+        // 4 exposed edges × 0.5 mm = 2.0 mm.
+        assert!((m.perimeter_mm() - 2.0).abs() < 1e-9, "got {}", m.perimeter_mm());
+    }
+
+    #[test]
+    fn perimeter_two_by_two_block() {
+        let m = LayerMask::new_all_solid(2, 2, 1.0).expect("2×2 @ 1mm constructs");
+        // Outer perimeter of a 2×2 square = 8 unit edges × 1.0 mm.
+        assert!((m.perimeter_mm() - 8.0).abs() < 1e-9, "got {}", m.perimeter_mm());
+    }
+
+    #[test]
+    fn perimeter_rectangle_is_twice_w_plus_h() {
+        let m = LayerMask::new_all_solid(3, 5, 1.0).expect("3×5 @ 1mm constructs");
+        // 2*(3+5) = 16 unit edges × 1.0 mm.
+        assert!(
+            (m.perimeter_mm() - 16.0).abs() < 1e-9,
+            "got {}",
+            m.perimeter_mm()
+        );
+    }
+
+    #[test]
+    fn perimeter_all_void_is_zero() {
+        let m = LayerMask::new(5, 5, 0.5).expect("5×5 @ 0.5mm constructs");
+        assert_eq!(m.perimeter_mm(), 0.0);
+    }
+
+    #[test]
+    fn perimeter_ring_counts_interior_hole() {
+        // 3×3 solid with the centre cleared: outer boundary 12 edges + the
+        // interior hole's 4 edges = 16 edges × 1.0 mm.
+        let mut m = LayerMask::new_all_solid(3, 3, 1.0).expect("3×3 @ 1mm constructs");
+        m.clear(1, 1).expect("clear centre in bounds");
+        assert!(
+            (m.perimeter_mm() - 16.0).abs() < 1e-9,
+            "got {}",
+            m.perimeter_mm()
+        );
+    }
+
+    #[test]
+    fn perimeter_disconnected_cells_sum() {
+        let mut m = LayerMask::new(4, 4, 1.0).expect("4×4 @ 1mm constructs");
+        m.set(0, 0).expect("in bounds");
+        m.set(3, 3).expect("in bounds");
+        // Two isolated cells → 4 + 4 = 8 edges × 1.0 mm.
+        assert!((m.perimeter_mm() - 8.0).abs() < 1e-9, "got {}", m.perimeter_mm());
+    }
+
+    // --- is_fully_solid (ADR-0022 Stage 3 placeholder-mask discriminator) ---
+
+    #[test]
+    fn is_fully_solid_true_for_all_solid() {
+        let m = LayerMask::new_all_solid(4, 3, 0.5).expect("4×3 @ 0.5mm constructs");
+        assert!(m.is_fully_solid());
+    }
+
+    #[test]
+    fn is_fully_solid_false_for_all_void() {
+        let m = LayerMask::new(4, 3, 0.5).expect("4×3 @ 0.5mm constructs");
+        assert!(!m.is_fully_solid());
+    }
+
+    #[test]
+    fn is_fully_solid_false_with_one_void() {
+        let mut m = LayerMask::new_all_solid(3, 3, 0.5).expect("3×3 @ 0.5mm constructs");
+        m.clear(1, 1).expect("clear in bounds");
+        assert!(!m.is_fully_solid());
     }
 }
