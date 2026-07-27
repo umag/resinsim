@@ -1,5 +1,17 @@
 [build]
 rustflags = ["-Z", "threads=8", "-Aunused_imports"]
 
+# The cucumber UAT suite cannot join the nextest default profile: its binary
+# is `harness = false` and aborts nextest's test enumeration, so
+# `.config/nextest.toml` excludes every `uat_*` target. That exclusion made
+# the suite invisible to every gate, and it sat red on main for months with
+# nobody able to see it.
+#
+# This alias is the discoverable replacement — `cargo uat` beside the
+# four-config matrix, findable from tooling rather than only from
+# agent-constraints/implementation-conventions.md.
+[alias]
+uat = "test --test uat_gherkin -p resinsim-core"
+
 [profile.dev]
 opt-level = 0

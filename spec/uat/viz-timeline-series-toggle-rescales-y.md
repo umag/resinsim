@@ -22,22 +22,18 @@ documents the contract.
 
 ```gherkin
 Scenario: toggling cure depth on/off rescales Y between peel-only and peel+cure ranges
-  Given the resinsim-viz binary running with --load-ctb + --load-sim
-        for a typical 200-layer print
+  Given the resinsim-viz binary running with --load-ctb + --load-sim for a typical 200-layer print
   And only "Peel force (N)" is checked (default state per issue body)
   When the user observes the chart's Y range
-  Then the Y range bounds approximate (0, peel_max × 1.1) — peel only
-       (typical: 0 to ~15)
+  Then the Y range bounds approximate (0, peel_max × 1.1) — peel only (typical: 0 to ~15)
 
   When the user clicks the "Cure depth (µm)" checkbox to enable it
   Then the chart re-fits Y on the same frame
-  And the new Y range bounds approximate (0, max(peel, cure) × 1.1)
-       (typical: 0 to ~200; cure dominates)
+  And the new Y range bounds approximate (0, max(peel, cure) × 1.1) (typical: 0 to ~200; cure dominates)
 
   When the user clicks "Cure depth (µm)" again to disable it
   Then the chart re-fits Y on the same frame
-  And the Y range returns to peel-only bounds
-       (typical: 0 to ~15)
+  And the Y range returns to peel-only bounds (typical: 0 to ~15)
 ```
 
 ## UAT-2: defaults match issue body — peel only at first paint

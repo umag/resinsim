@@ -50,8 +50,7 @@ Scenario: UAT-2 consumer reads null safety_factor without crashing
   When the user invokes "resinsim report health --in <PATH>"
   Then the process exits 0
   And stdout contains a "Min safety factor:" line
-  And the rendered minimum reflects only finite-force layers
-  (zero-force layers don't constrain the minimum)
+  And the rendered minimum reflects only finite-force layers (zero-force layers don't constrain the minimum)
 ```
 
 ## UAT-3: Consumer JSON mode preserves the round-trip semantics

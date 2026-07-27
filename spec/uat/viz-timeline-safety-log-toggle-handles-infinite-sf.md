@@ -23,24 +23,16 @@ than silently remembering log).
 
 ```gherkin
 Scenario: ∞-SF layer is absent from the safety line in both modes
-  Given the resinsim-viz binary running with --load-ctb + --load-sim
-        for a print where at least one layer has zero peel force
-        (e.g. a sliced-area-zero geometry — the bottom rafts of
-        many test prints satisfy this)
+  Given the resinsim-viz binary running with --load-ctb + --load-sim for a print where at least one layer has zero peel force (e.g. a sliced-area-zero geometry — the bottom rafts of many test prints satisfy this)
   When the user enables the "Safety factor" series
   Then no panic is raised when the chart paints
-  And the safety line has gaps at the layer indices whose
-      safety_factor is INFINITY
-  And the safety series y values for the surviving layers are
-      finite-positive
+  And the safety line has gaps at the layer indices whose safety_factor is INFINITY
+  And the safety series y values for the surviving layers are finite-positive
 
   When the user enables the "log10" sub-checkbox
   Then no panic is raised
-  And the safety series additionally drops any layers with
-      safety_factor ≤ 0 (none expected in normal sims, but the
-      filter is correctness-load-bearing)
-  And the legend label changes from "Safety factor (×)" to
-      "Safety factor (log10)"
+  And the safety series additionally drops any layers with safety_factor ≤ 0 (none expected in normal sims, but the filter is correctness-load-bearing)
+  And the legend label changes from "Safety factor (×)" to "Safety factor (log10)"
 ```
 
 ## UAT-2: log toggle visibility tracks show_safety
@@ -49,14 +41,12 @@ Scenario: ∞-SF layer is absent from the safety line in both modes
 Scenario: log10 toggle is hidden when Safety factor is off
   Given a fresh resinsim-viz session, the bottom panel rendering
   When the user observes the checkbox row above the chart
-  Then "log10" checkbox is NOT visible (Safety factor is off by
-       default per the issue body)
+  Then "log10" checkbox is NOT visible (Safety factor is off by default per the issue body)
 
   When the user enables "Safety factor"
   Then "log10" checkbox becomes visible
 
   When the user enables "log10", then disables "Safety factor"
   Then "log10" is no longer visible
-  And the next time "Safety factor" is enabled, the chart paints
-      in linear mode (log10 resets — unsurprising re-enable)
+  And the next time "Safety factor" is enabled, the chart paints in linear mode (log10 resets — unsurprising re-enable)
 ```

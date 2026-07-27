@@ -34,8 +34,7 @@ Scenario: UAT-2 a printer without vacuum_pressure_kpa inherits the 50 kPa defaul
   Given a printer profile whose vacuum_pressure_kpa is unset
   When a job with a sealed cavity is simulated
   Then effective_vacuum_pressure_kpa() returns 50.0
-  And every sealed-cavity suction_force_n equals 50 kPa × sealed_area × 1e-3
-    (byte-identical to the pre-Stage-2 output)
+  And every sealed-cavity suction_force_n equals 50 kPa × sealed_area × 1e-3 (byte-identical to the pre-Stage-2 output)
 ```
 
 ## UAT-3: ΔP is validated to not exceed atmospheric

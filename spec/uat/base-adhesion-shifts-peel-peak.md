@@ -20,8 +20,7 @@ Scenario: UAT-1 a resin with base_adhesion_elevation_kpa > 0 adds a first-layer 
   Given a resin whose base_adhesion_elevation_kpa is non-zero
   When a job is simulated with that resin
   Then the bottom layers report total_force_n greater than peel_force_n
-  And each LayerResult carries a base_force_n that is largest at layer 0 and
-    relaxes toward 0 over ~bottom_layer_count layers
+  And each LayerResult carries a base_force_n that is largest at layer 0 and relaxes toward 0 over ~bottom_layer_count layers
   And `inspect calibrate` prints "Predicted base adhesion (layer 0): <N> N"
   And the predicted-vs-real peak-layer offset is smaller than without the term
 ```

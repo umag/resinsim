@@ -45,37 +45,29 @@ See also:
 Scenario: UAT-1 voxel-mode CTB run produces a sidecar carrying thermal
   Given a CTB input with per-layer masks
   And a resin and printer profile validated against the recipe (under field-sim)
-  When the user invokes `resinsim sim --file <CTB> --resin <resin> \
-    --printer <printer> --voxel-cure-mm 0.05 --out model.sim.json`
+  When the user invokes `resinsim sim --file <CTB> --resin <resin> \ --printer <printer> --voxel-cure-mm 0.05 --out model.sim.json`
   Then a file `model.fields.bin` is written alongside `model.sim.json`
   And `model.sim.json` carries `fields_sidecar.fields_present` including `"thermal"`
   And the sidecar's RSFIELD header carries `format_version = 2`
-  And the sidecar's descriptor stream carries a kind_tag=4 entry whose
-      `dim_x × dim_y × dim_z × voxel_size_mm` matches the printer's
-      `build_envelope_mm` (NOT the part bbox the other four kinds use)
+  And the sidecar's descriptor stream carries a kind_tag=4 entry whose `dim_x × dim_y × dim_z × voxel_size_mm` matches the printer's `build_envelope_mm` (NOT the part bbox the other four kinds use)
 ```
 
 ## UAT-2: reload reattaches the thermal field with byte-identical values
 
 ```gherkin
 Scenario: UAT-2 load_envelope round-trips ThermalField losslessly
-  Given a previously-saved `<stem>.sim.json` + `<stem>.fields.bin` pair
-        from a voxel-mode run with a populated thermal_field
+  Given a previously-saved `<stem>.sim.json` + `<stem>.fields.bin` pair from a voxel-mode run with a populated thermal_field
   When the user invokes `resinsim report health --in <stem>.sim.json`
   Then the loaded `PrintSimulation` has `sim.thermal_field().is_some()`
-  And the loaded thermal_field's dimensions, voxel_size_mm, and
-      bbox_min_mm match the pre-save values byte-for-byte
-  And every voxel's f32 temperature matches the pre-save value
-      byte-for-byte (zstd is lossless; the encoder pins the level
-      explicitly for cross-run determinism)
+  And the loaded thermal_field's dimensions, voxel_size_mm, and bbox_min_mm match the pre-save values byte-for-byte
+  And every voxel's f32 temperature matches the pre-save value byte-for-byte (zstd is lossless; the encoder pins the level explicitly for cross-run determinism)
 ```
 
 ## UAT-3: legacy `format_version = 1` sidecars are rejected
 
 ```gherkin
 Scenario: UAT-3 v1 sidecar produces a typed format-version error
-  Given a `model.sim.json` whose `model.fields.bin` carries the legacy
-        RSFIELD `format_version = 1` header
+  Given a `model.sim.json` whose `model.fields.bin` carries the legacy RSFIELD `format_version = 1` header
   When the user invokes `resinsim report health --in model.sim.json`
   Then the load fails with a non-zero exit code
   And stderr names `"unknown sidecar format_version"`

@@ -31,16 +31,13 @@ already exists to fail-then-pass.
 ## UAT-1: envelope smaller than 2 × THERMAL_VOXEL_MIN_MM per axis is rejected
 
 ```gherkin
-Scenario: PrinterProfile.validate() rejects sub-minimum envelope extents
-          under the field-sim feature
+Scenario: PrinterProfile.validate() rejects sub-minimum envelope extents under the field-sim feature
   Given a PrinterProfile under the field-sim feature
   And `build_envelope_mm.width_mm = 3.0` (below 2 * THERMAL_VOXEL_MIN_MM = 4.0 mm)
   When `printer.validate()` runs
-  Then it returns `Err` whose message names `build_envelope_mm.width_mm`
-       and the minimum-extent threshold
+  Then it returns `Err` whose message names `build_envelope_mm.width_mm` and the minimum-extent threshold
   And the message references ADR-0020 §Decision i for the rationale
-  And the same TOML loads + validates cleanly under a default-feature
-       binary (the field-sim envelope-extent check is gated by `cfg`)
+  And the same TOML loads + validates cleanly under a default-feature binary (the field-sim envelope-extent check is gated by `cfg`)
 ```
 
 ## See also

@@ -11,6 +11,18 @@
 //! BOM, nested fence attempts, malformed YAML frontmatter) yields a `Vec`
 //! — possibly empty — and never panics. See `extract_tests.rs` for the
 //! property-based coverage that pins this invariant.
+//!
+//! # Compiled into TWO binaries
+//!
+//! Besides the `uat_steps` tree, this file is included by
+//! `tests/spec_gherkin_wellformed.rs` via `#[path]`, because that guard must
+//! live in a target nextest actually runs (anything named `uat_*` is excluded
+//! — see `docs/patterns/cucumber-in-nextest-workspace.md`).
+//!
+//! Consequence: keep this module free of references to its sibling
+//! `uat_steps` modules. A `super::` or `crate::` path here compiles fine in
+//! `uat_gherkin` and breaks `spec_gherkin_wellformed` with an error whose
+//! cause is not visible from this file.
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 

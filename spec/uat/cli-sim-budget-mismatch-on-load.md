@@ -31,13 +31,9 @@ See also:
 
 ```gherkin
 Scenario: UAT-1 default-budget consumer cannot read producer's permissive-budget sidecar
-  Given a sidecar produced by `resinsim sim --voxel-cure-mm 0.05
-    --resin elegoo_ceramic_grey_v2 --printer elegoo_mars5_ultra
-    --file <lilith>.ctb --out model.sim.json` with
-    `RESINSIM_MAX_FIELD_BYTES=17179869184`
+  Given a sidecar produced by `resinsim sim --voxel-cure-mm 0.05 --resin elegoo_ceramic_grey_v2 --printer elegoo_mars5_ultra --file <lilith>.ctb --out model.sim.json` with `RESINSIM_MAX_FIELD_BYTES=17179869184`
   And the sidecar's strain field claims > 4 GB allocation
-  When the consumer runs `resinsim report health --in model.sim.json`
-    without the env override (default `MAX_FIELD_ALLOCATION_BYTES = 4 GB`)
+  When the consumer runs `resinsim report health --in model.sim.json` without the env override (default `MAX_FIELD_ALLOCATION_BYTES = 4 GB`)
   Then the process exits with non-zero code
   And stderr mentions "exceeds field budget for strain"
   And the process does not panic
@@ -48,11 +44,9 @@ Scenario: UAT-1 default-budget consumer cannot read producer's permissive-budget
 ```gherkin
 Scenario: UAT-2 RESINSIM_MAX_FIELD_BYTES override allows oversized sidecar load
   Given the same paired sim.json + fields.bin from UAT-1
-  When the consumer runs `RESINSIM_MAX_FIELD_BYTES=17179869184 \
-    resinsim report health --in model.sim.json`
+  When the consumer runs `RESINSIM_MAX_FIELD_BYTES=17179869184 \ resinsim report health --in model.sim.json`
   Then the process exits with code 0
-  And the report renders all four voxel-derived sections (strain
-    gradient, stress max, etc.)
+  And the report renders all four voxel-derived sections (strain gradient, stress max, etc.)
 ```
 
 ## UAT-3 (future): producer's budget is stamped into the envelope
@@ -63,8 +57,7 @@ Scenario: UAT-3 [future] consumer error mentions the producer's RESINSIM_MAX_FIE
   And the consumer runs with default budget
   When the consumer attempts to load the envelope
   Then stderr mentions "exceeds field budget"
-  And stderr suggests "set RESINSIM_MAX_FIELD_BYTES=17179869184 (the
-    producer's setting)"
+  And stderr suggests "set RESINSIM_MAX_FIELD_BYTES=17179869184 (the producer's setting)"
 ```
 
 UAT-3 is marked **future** — depends on a follow-up issue that

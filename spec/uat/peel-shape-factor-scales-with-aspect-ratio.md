@@ -48,8 +48,7 @@ Scenario: UAT-2 a resin without peel_shape_factor_strength applies no correction
 ```gherkin
 Scenario: UAT-3 a fully-solid placeholder mask maps to factor 1.0
   Given a resin whose peel_shape_factor_strength is active (e.g. 0.5)
-  And a run whose masks are fully-solid placeholders (run_from_areas 1×1,
-    or the run_from_layer_inputs W×H all-solid fallback)
+  And a run whose masks are fully-solid placeholders (run_from_areas 1×1, or the run_from_layer_inputs W×H all-solid fallback)
   When the per-layer shape factors are computed
   Then every fully-solid mask maps to factor 1.0 (no shape signal)
   And the peel force on those layers is unchanged

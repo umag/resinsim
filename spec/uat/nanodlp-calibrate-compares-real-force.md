@@ -44,11 +44,9 @@ Scenario: UAT-2 a single-print fit with poor R² warns the user
 
 ```gherkin
 Scenario: UAT-3 a large peak-layer offset is reported and hinted
-  Given a .nanodlp whose real force peaks at layer 0 (base adhesion) while the
-    area-driven sim peaks mid-print
+  Given a .nanodlp whose real force peaks at layer 0 (base adhesion) while the area-driven sim peaks mid-print
   When the user runs `resinsim inspect calibrate --file <job.nanodlp>`
   Then stdout reports a "Peak layer:" line whose offset is non-zero
   And when the offset is large stdout emits a KB-115 / ADR-0022 hint line
-  And `--json` output includes predicted_peak_layer, actual_peak_layer, and
-    peak_layer_offset (null when a series is empty)
+  And `--json` output includes predicted_peak_layer, actual_peak_layer, and peak_layer_offset (null when a series is empty)
 ```

@@ -27,8 +27,7 @@ silent zip truncation in plot rendering.
 
 ```gherkin
 Scenario: cumulative_times_sec is parallel-indexed with layers()
-  Given a PrintSimulation built from a 100-layer cube via
-        SimulationRunner::run_from_layer_inputs
+  Given a PrintSimulation built from a 100-layer cube via SimulationRunner::run_from_layer_inputs
   When the cumulative_times_sec accessor is called
   Then the returned Vec has the same length as sim.layers()
   And every value is finite and non-negative
@@ -45,8 +44,7 @@ empty aggregate before the JSON sidecar deserialises.
 
 ```gherkin
 Scenario: cumulative_times_sec is empty for an empty aggregate
-  Given a PrintSimulation constructed via PrintSimulation::new with
-        no layers added
+  Given a PrintSimulation constructed via PrintSimulation::new with no layers added
   When the cumulative_times_sec accessor is called
   Then the returned Vec is empty
 ```

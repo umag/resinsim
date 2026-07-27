@@ -23,17 +23,13 @@ entity's `Transform.translation.z` mutates between frames.
 
 ```gherkin
 Scenario: clicking the timeline at layer K updates the current layer
-  Given the resinsim-viz binary running with --load-ctb + --load-sim
-        loaded for a 200-layer print, cursor at layer 0
-  When the user clicks the bottom-panel chart at the x-coordinate
-        nearest to layer 50
+  Given the resinsim-viz binary running with --load-ctb + --load-sim loaded for a 200-layer print, cursor at layer 0
+  When the user clicks the bottom-panel chart at the x-coordinate nearest to layer 50
   Then CurrentLayer.index == 50
   And the HUD log emits "Layer 51/200" (1-based render of 0-based index)
-  And the LayerCursor entity's Transform.translation.z equals
-      z_prefix[50] + LAYER_CURSOR_EPSILON_MM
+  And the LayerCursor entity's Transform.translation.z equals z_prefix[50] + LAYER_CURSOR_EPSILON_MM
   And the cursor VLine in the chart sits at x = 50.0
-  And the chart's "Layer 51" text label sits at x = 50.0,
-      y ≈ peak peel_force_n across the print
+  And the chart's "Layer 51" text label sits at x = 50.0, y ≈ peak peel_force_n across the print
 ```
 
 ## UAT-2: click does not re-upload the slice mesh
@@ -41,23 +37,18 @@ Scenario: clicking the timeline at layer K updates the current layer
 ```gherkin
 Scenario: clicking the timeline does not re-upload the slice mesh
   Given the resinsim-viz binary running with --load-ctb + --load-sim
-  When the user clicks the bottom-panel chart at any in-range
-        x-coordinate to seek to a different layer
-  Then the slice-stack Mesh asset's ATTRIBUTE_COLOR Vec is
-       byte-identical before and after
+  When the user clicks the bottom-panel chart at any in-range x-coordinate to seek to a different layer
+  Then the slice-stack Mesh asset's ATTRIBUTE_COLOR Vec is byte-identical before and after
   And no entry in Assets<Mesh> is added or removed
-  And the only Transform that changes between frames is the
-      LayerCursor's translation.z
+  And the only Transform that changes between frames is the LayerCursor's translation.z
 ```
 
 ## UAT-3: clicking out-of-range x clamps to the bounds
 
 ```gherkin
 Scenario: clicking past the chart's right edge clamps to the last layer
-  Given the resinsim-viz binary running with --load-ctb + --load-sim
-        loaded for a 200-layer print
-  When the user pans the chart so x = 1000 is visible inside the plot
-        area, then clicks at x = 1000
+  Given the resinsim-viz binary running with --load-ctb + --load-sim loaded for a 200-layer print
+  When the user pans the chart so x = 1000 is visible inside the plot area, then clicks at x = 1000
   Then CurrentLayer.index == 199 (last layer; saturated)
   And the HUD log emits "Layer 200/200"
 ```

@@ -30,8 +30,7 @@ See also: `crates/resinsim-core/tests/sidecar_security_integration.rs`.
 
 ```gherkin
 Scenario: UAT-1 tampering the sidecar bytes after save produces sha256 mismatch
-  Given a paired `model.sim.json` + `model.fields.bin` produced by a
-    --voxel-cure-mm run
+  Given a paired `model.sim.json` + `model.fields.bin` produced by a --voxel-cure-mm run
   When the user flips a single byte in `model.fields.bin` outside of size
   And invokes `resinsim report health --in model.sim.json`
   Then the process exits with non-zero code

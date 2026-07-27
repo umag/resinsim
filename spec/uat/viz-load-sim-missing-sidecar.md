@@ -28,10 +28,8 @@ See also:
 
 ```gherkin
 Scenario: UAT-1 --load-sim with missing fields.bin reports missing sidecar
-  Given a paired `model.sim.json` + `model.fields.bin` was produced by
-    a previous `resinsim sim --voxel-cure-mm` run
-  And the user copies ONLY `model.sim.json` into a new directory
-    `/tmp/move-test/` (leaving the sidecar behind)
+  Given a paired `model.sim.json` + `model.fields.bin` was produced by a previous `resinsim sim --voxel-cure-mm` run
+  And the user copies ONLY `model.sim.json` into a new directory `/tmp/move-test/` (leaving the sidecar behind)
   When the user invokes `resinsim-viz --load-sim /tmp/move-test/model.sim.json`
   Then `resinsim-viz` exits with non-zero code
   And stderr mentions "missing sidecar"
@@ -44,8 +42,7 @@ Scenario: UAT-1 --load-sim with missing fields.bin reports missing sidecar
 ```gherkin
 Scenario: UAT-2 dragging .sim.json without .fields.bin into resinsim-viz
   Given resinsim-viz is running with no sim loaded
-  When the user drags `model.sim.json` from a directory that does NOT
-    contain `model.fields.bin` into the viewer window
+  When the user drags `model.sim.json` from a directory that does NOT contain `model.fields.bin` into the viewer window
   Then the in-app error toast / status mentions "missing sidecar"
   And resinsim-viz remains running (drop failure is not fatal)
 ```
@@ -54,8 +51,7 @@ Scenario: UAT-2 dragging .sim.json without .fields.bin into resinsim-viz
 
 ```gherkin
 Scenario: UAT-3 Tier-1 envelope without fields_sidecar pointer loads cleanly
-  Given a `tier1.sim.json` envelope WITHOUT a `fields_sidecar` pointer
-    (i.e. produced by `resinsim sim` without `--voxel-cure-mm`)
+  Given a `tier1.sim.json` envelope WITHOUT a `fields_sidecar` pointer (i.e. produced by `resinsim sim` without `--voxel-cure-mm`)
   When the user invokes `resinsim-viz --load-sim tier1.sim.json`
   Then the load succeeds
   And no error about a missing sidecar appears

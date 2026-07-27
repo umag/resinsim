@@ -50,8 +50,7 @@ Scenario: UAT-2 the crack never touches the separation load
 ```gherkin
 Scenario: UAT-3 behaviour-preserving for plate adhesion and placeholders
   Given a bottom layer (below the plate bottom_layer_count) with any perimeter
-  And a run whose masks are fully-solid placeholders (run_from_areas 1×1, or the
-    run_from_layer_inputs W×H all-solid fallback)
+  And a run whose masks are fully-solid placeholders (run_from_areas 1×1, or the run_from_layer_inputs W×H all-solid fallback)
   When the layers are assessed
   Then the bottom-layer plate adhesion is unchanged (no crack)
   And every placeholder-mask layer records crack_front_fraction None (no knockdown)

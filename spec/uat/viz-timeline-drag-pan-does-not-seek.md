@@ -26,10 +26,8 @@ regression surfaces immediately.
 
 ```gherkin
 Scenario: drag-to-pan does not seek the current layer
-  Given the resinsim-viz binary running with --load-ctb + --load-sim
-        for a 200-layer print, cursor at layer 100
-  When the user presses the left mouse button at the chart's centre,
-        drags 200 px right, then releases
+  Given the resinsim-viz binary running with --load-ctb + --load-sim for a 200-layer print, cursor at layer 100
+  When the user presses the left mouse button at the chart's centre, drags 200 px right, then releases
   Then CurrentLayer.index == 100 (unchanged — drag is pan, not seek)
   And the chart's x-range has shifted to show later layers
   And the heatmap layer cursor entity has not moved
@@ -39,10 +37,8 @@ Scenario: drag-to-pan does not seek the current layer
 
 ```gherkin
 Scenario: single click (no drag) seeks the current layer
-  Given the resinsim-viz binary running with --load-ctb + --load-sim
-        for a 200-layer print, cursor at layer 100
-  When the user clicks (press + release without movement) at the
-        chart x-coordinate nearest layer 50
+  Given the resinsim-viz binary running with --load-ctb + --load-sim for a 200-layer print, cursor at layer 100
+  When the user clicks (press + release without movement) at the chart x-coordinate nearest layer 50
   Then CurrentLayer.index == 50
   And the heatmap layer cursor entity translates to z_prefix[50]
 ```

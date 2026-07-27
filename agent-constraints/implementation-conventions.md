@@ -119,6 +119,38 @@ configs (1) and (3) catch this and (2) and (4) catch the inverse.
 
 Tests must pass before `review_code`.
 
+### Fifth command: the cucumber UAT suite
+
+`cargo uat` (alias in `.cargo/config.toml` for
+`cargo test --test uat_gherkin -p resinsim-core`)
+
+This does **not** run under nextest and therefore is **not** covered by any
+of the four configs above. The binary is `harness = false`, which aborts
+nextest's enumeration, so `.config/nextest.toml` excludes every `uat_*`
+target (see `docs/patterns/cucumber-in-nextest-workspace.md`). That
+exclusion is deliberate and pinned by `nextest_filter_sanity.rs` — but it
+means a green four-config matrix says nothing about the UAT suite, which is
+how it sat red on main for months.
+
+Run it whenever `spec/uat/*.md` or `tests/uat_steps/` changes. Its guards:
+
+- **(a)** the set of specs without step definitions equals
+  `SPECS_WITHOUT_STEP_DEFS` in `uat_gherkin.rs` — a debt register that must
+  only ever shrink
+- **(c)** zero parse errors, so no scenario is silently dropped
+
+Authoring-time detection of malformed Gherkin lives in
+`tests/spec_gherkin_wellformed.rs`, which IS nextest-visible and so runs in
+the four-config matrix.
+
+**`cargo uat` is default-features only.** Under `--features field-sim` the
+suite still fails: 12 scenarios use fixtures that omit the ADR-0020 required
+thermal/envelope fields. Those failures belong to
+`uat-fixtures-fieldsim-adr0020-gap` and are deliberately NOT absorbed here —
+that issue was blocked on there being no green baseline to fix against, which
+is precisely what this work provides. Add the field-sim run to this section
+once it lands.
+
 ## PR convention
 
 Per project memory: PRs target `dev`, not `main`. `main` is reserved for

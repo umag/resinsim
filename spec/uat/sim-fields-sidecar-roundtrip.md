@@ -33,8 +33,7 @@ See also:
 Scenario: UAT-1 --voxel-cure-mm emits paired sim.json + fields.bin
   Given a CTB input with per-layer masks
   And a resin and printer profile validated against the recipe
-  When the user invokes `resinsim sim --file <CTB> --resin <resin> \
-    --printer <printer> --voxel-cure-mm 0.05 --out model.sim.json`
+  When the user invokes `resinsim sim --file <CTB> --resin <resin> \ --printer <printer> --voxel-cure-mm 0.05 --out model.sim.json`
   Then a file `model.sim.json` is written
   And a file `model.fields.bin` is written alongside it
   And `model.sim.json` carries a top-level `fields_sidecar` object
@@ -48,8 +47,7 @@ Scenario: UAT-1 --voxel-cure-mm emits paired sim.json + fields.bin
 
 ```gherkin
 Scenario: UAT-2 reload reattaches voxel fields to the aggregate
-  Given a paired `model.sim.json` + `model.fields.bin` produced by a
-    --voxel-cure-mm run
+  Given a paired `model.sim.json` + `model.fields.bin` produced by a --voxel-cure-mm run
   When the user invokes `resinsim report health --in model.sim.json`
   Then the process exits with code 0
   And no warning about missing voxel fields appears in stderr
@@ -60,8 +58,7 @@ Scenario: UAT-2 reload reattaches voxel fields to the aggregate
 ```gherkin
 Scenario: UAT-3 running `resinsim sim --out` twice overwrites both files
   Given a previously-produced pair `model.sim.json` + `model.fields.bin`
-  When the user invokes `resinsim sim --file <CTB> --resin <resin> \
-    --printer <printer> --voxel-cure-mm 0.05 --out model.sim.json`
+  When the user invokes `resinsim sim --file <CTB> --resin <resin> \ --printer <printer> --voxel-cure-mm 0.05 --out model.sim.json`
   Then both files are overwritten silently
   And no `--force` flag is required
   And no error mentions an existing file
@@ -72,8 +69,7 @@ Scenario: UAT-3 running `resinsim sim --out` twice overwrites both files
 ```gherkin
 Scenario: UAT-4 Tier-1 scalar simulation omits the sidecar
   Given a CTB input
-  When the user invokes `resinsim sim --file <CTB> --resin <resin> \
-    --printer <printer> --out tier1.sim.json` (without --voxel-cure-mm)
+  When the user invokes `resinsim sim --file <CTB> --resin <resin> \ --printer <printer> --out tier1.sim.json` (without --voxel-cure-mm)
   Then `tier1.sim.json` is written
   And `tier1.fields.bin` is NOT written
   And the envelope JSON does NOT contain a `fields_sidecar` key

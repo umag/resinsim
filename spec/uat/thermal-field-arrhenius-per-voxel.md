@@ -55,37 +55,27 @@ See also:
 ## UAT-1: ThermalField drift changes per-layer cure depth
 
 ```gherkin
-Scenario: UAT-1 voxel-mode cure_depth_um diverges across layers as the
-          thermal field warms
-  Given a Mars 5 Ultra printer profile with all field-sim thermal
-        material properties populated
-  And the Generic Standard resin (with thermal_conductivity_w_mk,
-      specific_heat_j_kgk, convective_top_h_w_m2k set per ADR-0020)
+Scenario: UAT-1 voxel-mode cure_depth_um diverges across layers as the thermal field warms
+  Given a Mars 5 Ultra printer profile with all field-sim thermal material properties populated
+  And the Generic Standard resin (with thermal_conductivity_w_mk, specific_heat_j_kgk, convective_top_h_w_m2k set per ADR-0020)
   And a 60-layer 3×3 solid-cylinder CTB fixture
-  When `resinsim sim --voxel-cure-mm 0.5 --initial-led-temp 27 \
-    --ambient 22 ...` runs to completion
+  When `resinsim sim --voxel-cure-mm 0.5 --initial-led-temp 27 \ --ambient 22 ...` runs to completion
   Then `sim.thermal_field()` is `Some` with vat-envelope dimensions
   And the thermal field's `volume_mean_c()` is ≥ initial ambient (22 °C)
-  And the thermal field's `volume_max_c()` is < the steady-state LED
-      ceiling + a small slack (≈ 50 °C for Mars 5 Ultra @ 13.5 °C steady-state rise)
-  And `sim.layers()[0].cure_depth_um != sim.layers()[N-1].cure_depth_um`
-      (some layer differs from layer 0 — Tier-2 dispatch is observable)
-  And stderr carries a `tier-2 thermal:` info line at run start AND a
-      `tier-2 thermal complete:` summary line at run end
+  And the thermal field's `volume_max_c()` is < the steady-state LED ceiling + a small slack (≈ 50 °C for Mars 5 Ultra @ 13.5 °C steady-state rise)
+  And `sim.layers()[0].cure_depth_um != sim.layers()[N-1].cure_depth_um` (some layer differs from layer 0 — Tier-2 dispatch is observable)
+  And stderr carries a `tier-2 thermal:` info line at run start AND a `tier-2 thermal complete:` summary line at run end
 ```
 
 ## UAT-2: Tier-1 path is unaffected when voxel cure is OFF
 
 ```gherkin
-Scenario: UAT-2 absent --voxel-cure-mm leaves Tier-1 cure dispatch
-          intact
+Scenario: UAT-2 absent --voxel-cure-mm leaves Tier-1 cure dispatch intact
   Given the same printer + resin profiles as UAT-1
   And a multi-layer CTB
   When `resinsim sim ...` runs WITHOUT `--voxel-cure-mm`
   Then `sim.thermal_field()` is `None`
   And `sim.cure_field()` / `sim.strain_field()` / etc. are `None`
-  And per-layer `cure_depth_um` derives from the Tier-1 scalar
-      `ThermalCalculator::vat_temperature_at_layer_v2` + `Ec(T)`
-      Arrhenius compose, unchanged from pre-t2f4 behaviour
+  And per-layer `cure_depth_um` derives from the Tier-1 scalar `ThermalCalculator::vat_temperature_at_layer_v2` + `Ec(T)` Arrhenius compose, unchanged from pre-t2f4 behaviour
   And no `tier-2 thermal:` info line is emitted to stderr
 ```

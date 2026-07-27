@@ -30,12 +30,9 @@ Scenario: voxel-mode CTB run emits the tier-2 thermal log lines exactly once eac
   Given a CTB input with per-layer masks
   And a Mars 5 Ultra printer profile (with field-sim thermal fields populated)
   And the Generic Standard resin
-  When `resinsim sim --voxel-cure-mm 0.5 --file <CTB> --resin <resin> \
-    --printer <printer> --initial-led-temp 27 --ambient 22 \
-    --out model.sim.json` runs to completion
+  When `resinsim sim --voxel-cure-mm 0.5 --file <CTB> --resin <resin> \ --printer <printer> --initial-led-temp 27 --ambient 22 \ --out model.sim.json` runs to completion
   Then exactly one line on stderr starts with `tier-2 thermal: voxel_size=`
-  And that line carries `α=`, `k_resin=`, `h_top=`, `h_side(lumped)=`
-      tokens for operator-side calibration debugging
+  And that line carries `α=`, `k_resin=`, `h_top=`, `h_side(lumped)=` tokens for operator-side calibration debugging
   And exactly one line on stderr starts with `tier-2 thermal complete: total_substeps=`
   And the complete line carries `max_T=`, `volume_mean=`, `wall_clock=` tokens
   And neither line appears when `--voxel-cure-mm` is absent (Tier-1 path)
