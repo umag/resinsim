@@ -145,8 +145,11 @@ Two rules follow:
    the three thermal requirements, no test anywhere in `crates/` asserted
    the rejection — `entities::resin_profile::tests::thermally_incomplete_toml_rejected_under_field_sim`
    was not added until two months later, by the lifecycle that tripped
-   over the gap. The printer-side counterpart (`build_envelope_mm`) still
-   has none.
+   over the gap. The printer-side counterpart
+   (`entities::printer_profile::tests::thermally_incomplete_printer_toml_rejected_under_field_sim`,
+   asserting the `build_envelope_mm` rejection) was added by the same
+   `uat-fixtures-fieldsim-adr0020-gap` lifecycle that closed the fixture
+   gap this section describes.
 
 ## See also
 

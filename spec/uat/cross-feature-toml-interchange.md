@@ -24,8 +24,10 @@ UAT-2 (the rejection direction) is enforced explicitly for resins by
 added by `s3-peel-shape-toml-fieldsim-thermal`. It builds a pre-t2f4
 root from `legacy_toml_root_pre_t2f4()` and asserts the TOML parses but
 `validate()` returns `Err` naming both `thermal_conductivity_w_mk` and
-the gating feature. The printer-side counterpart
-(`build_envelope_mm`) has no equivalent test yet.
+the gating feature. The printer-side counterpart is enforced by
+`entities::printer_profile::tests::thermally_incomplete_printer_toml_rejected_under_field_sim`,
+added by `uat-fixtures-fieldsim-adr0020-gap`, which asserts `validate()`
+returns `Err` naming `build_envelope_mm` and the gating feature.
 
 Both scenarios also protect against a future regression — e.g. adding
 `#[serde(deny_unknown_fields)]` to `PrinterProfile` or `ResinProfile`

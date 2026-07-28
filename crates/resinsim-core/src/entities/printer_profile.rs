@@ -566,7 +566,7 @@ impl PrinterProfile {
                     "build_envelope_mm is required under the field-sim feature \
                      (ADR-0020 §Decision ii — ThermalField is anchored to the \
                      vat envelope). Add `[build_envelope_mm]` block to the \
-                     printer TOML with x_mm, y_mm, z_mm."
+                     printer TOML with width_mm, depth_mm, max_z_mm."
                         .into(),
                 );
             }
@@ -894,6 +894,34 @@ vat_wall_k_w_mk = 200.0
         let p: PrinterProfile = toml::from_str(&valid_printer_toml_with_envelope())
             .expect("valid printer TOML must parse");
         p.validate().expect("valid TOML must satisfy validate()");
+    }
+
+    /// Locks `spec/uat/cross-feature-toml-interchange.md` UAT-2, printer
+    /// side: a printer TOML authored under default builds (no
+    /// `build_envelope_mm`) must PARSE under `field-sim` — the field is
+    /// `Option` so interchange holds — but must fail `validate()` with an
+    /// error naming the missing field and the gating feature.
+    ///
+    /// Mirror of
+    /// `entities::resin_profile::tests::thermally_incomplete_toml_rejected_under_field_sim`
+    /// (added by `s3-peel-shape-toml-fieldsim-thermal`); this closes the
+    /// printer-side half of the gap that test's doc comment left open.
+    /// `valid_printer_toml()` already carries every OTHER field-sim scalar
+    /// (convective_wall_h_w_m2k, vat_wall_thickness_mm, vat_wall_k_w_mk),
+    /// so omitting only the envelope isolates the build_envelope_mm check.
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn thermally_incomplete_printer_toml_rejected_under_field_sim() {
+        let p: PrinterProfile = toml::from_str(&valid_printer_toml())
+            .expect("TOML parse succeeds; validate() is the gate");
+        assert_eq!(p.build_envelope_mm(), None);
+        let err = p
+            .validate()
+            .expect_err("printer without build_envelope_mm must fail validate() under field-sim");
+        assert!(
+            err.contains("build_envelope_mm") && err.contains("field-sim"),
+            "error must name the field and the gating feature: {err}"
+        );
     }
 
     #[test]
