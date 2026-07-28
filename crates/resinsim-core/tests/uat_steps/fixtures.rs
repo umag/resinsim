@@ -1,9 +1,14 @@
 //! Test fixtures shared across UAT step-def modules.
 //!
-//! Helpers duplicated from simulation_runner.rs's `#[cfg(test)]` block
-//! (not re-exported as `pub`). Step 7 of the rollout replaces these
-//! with explicit builders (`PrinterBuilder`, `ResinBuilder`, etc.) in
-//! `world.rs` — for now, inline closures + TOML round-trips suffice.
+//! `default_plate` / `test_ambient` / `test_supports` / `cube_areas` are
+//! small closures duplicated from simulation_runner.rs's `#[cfg(test)]`
+//! block (not re-exported as `pub`) — no builder covers them.
+//! `printer_with_ranges` now delegates to `world::PrinterBuilder`.
+//! The ADR-0020 field-sim TOML fragments below
+//! (`RESIN_FIELD_SIM_THERMAL_LINES`, `PRINTER_FIELD_SIM_SCALARS`,
+//! `PRINTER_BUILD_ENVELOPE_INLINE`, `resin_chemistry_root*`,
+//! `valid_recipe_table`) are the single home every UAT resin/printer
+//! fixture composes from.
 
 use resinsim_core::entities::PrinterProfile;
 use resinsim_core::services::build_plate::PlateAdhesionProfile;
@@ -118,33 +123,25 @@ lift_distance_mm = 5.0
 "#
 }
 
-/// Build a `PrinterProfile` via TOML round-trip — lets integration tests
-/// override `pub(crate)` range fields without piercing the visibility.
-/// Other fields match `PrinterProfile::generic_msla_4k()` defaults.
+/// Build a narrowed-range `PrinterProfile` — thin delegate to
+/// `world::PrinterBuilder`. Every other field (name aside) tracks
+/// `PrinterBuilder::new()`'s defaults, which were verified field-by-field
+/// to equal this function's former hand-rolled literal (led_power 4.0,
+/// pixel_pitch 50, lift-speed 10..200, bottom_layer_count_max 15,
+/// z_stiffness 460, delta_t_steady 10, thermal_tau 1200, lcd_uniformity
+/// 0.22) — a before/after TOML diff showed the only change is the four
+/// ADR-0020 lines PrinterBuilder now appends
+/// (docs/patterns/anti/fixture-copy-of-shared-builder.md: "split the
+/// builder, don't fork it").
 pub fn printer_with_ranges(
     layer_min: f32,
     layer_max: f32,
     exposure_min: f32,
     exposure_max: f32,
 ) -> PrinterProfile {
-    let toml_str = format!(
-        r#"
-name = "UatNarrowed"
-led_power_mw_cm2 = 4.0
-pixel_pitch_um = 50.0
-layer_height_range_um = {{ min = {layer_min}, max = {layer_max} }}
-exposure_range_sec = {{ min = {exposure_min}, max = {exposure_max} }}
-lift_speed_range_mm_min = {{ min = 10.0, max = 200.0 }}
-bottom_layer_count_max = 15
-z_stiffness_n_per_mm = 460.0
-delta_t_steady_c = 10.0
-thermal_tau_sec = 1200.0
-lcd_uniformity_variation = 0.22
-"#
-    );
-    let p: PrinterProfile =
-        toml::from_str(&toml_str).expect("narrowed printer TOML parses into PrinterProfile");
-    p.validate()
-        .expect("narrowed printer satisfies PrinterProfile::validate()");
-    p
+    super::world::PrinterBuilder::new()
+        .with_name("UatNarrowed")
+        .with_layer_height_range(layer_min, layer_max)
+        .with_exposure_range(exposure_min, exposure_max)
+        .build()
 }

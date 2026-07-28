@@ -147,6 +147,11 @@ impl PrinterBuilder {
         }
     }
 
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
     pub fn with_layer_height_range(mut self, min: f32, max: f32) -> Self {
         self.layer_min = min;
         self.layer_max = max;
@@ -178,7 +183,7 @@ z_stiffness_n_per_mm = {stiff}
 delta_t_steady_c = 10.0
 thermal_tau_sec = 1200.0
 lcd_uniformity_variation = 0.22
-"#,
+{field_sim_scalars}{envelope}"#,
             name = self.name,
             led = self.led_power_mw_cm2,
             layer_min = self.layer_min,
@@ -188,6 +193,13 @@ lcd_uniformity_variation = 0.22
             lift_min = self.lift_speed_min,
             lift_max = self.lift_speed_max,
             stiff = self.z_stiffness_n_per_mm,
+            // ADR-0020 / t2f4: root-level vat-wall/convective scalars +
+            // INLINE build_envelope_mm (never a `[build_envelope_mm]`
+            // header block — a header would silently swallow any scalar
+            // appended after it into the table; see
+            // docs/patterns/anti/toml-inline-keys-nest-into-preceding-table.md).
+            field_sim_scalars = PRINTER_FIELD_SIM_SCALARS,
+            envelope = PRINTER_BUILD_ENVELOPE_INLINE,
         );
         let p: resinsim_core::entities::PrinterProfile =
             toml::from_str(&toml_str).expect("PrinterBuilder TOML must parse");
