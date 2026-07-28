@@ -10,8 +10,15 @@ rustflags = ["-Z", "threads=8", "-Aunused_imports"]
 # This alias is the discoverable replacement — `cargo uat` beside the
 # four-config matrix, findable from tooling rather than only from
 # agent-constraints/implementation-conventions.md.
+#
+# `uat-field-sim` is the field-sim-feature sibling: neither `uat` nor the
+# four-config matrix builds/runs the cucumber binary under `--features
+# field-sim`, so without this alias the field-sim UAT run is discoverable
+# only from agent-constraints/implementation-conventions.md too. Both
+# aliases must be run whenever spec/uat/*.md or tests/uat_steps/ changes.
 [alias]
 uat = "test --test uat_gherkin -p resinsim-core"
+uat-field-sim = "test --test uat_gherkin -p resinsim-core --features field-sim"
 
 [profile.dev]
 opt-level = 0

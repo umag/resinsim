@@ -119,20 +119,24 @@ configs (1) and (3) catch this and (2) and (4) catch the inverse.
 
 Tests must pass before `review_code`.
 
-### Fifth command: the cucumber UAT suite
+### Fifth and sixth commands: the cucumber UAT suite (both feature configs)
 
 `cargo uat` (alias in `.cargo/config.toml` for
-`cargo test --test uat_gherkin -p resinsim-core`)
+`cargo test --test uat_gherkin -p resinsim-core`) and
+`cargo uat-field-sim` (alias for the same binary with `--features
+field-sim`).
 
-This does **not** run under nextest and therefore is **not** covered by any
-of the four configs above. The binary is `harness = false`, which aborts
-nextest's enumeration, so `.config/nextest.toml` excludes every `uat_*`
-target (see `docs/patterns/cucumber-in-nextest-workspace.md`). That
-exclusion is deliberate and pinned by `nextest_filter_sanity.rs` — but it
-means a green four-config matrix says nothing about the UAT suite, which is
-how it sat red on main for months.
+Neither runs under nextest and therefore neither is covered by any of the
+four configs above. The binary is `harness = false`, which aborts nextest's
+enumeration, so `.config/nextest.toml` excludes every `uat_*` target (see
+`docs/patterns/cucumber-in-nextest-workspace.md`). That exclusion is
+deliberate and pinned by `nextest_filter_sanity.rs` — but it means a green
+four-config matrix says nothing about the UAT suite, which is how it sat red
+on main for months, and — under `field-sim` specifically — how it sat red
+for two months more after that (`uat-fixtures-fieldsim-adr0020-gap`).
 
-Run it whenever `spec/uat/*.md` or `tests/uat_steps/` changes. Its guards:
+Run BOTH whenever `spec/uat/*.md` or `tests/uat_steps/` changes. Their
+guards:
 
 - **(a)** the set of specs without step definitions equals
   `SPECS_WITHOUT_STEP_DEFS` in `uat_gherkin.rs` — a debt register that must
@@ -143,13 +147,24 @@ Authoring-time detection of malformed Gherkin lives in
 `tests/spec_gherkin_wellformed.rs`, which IS nextest-visible and so runs in
 the four-config matrix.
 
-**`cargo uat` is default-features only.** Under `--features field-sim` the
-suite still fails: 12 scenarios use fixtures that omit the ADR-0020 required
-thermal/envelope fields. Those failures belong to
-`uat-fixtures-fieldsim-adr0020-gap` and are deliberately NOT absorbed here —
-that issue was blocked on there being no green baseline to fix against, which
-is precisely what this work provides. Add the field-sim run to this section
-once it lands.
+**Expected shape is IDENTICAL in both configs**: 51 features, 153 scenarios
+(36 passed, 117 skipped, 0 failed), 320 steps (203 passed, 117 skipped, 0
+failed), exit 0. A field-sim run reporting FEWER total steps than the
+default run means a scenario is aborting early (a fixture regressed and is
+panicking before reaching every step) — treat that as a hard failure, not
+noise, even if the final failed-count still reads 0.
+
+Hand-rolled resin/printer TOML fixtures under `tests/uat_steps/` MUST
+compose from the shared builders (`world.rs::ResinBuilder`,
+`world.rs::PrinterBuilder`, `world.rs::RecipeBuilder`) or the shared
+fragments in `fixtures.rs` (`resin_chemistry_root[_pre_t2f4]`,
+`valid_recipe_table`, `RESIN_FIELD_SIM_THERMAL_LINES`,
+`PRINTER_FIELD_SIM_SCALARS`, `PRINTER_BUILD_ENVELOPE_INLINE`) rather than
+hand-copying literals — see
+`docs/patterns/anti/fixture-copy-of-shared-builder.md`. A copy that omits a
+field required only under `field-sim` compiles, parses, and passes under
+the other three ADR-0017 configs, and fails only when `cargo uat-field-sim`
+runs.
 
 ## PR convention
 
