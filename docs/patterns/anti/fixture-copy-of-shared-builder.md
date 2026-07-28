@@ -51,6 +51,44 @@ of the ADR-0017 matrix was not run against the new test at S3.
 Blast radius when finally run: exactly 1 of 1533 tests. Cheap to fix,
 expensive to find.
 
+## Concrete example 2 (UAT suite / uat-fixtures-fieldsim-adr0020-gap)
+
+The same defect, at a much larger blast radius, was found in the
+cucumber UAT suite (`crates/resinsim-core/tests/uat_steps/`). That tree
+already had two shared builders — `world.rs::ResinBuilder` and
+`world.rs::PrinterBuilder` — but they had rotted the same way the S3
+unit-test fixture did: t2f4 made three resin fields and four printer
+fields required under `field-sim`, and 11 hand-rolled TOML literals
+across 9 step-def files had never been updated to match, because nothing
+linked them to the builders (some didn't even use the builders — they
+were forked before the builders existed).
+
+Two properties made this worse than the S3 instance:
+
+- **Multi-field whack-a-mole.** `validate()` reports only the FIRST
+  missing field. Resin needs three fields, printer needs four. Patching
+  the field a panic message names costs a full rebuild-and-run round —
+  fix one, rebuild, discover the next — so field-by-field patching would
+  have cost three-to-four rounds per fixture, and re-created the exact
+  duplication the fix exists to remove.
+- **Masking.** 5 of the 11 literals were unreachable until an earlier
+  step in the same cucumber scenario was fixed: `PrinterBuilder` was
+  masked by `ResinBuilder` failing first inside
+  `PredictLayerInputs::default_for_test()`, and three inline resin TOMLs
+  in `recipe_inside_printer_range.rs` were masked by `printer_with_ranges`
+  panicking in the scenario's `Given` step. Fixing the resin side first
+  and re-running showed the SAME failure count (12) with one scenario's
+  panic message changing from a resin reason to a printer reason —
+  proof of the mask, not a stalled fix. Fixing the printer side then
+  dropped the count from 12 to 8 and unmasked the first of the three
+  `recipe_inside_printer_range.rs` literals in the same step. Only after
+  all 11 literals were routed through the builders did the count reach 0.
+
+**Blast radius: 12 of 153 scenarios versus 1 of 1533 unit tests at S3** —
+two orders of magnitude more expensive, for the identical root cause,
+because here the shared builders THEMSELVES had rotted, not just an
+individual fixture that bypassed them.
+
 ## Why "just add the missing field" is the wrong fix
 
 It restores green while leaving the tenth copy in place. The next
