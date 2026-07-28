@@ -23,7 +23,7 @@ use resinsim_core::services::build_plate::PlateAdhesionProfile;
 use resinsim_core::services::failure_predictor::SupportConfig;
 use resinsim_core::values::{AmbientTemperature, LayerMask};
 
-use super::world::UatWorld;
+use super::world::{RecipeBuilder, ResinBuilder, UatWorld};
 
 // ---- Scenario builders ----------------------------------------------------
 
@@ -54,41 +54,24 @@ fn layer_inputs(n: u32, ctb_layer_height_um: f32) -> Vec<LayerInput> {
         .collect()
 }
 
+// Delegates to the shared ResinBuilder (docs/patterns/anti/fixture-copy-of-
+// shared-builder.md) instead of a hand-rolled TOML literal. Field-by-field
+// diff evidence (scratch comparison during implementation): ResinBuilder's
+// chemistry defaults (critical_energy 5.0, penetration_depth 170.0,
+// viscosity 200.0, tensile_strength 35.0, peel_adhesion 13.0,
+// ref_lift_speed 60.0, reference_temp 25.0, activation_energy 52.0,
+// density 1.1, linear_shrinkage 1.5) and RecipeBuilder's recipe defaults
+// (bottom_layer_count 6, transition_layers 3, normal_exposure 2.5,
+// bottom_exposure 25.0, lift 60.0, cycle 7.5, distance 5.0) are
+// byte-identical in VALUE to the former literal; the only textual diff is
+// Rust's f32 Display dropping trailing ".0" (pre-existing ResinBuilder
+// behaviour, not introduced here) plus the three newly-required ADR-0020
+// thermal lines.
 fn resin_with_layer_height(recipe_um: f32) -> ResinProfile {
-    let toml = format!(
-        r#"
-name = "Generic Standard (test override)"
-penetration_depth_um = 170.0
-critical_energy_mj_cm2 = 5.0
-tensile_strength_mpa = 35.0
-peel_adhesion_kpa = 13.0
-ref_lift_speed_mm_min = 60.0
-linear_shrinkage_pct = 1.5
-viscosity_mpa_s = 200.0
-reference_temp_c = 25.0
-activation_energy_kj_mol = 52.0
-density_g_cm3 = 1.1
-
-[recipe]
-layer_height_um = {recipe_um}
-bottom_layer_count = 6
-transition_layers = 3
-normal_exposure_sec = 2.5
-bottom_exposure_sec = 25.0
-wait_before_cure_sec = 0.5
-wait_before_release_sec = 1.0
-wait_after_release_sec = 0.0
-lift_speed_mm_min = 60.0
-lift_cycle_sec = 7.5
-lift_distance_mm = 5.0
-"#
-    );
-    let resin: ResinProfile =
-        toml::from_str(&toml).expect("TOML constructed from a known-good template parses");
-    resin
-        .validate()
-        .expect("resin built from generic_standard baseline must validate");
-    resin
+    ResinBuilder::new()
+        .with_name("Generic Standard (test override)")
+        .with_recipe(RecipeBuilder::new().with_layer_height(recipe_um))
+        .build()
 }
 
 // Per-scenario state lives on the World (UatWorld.ctb_layer_inputs +

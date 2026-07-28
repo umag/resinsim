@@ -8,42 +8,29 @@
 use cucumber::{given, then, when};
 use resinsim_core::entities::ResinProfile;
 
+use super::fixtures;
 use super::world::UatWorld;
 
 // Minimal legacy-resin TOML with a full `[recipe]` table — isolates the
 // thermal-threshold defaulting behaviour. Other required fields are set
 // to values inside their validate() domains.
+//
+// ResinBuilder is NOT usable here: its with_thermal_thresholds() sets
+// degradation_temp_c AND min_safe_temp_c together, while this fixture
+// needs min_safe_temp_c present with degradation_temp_c ABSENT (so serde
+// defaults the latter to 50.0 and UAT-2 can assert the crossing). This is
+// exactly the insert-a-root-field-before-[recipe] case
+// fixtures::resin_chemistry_root / valid_recipe_table exist for — see
+// docs/patterns/anti/fixture-copy-of-shared-builder.md.
 fn legacy_resin_toml(explicit_min_safe: Option<f32>) -> String {
     let min_line = match explicit_min_safe {
         Some(v) => format!("min_safe_temp_c = {v}\n"),
         None => String::new(),
     };
     format!(
-        r#"name = "LegacyResin"
-penetration_depth_um = 170.0
-critical_energy_mj_cm2 = 5.0
-tensile_strength_mpa = 35.0
-peel_adhesion_kpa = 13.0
-ref_lift_speed_mm_min = 60.0
-linear_shrinkage_pct = 1.5
-viscosity_mpa_s = 200.0
-reference_temp_c = 25.0
-activation_energy_kj_mol = 52.0
-density_g_cm3 = 1.1
-{min_line}
-[recipe]
-layer_height_um = 50.0
-bottom_layer_count = 6
-transition_layers = 3
-normal_exposure_sec = 2.5
-bottom_exposure_sec = 25.0
-wait_before_cure_sec = 0.5
-wait_before_release_sec = 1.0
-wait_after_release_sec = 0.0
-lift_speed_mm_min = 60.0
-lift_cycle_sec = 7.5
-lift_distance_mm = 5.0
-"#
+        "{}{min_line}\n{}",
+        fixtures::resin_chemistry_root("LegacyResin"),
+        fixtures::valid_recipe_table(),
     )
 }
 

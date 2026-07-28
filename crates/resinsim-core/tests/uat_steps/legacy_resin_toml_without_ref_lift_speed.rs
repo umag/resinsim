@@ -7,37 +7,23 @@
 
 use cucumber::{given, then, when};
 
+use super::fixtures;
 use super::world::UatWorld;
 
 fn toml_without_ref_lift_speed() -> String {
     // Every REQUIRED chemistry field present EXCEPT ref_lift_speed_mm_min.
-    // Includes a valid [recipe] table so this specifically isolates the
-    // ref_lift_speed_mm_min failure mode (not the [recipe] case).
-    r#"name = "SansRefLiftSpeed"
-penetration_depth_um = 170.0
-critical_energy_mj_cm2 = 5.0
-tensile_strength_mpa = 35.0
-peel_adhesion_kpa = 13.0
-linear_shrinkage_pct = 1.5
-viscosity_mpa_s = 200.0
-reference_temp_c = 25.0
-activation_energy_kj_mol = 52.0
-density_g_cm3 = 1.1
-
-[recipe]
-layer_height_um = 50.0
-bottom_layer_count = 6
-transition_layers = 3
-normal_exposure_sec = 2.5
-bottom_exposure_sec = 25.0
-wait_before_cure_sec = 0.5
-wait_before_release_sec = 1.0
-wait_after_release_sec = 0.0
-lift_speed_mm_min = 60.0
-lift_cycle_sec = 7.5
-lift_distance_mm = 5.0
-"#
-    .to_string()
+    // This helper feeds BOTH UAT-1 (parse failure) and UAT-2 (migration
+    // patch then validate Ok) in this file, so — unlike the sibling
+    // parse-failure-only fixture in legacy_resin_toml_without_recipe.rs —
+    // it is NOT parse-failure-only and MUST carry the ADR-0020 thermal
+    // lines so the UAT-2 path reaches a real validate() Ok.
+    let root = fixtures::resin_chemistry_root("SansRefLiftSpeed")
+        .replace("ref_lift_speed_mm_min = 60.0\n", "");
+    assert!(
+        !root.contains("ref_lift_speed_mm_min"),
+        "ref_lift_speed_mm_min removal must actually change the root string; got: {root}",
+    );
+    format!("{root}\n{}", fixtures::valid_recipe_table())
 }
 
 // ---- UAT-1: missing ref_lift_speed_mm_min rejected at parse ----------------

@@ -8,52 +8,36 @@
 use cucumber::{given, then, when};
 use resinsim_core::entities::ResinProfile;
 
+use super::fixtures;
 use super::world::UatWorld;
 
 fn legacy_toml_sans_recipe() -> String {
-    // All chemistry fields present, NO [recipe] table.
-    r#"name = "LegacySansRecipe"
-penetration_depth_um = 170.0
-critical_energy_mj_cm2 = 5.0
-tensile_strength_mpa = 35.0
-peel_adhesion_kpa = 13.0
-ref_lift_speed_mm_min = 60.0
-linear_shrinkage_pct = 1.5
-viscosity_mpa_s = 200.0
-reference_temp_c = 25.0
-activation_energy_kj_mol = 52.0
-density_g_cm3 = 1.1
-"#
-    .to_string()
+    // All chemistry fields present, NO [recipe] table, and deliberately NO
+    // ADR-0020 thermal lines: this fixture asserts a PARSE failure (missing
+    // [recipe]), which happens before validate() would ever reach the
+    // field-sim thermal-requirement check, so completeness there is moot.
+    // Routed through resin_chemistry_root_pre_t2f4 anyway so the chemistry
+    // field list has exactly one home
+    // (docs/patterns/anti/fixture-copy-of-shared-builder.md) — this is the
+    // anti-pattern doc's legitimate parse-failure exception, not a copy.
+    fixtures::resin_chemistry_root_pre_t2f4("LegacySansRecipe")
 }
 
 fn toml_with_nan_recipe_exposure() -> String {
-    r#"name = "NaNExposure"
-penetration_depth_um = 170.0
-critical_energy_mj_cm2 = 5.0
-tensile_strength_mpa = 35.0
-peel_adhesion_kpa = 13.0
-ref_lift_speed_mm_min = 60.0
-linear_shrinkage_pct = 1.5
-viscosity_mpa_s = 200.0
-reference_temp_c = 25.0
-activation_energy_kj_mol = 52.0
-density_g_cm3 = 1.1
-
-[recipe]
-layer_height_um = 50.0
-bottom_layer_count = 6
-transition_layers = 3
-normal_exposure_sec = nan
-bottom_exposure_sec = 25.0
-wait_before_cure_sec = 0.5
-wait_before_release_sec = 1.0
-wait_after_release_sec = 0.0
-lift_speed_mm_min = 60.0
-lift_cycle_sec = 7.5
-lift_distance_mm = 5.0
-"#
-    .to_string()
+    // This fixture DOES reach validate(), so it needs the field-sim-complete
+    // root (fixtures::resin_chemistry_root) plus the canonical [recipe]
+    // table with normal_exposure_sec swapped to nan. Assert the swap
+    // actually changed the string — a future rename of the recipe field
+    // would otherwise turn this into a silently-no-op'd, passing-but-
+    // meaningless fixture.
+    let recipe =
+        fixtures::valid_recipe_table().replace("normal_exposure_sec = 2.5", "normal_exposure_sec = nan");
+    assert!(
+        recipe.contains("normal_exposure_sec = nan") && !recipe.contains("normal_exposure_sec = 2.5"),
+        "normal_exposure_sec swap must actually change the recipe table string; \
+         got: {recipe}",
+    );
+    format!("{}{recipe}", fixtures::resin_chemistry_root("NaNExposure"))
 }
 
 // ---- UAT-1: missing [recipe] rejected at deserialize -----------------------
