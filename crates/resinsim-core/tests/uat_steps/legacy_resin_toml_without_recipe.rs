@@ -30,10 +30,11 @@ fn toml_with_nan_recipe_exposure() -> String {
     // actually changed the string — a future rename of the recipe field
     // would otherwise turn this into a silently-no-op'd, passing-but-
     // meaningless fixture.
-    let recipe =
-        fixtures::valid_recipe_table().replace("normal_exposure_sec = 2.5", "normal_exposure_sec = nan");
+    let recipe = fixtures::valid_recipe_table()
+        .replace("normal_exposure_sec = 2.5", "normal_exposure_sec = nan");
     assert!(
-        recipe.contains("normal_exposure_sec = nan") && !recipe.contains("normal_exposure_sec = 2.5"),
+        recipe.contains("normal_exposure_sec = nan")
+            && !recipe.contains("normal_exposure_sec = 2.5"),
         "normal_exposure_sec swap must actually change the recipe table string; \
          got: {recipe}",
     );
