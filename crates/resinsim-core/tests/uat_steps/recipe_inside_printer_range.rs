@@ -14,7 +14,7 @@ use resinsim_core::services::pairing_validator;
 use super::fixtures::{
     cube_areas, default_plate, printer_with_ranges, test_ambient, test_supports,
 };
-use super::world::UatWorld;
+use super::world::{RecipeBuilder, ResinBuilder, UatWorld};
 
 // ---- UAT-1: happy-path pairing ---------------------------------------------
 
@@ -167,38 +167,16 @@ fn given_boundary_printer(world: &mut UatWorld) {
 
 #[given(regex = r#"^resin "R" whose recipe\.layer_height_um = 20\.0 \(exactly at min\)$"#)]
 fn given_resin_at_boundary(world: &mut UatWorld) {
-    // generic_standard has layer_height_um = 50.0. For this scenario we'd
+    // generic_standard has layer_height_um = 50.0. For this scenario we
     // need a resin at 20.0 — recipe is pub(crate), so we can't mutate
-    // directly. We assert the LIBRARY contract: FloatRange::contains is
-    // inclusive, so pairing at a boundary is Ok. Build via TOML.
-    let toml_str = r#"name = "BoundaryResin"
-penetration_depth_um = 170.0
-critical_energy_mj_cm2 = 5.0
-tensile_strength_mpa = 35.0
-peel_adhesion_kpa = 13.0
-ref_lift_speed_mm_min = 60.0
-linear_shrinkage_pct = 1.5
-viscosity_mpa_s = 200.0
-reference_temp_c = 25.0
-activation_energy_kj_mol = 52.0
-density_g_cm3 = 1.1
-
-[recipe]
-layer_height_um = 20.0
-bottom_layer_count = 6
-transition_layers = 3
-normal_exposure_sec = 2.5
-bottom_exposure_sec = 25.0
-wait_before_cure_sec = 0.5
-wait_before_release_sec = 1.0
-wait_after_release_sec = 0.0
-lift_speed_mm_min = 60.0
-lift_cycle_sec = 7.5
-lift_distance_mm = 5.0
-"#;
-    let r: ResinProfile = toml::from_str(toml_str).expect("boundary resin TOML parses");
-    r.validate().expect("boundary resin is valid");
-    world.resin = Some(r);
+    // directly; build via ResinBuilder. We assert the LIBRARY contract:
+    // FloatRange::contains is inclusive, so pairing at a boundary is Ok.
+    world.resin = Some(
+        ResinBuilder::new()
+            .with_name("BoundaryResin")
+            .with_recipe(RecipeBuilder::new().with_layer_height(20.0))
+            .build(),
+    );
 }
 
 #[when(regex = r"^validate_pairing\(P, R\.recipe\(\)\) is called$")]
@@ -233,35 +211,10 @@ fn then_max_boundary_also_ok(world: &mut UatWorld) {
         .as_ref()
         .expect("scenario invariant: printer set");
     let max_mm_min = printer.lift_speed_range_mm_min().max();
-    let toml_str = format!(
-        r#"name = "MaxBoundaryResin"
-penetration_depth_um = 170.0
-critical_energy_mj_cm2 = 5.0
-tensile_strength_mpa = 35.0
-peel_adhesion_kpa = 13.0
-ref_lift_speed_mm_min = 60.0
-linear_shrinkage_pct = 1.5
-viscosity_mpa_s = 200.0
-reference_temp_c = 25.0
-activation_energy_kj_mol = 52.0
-density_g_cm3 = 1.1
-
-[recipe]
-layer_height_um = 50.0
-bottom_layer_count = 6
-transition_layers = 3
-normal_exposure_sec = 2.5
-bottom_exposure_sec = 25.0
-wait_before_cure_sec = 0.5
-wait_before_release_sec = 1.0
-wait_after_release_sec = 0.0
-lift_speed_mm_min = {max_mm_min}
-lift_cycle_sec = 7.5
-lift_distance_mm = 5.0
-"#
-    );
-    let r: ResinProfile = toml::from_str(&toml_str).expect("max-boundary resin TOML parses");
-    r.validate().expect("max-boundary resin is valid");
+    let r = ResinBuilder::new()
+        .with_name("MaxBoundaryResin")
+        .with_recipe(RecipeBuilder::new().with_lift_speed(max_mm_min))
+        .build();
     let res = pairing_validator::validate_pairing(printer, r.recipe());
     assert!(
         res.is_ok(),
@@ -299,37 +252,13 @@ fn then_slightly_off_returns_err(world: &mut UatWorld) {
         .as_ref()
         .expect("scenario invariant: printer set");
     let max_layer = printer.layer_height_range_um().max();
-    // +0.1 matches scenario narrative but is derived, not hard-coded.
+    // +0.1 matches scenario narrative but is derived, not hard-coded
+    // (review finding #7).
     let out_of_range = max_layer + 0.1;
-    let toml_str = format!(
-        r#"name = "SlightlyOff"
-penetration_depth_um = 170.0
-critical_energy_mj_cm2 = 5.0
-tensile_strength_mpa = 35.0
-peel_adhesion_kpa = 13.0
-ref_lift_speed_mm_min = 60.0
-linear_shrinkage_pct = 1.5
-viscosity_mpa_s = 200.0
-reference_temp_c = 25.0
-activation_energy_kj_mol = 52.0
-density_g_cm3 = 1.1
-
-[recipe]
-layer_height_um = {out_of_range}
-bottom_layer_count = 6
-transition_layers = 3
-normal_exposure_sec = 2.5
-bottom_exposure_sec = 25.0
-wait_before_cure_sec = 0.5
-wait_before_release_sec = 1.0
-wait_after_release_sec = 0.0
-lift_speed_mm_min = 60.0
-lift_cycle_sec = 7.5
-lift_distance_mm = 5.0
-"#
-    );
-    let r: ResinProfile = toml::from_str(&toml_str).expect("slightly-off TOML parses");
-    r.validate().expect("slightly-off resin is valid");
+    let r = ResinBuilder::new()
+        .with_name("SlightlyOff")
+        .with_recipe(RecipeBuilder::new().with_layer_height(out_of_range))
+        .build();
     let res = pairing_validator::validate_pairing(printer, r.recipe());
     let violations = res.expect_err("slightly-off pairing must return Err");
     let joined = violations.join("; ");
