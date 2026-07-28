@@ -11,6 +11,10 @@ use resinsim_core::entities::{PrinterProfile, ResinProfile};
 use resinsim_core::simulation::PrintSimulation;
 use resinsim_core::values::{PeelForce, SafetyFactor, SupportCapacity};
 
+use super::fixtures::{
+    PRINTER_BUILD_ENVELOPE_INLINE, PRINTER_FIELD_SIM_SCALARS, RESIN_FIELD_SIM_THERMAL_LINES,
+};
+
 #[derive(Debug, Default, World)]
 pub struct UatWorld {
     // ---- Safety-factor-zero-force scenarios ----
@@ -295,7 +299,7 @@ viscosity_mpa_s = {visc}
 reference_temp_c = {ref_t}
 activation_energy_kj_mol = {ea}
 density_g_cm3 = {dens}
-{thermal_lines}
+{field_sim_thermal}{thermal_lines}
 {recipe}
 "#,
             name = self.name,
@@ -309,6 +313,12 @@ density_g_cm3 = {dens}
             ref_t = self.reference_temp_c,
             ea = self.activation_energy_kj_mol,
             dens = self.density_g_cm3,
+            // ADR-0020 / t2f4: root-level thermal-material scalars, required
+            // under field-sim. Must land BEFORE {recipe} — a [recipe] header
+            // has already been opened by the time {recipe} interpolates, so
+            // anything after it would silently nest into the recipe table
+            // (docs/patterns/anti/toml-inline-keys-nest-into-preceding-table.md).
+            field_sim_thermal = RESIN_FIELD_SIM_THERMAL_LINES,
             recipe = self.recipe.to_toml(),
         );
         let r: resinsim_core::entities::ResinProfile =
