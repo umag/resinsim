@@ -1193,7 +1193,7 @@ fn cmd_zaxis(
 
 fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
     use resinsim_core::io::athena;
-    use resinsim_core::services::{peak_index, ForceSeriesExtractor};
+    use resinsim_core::services::{filter_layer_range, peak_index, ForceSeriesExtractor};
     use std::path::Path;
 
     // Real Athena analytic log (tall ID,T,V; `.csv` or `.csv.gz`). Values are
@@ -1206,12 +1206,12 @@ fn cmd_athena(file: &str, from: Option<u32>, to: Option<u32>, json: bool) {
             std::process::exit(1);
         }
     };
-    let lo = from.unwrap_or(0);
-    let hi = to.unwrap_or(u32::MAX);
-    let layers: Vec<_> = ForceSeriesExtractor::extract_layer_forces(&log)
-        .into_iter()
-        .filter(|l| l.index >= lo && l.index <= hi)
-        .collect();
+    // Layer-range filter lifted into services::force_series_extractor beside
+    // peak_index (ADR-0022 Stage 0 precedent) so it is property-testable —
+    // see crates/resinsim-core/tests/athena_properties.rs block 4. The
+    // similar-looking predicate at cmd_inspect_layers (over sliced::LayerInput,
+    // a different type) was seen and deliberately left alone.
+    let layers = filter_layer_range(&ForceSeriesExtractor::extract_layer_forces(&log), from, to);
 
     let count = layers.len();
     // Peak layer via the shared argmax (services::peak_index) so this CLI and

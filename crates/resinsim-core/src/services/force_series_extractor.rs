@@ -122,6 +122,29 @@ pub fn peak_index(layers: &[LayerForce]) -> Option<usize> {
     argmax_by(layers, |l| l.peak_signal)
 }
 
+/// Retains only the layers whose `index` falls within `[from, to]`
+/// (inclusive on both ends; `from` defaults to 0, `to` defaults to
+/// `u32::MAX`). Order-preserving. Lifted out of `resinsim-inspect::cmd_athena`
+/// beside [`peak_index`] so the `--from`/`--to` CLI predicate is
+/// property-testable without a test re-implementing it — same reasoning as
+/// the `peak_index` extraction (ADR-0022 Stage 0,
+/// docs/patterns/single-source-peak-index-argmax.md). The predicate is
+/// EXACTLY the CLI's prior inline `.filter(...)`; this is a
+/// behaviour-preserving move, not a redesign.
+pub fn filter_layer_range(
+    layers: &[LayerForce],
+    from: Option<u32>,
+    to: Option<u32>,
+) -> Vec<LayerForce> {
+    let lo = from.unwrap_or(0);
+    let hi = to.unwrap_or(u32::MAX);
+    layers
+        .iter()
+        .filter(|l| l.index >= lo && l.index <= hi)
+        .copied()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

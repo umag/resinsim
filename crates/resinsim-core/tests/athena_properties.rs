@@ -4,7 +4,7 @@
 //! `services::profile_calibrator`). See ADR-0021, ADR-0022 Stage 0, and the
 //! `athena-tdd-coverage` issue plan.
 //!
-//! Three labelled blocks, one per surface, mirroring the layout of
+//! Four labelled blocks, one per surface, mirroring the layout of
 //! `tests/force_properties.rs`:
 //!
 //! 1. **Parser** — render→parse identity, undocumented-channel forward
@@ -19,15 +19,18 @@
 //!    fields, including the documented error paths. Degenerate inputs
 //!    (constant series, all-zero actual) are deliberately generated, not
 //!    excluded — they are the documented edge cases, not noise.
+//! 4. **`filter_layer_range`** — the CLI layer-range filter lifted out of
+//!    `resinsim-inspect::cmd_athena` into `services::force_series_extractor`
+//!    (plan step 6, precedent: `docs/patterns/single-source-peak-index-argmax.md`).
+//!    Written RED-first: this block was added and confirmed to fail to
+//!    compile (the function did not exist yet) before the production
+//!    function landed. Order-preserving subsequence; retained indices inside
+//!    the requested range; monotone under range widening; `from > to` is
+//!    empty; `(None, None)` is the identity.
 //!
-//! All three blocks cover EXISTING behaviour and are expected green on first
-//! run; a red property here is a real defect, not a test bug.
-//!
-//! Scope note: `filter_layer_range` (plan step 6, the CLI layer-range filter
-//! lift) is deliberately NOT covered by this file yet — its properties land
-//! in a follow-up commit once the production lift itself does, per the
-//! plan's TDD ordering (steps 4/5/7 are pure-existing-behaviour properties;
-//! step 6 is a genuine red-green).
+//! Blocks 1-3 cover EXISTING behaviour and were green on first run; a red
+//! property there is a real defect, not a test bug. Block 4 is a genuine
+//! red-green (see above).
 //!
 //! Strategy hygiene (`docs/patterns/anti/rust-nan-positive-validation-gap.md`):
 //! every `f64` strategy here is bounded and finite, and filters out `-0.0`.
@@ -73,6 +76,7 @@ use resinsim_core::{
         ForceSeriesExtractor,
         LayerForce,
         ProfileCalibrator,
+        filter_layer_range,
         peak_index,
     },
 };
@@ -535,5 +539,106 @@ proptest! {
             (Some(_), Some(_)) => prop_assert!(o.delta_t_steady_c.is_some()),
             _ => prop_assert!(o.delta_t_steady_c.is_none()),
         }
+    }
+}
+
+// ============================================================================
+// Block 4 — filter_layer_range (services::force_series_extractor), plan step
+// 6. The one production change in this issue: the CLI's inline `--from/--to`
+// layer-range predicate lifted beside `peak_index`, behaviour-preservingly.
+// Written RED-first (see module doc). Generic over arbitrary LayerForce
+// slices, not just extractor output — the predicate itself doesn't require
+// sorted or unique indices, so testing it generically is the honest scope.
+// ============================================================================
+
+fn layer_force_strategy() -> impl Strategy<Value = LayerForce> {
+    (any::<u32>(), finite_value(), finite_value(), 0usize..20).prop_map(
+        |(index, peak_signal, mean_signal, sample_count)| LayerForce {
+            index,
+            peak_signal,
+            mean_signal,
+            sample_count,
+        },
+    )
+}
+
+fn layers_vec_strategy() -> impl Strategy<Value = Vec<LayerForce>> {
+    prop::collection::vec(layer_force_strategy(), 0..20)
+}
+
+fn optional_bound_strategy() -> impl Strategy<Value = Option<u32>> {
+    prop::option::of(any::<u32>())
+}
+
+proptest! {
+    /// The result is an order-preserving subsequence of the input: every
+    /// retained item, walked in order, matches an item of `layers` walked in
+    /// the same order. Values pass through unchanged (no arithmetic), so
+    /// exact equality is safe.
+    #[test]
+    fn filter_layer_range_is_order_preserving_subsequence(
+        layers in layers_vec_strategy(),
+        from in optional_bound_strategy(),
+        to in optional_bound_strategy(),
+    ) {
+        let filtered = filter_layer_range(&layers, from, to);
+        let mut remaining = layers.iter();
+        for f in &filtered {
+            let matched = remaining.by_ref().any(|l| l == f);
+            prop_assert!(matched, "filtered item {f:?} is not an in-order subsequence of the input");
+        }
+    }
+
+    /// Every retained layer's index is inside the requested range.
+    #[test]
+    fn filter_layer_range_retains_only_in_range_indices(
+        layers in layers_vec_strategy(),
+        from in optional_bound_strategy(),
+        to in optional_bound_strategy(),
+    ) {
+        let filtered = filter_layer_range(&layers, from, to);
+        let lo = from.unwrap_or(0);
+        let hi = to.unwrap_or(u32::MAX);
+        for f in &filtered {
+            prop_assert!(f.index >= lo && f.index <= hi);
+        }
+    }
+
+    /// Widening the range (lower bound down, upper bound up) never drops a
+    /// layer that was already retained — monotone under range inclusion.
+    #[test]
+    fn filter_layer_range_monotone_under_range_widening(
+        layers in layers_vec_strategy(),
+        from1 in optional_bound_strategy(),
+        to1 in optional_bound_strategy(),
+        widen_from_by in 0u32..50,
+        widen_to_by in 0u32..50,
+    ) {
+        let from2 = from1.map(|f| f.saturating_sub(widen_from_by));
+        let to2 = to1.map(|t| t.saturating_add(widen_to_by));
+        let narrow = filter_layer_range(&layers, from1, to1);
+        let wide = filter_layer_range(&layers, from2, to2);
+        for f in &narrow {
+            prop_assert!(wide.contains(f), "widening the range dropped {f:?}");
+        }
+    }
+
+    /// `from > to` yields an empty result.
+    #[test]
+    fn filter_layer_range_from_greater_than_to_yields_empty(
+        layers in layers_vec_strategy(),
+        to in 0u32..1000,
+        gap in 1u32..1000,
+    ) {
+        let from = to + gap;
+        let filtered = filter_layer_range(&layers, Some(from), Some(to));
+        prop_assert!(filtered.is_empty());
+    }
+
+    /// `(None, None)` is the identity.
+    #[test]
+    fn filter_layer_range_none_none_is_identity(layers in layers_vec_strategy()) {
+        let filtered = filter_layer_range(&layers, None, None);
+        prop_assert_eq!(filtered, layers);
     }
 }

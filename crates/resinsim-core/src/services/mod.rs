@@ -31,7 +31,9 @@ pub use crack_propagator::CrackPropagator;
 pub use cure_calculator::CureCalculator;
 pub use failure_predictor::FailurePredictor;
 pub use force_comparator::{ComparisonReport, ForceComparator};
-pub use force_series_extractor::{argmax_by, peak_index, ForceSeriesExtractor, LayerForce};
+pub use force_series_extractor::{
+    argmax_by, filter_layer_range, peak_index, ForceSeriesExtractor, LayerForce,
+};
 pub use layer_timing_calculator::LayerTimingCalculator;
 #[cfg(feature = "field-sim")]
 pub use light_crosstalk_calculator::{CrosstalkError, LightCrosstalkCalculator};
