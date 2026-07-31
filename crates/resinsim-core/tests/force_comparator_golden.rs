@@ -11,6 +11,19 @@
 //! (base adhesion) while the area-driven sim peaks mid-print, and a single
 //! counts→N gain fits with R²≈0. If a metric's *definition* changes, recompute
 //! and update the constants deliberately — do not loosen the epsilons.
+//!
+//! ## Relationship to `athena_fixture_roundtrip.rs`
+//!
+//! This file pins the same `ForceComparator` / `ProfileCalibrator` metric
+//! *definitions* on an **in-code** fixture (`actual()` / `predicted()` below
+//! are literal values built in the test body). `athena_fixture_roundtrip.rs`
+//! pins the identical definitions on a **file-sourced** fixture — loaded via
+//! `load_analytic_csv` from the committed `synthetic_stepped_forces.csv` —
+//! with different numeric values (its `predicted()` peaks at layer 3, not
+//! layer 2). The two are not a duplicate: this one is the fast in-memory
+//! check with no I/O; the other also proves the CSV/gzip parse path feeds
+//! the same math correctly. A metric-definition change must update both
+//! files' pinned constants together, not just one.
 
 use resinsim_core::io::athena::AnalyticLog;
 use resinsim_core::services::{
