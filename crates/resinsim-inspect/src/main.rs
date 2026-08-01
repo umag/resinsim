@@ -1,6 +1,137 @@
 use clap::{Parser, Subcommand};
 
 mod profile_loader;
+#[cfg(feature = "field-sim")]
+mod field_inspect;
+
+/// `--field` selector for `inspect field` (t2f6-field-inspector). Plain
+/// data — compiles in every build so the flag itself stays visible in
+/// `--help` even when the `field-sim` feature is off (ADR-0023). The
+/// kind lives ONLY here on the CLI adapter; `FieldKindArg::name()`'s
+/// spellings are pinned against `sidecar::format::FieldKind::name()`
+/// by a feature-gated unit test below so the CLI, the sidecar's
+/// `fields_present`, and `--help` cannot drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum FieldKindArg {
+    Cure,
+    Photoinitiator,
+    Strain,
+    Stress,
+    Thermal,
+}
+
+impl FieldKindArg {
+    // Read by field_inspect::run under #[cfg(feature = "field-sim")];
+    // the default build's binary target never calls it (only the
+    // clap ValueEnum machinery + the feature-gated tests do), so it
+    // is genuinely dead code from that target's point of view.
+    #[allow(dead_code)]
+    fn name(self) -> &'static str {
+        match self {
+            Self::Cure => "cure",
+            Self::Photoinitiator => "photoinitiator",
+            Self::Strain => "strain",
+            Self::Stress => "stress",
+            Self::Thermal => "thermal",
+        }
+    }
+}
+
+/// `--slice` axis. Plain data (see [`FieldKindArg`]'s doc-comment for
+/// why this must compile feature-off).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SliceAxisArg {
+    X,
+    Y,
+    Z,
+}
+
+impl SliceAxisArg {
+    // Read by field_inspect::run under #[cfg(feature = "field-sim")]
+    // (header + JSON axis label) — dead in the default build's binary
+    // target, same rationale as FieldKindArg::name() above.
+    #[allow(dead_code)]
+    fn label(self) -> &'static str {
+        match self {
+            Self::X => "x",
+            Self::Y => "y",
+            Self::Z => "z",
+        }
+    }
+}
+
+/// Parsed `--slice <AXIS>=<VALUE>[mm]` spec. `axis`/`value_mm` are
+/// read by `field_inspect::run` under `#[cfg(feature = "field-sim")]`;
+/// dead in the default build's binary target for the same reason as
+/// `FieldKindArg::name()` above — the parser itself still runs
+/// (parse-time validation must work feature-off), it just has nowhere
+/// feature-off to route the parsed value.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct SliceSpec {
+    axis: SliceAxisArg,
+    value_mm: f32,
+}
+
+/// Clap `value_parser` for `--slice`. Mirrors `parse_voxel_cure_mm`'s
+/// parse-time validation and error-wording register: accepts
+/// `z=10`, `z=10mm`, `x=0`, `y=3.5mm` (case-insensitive axis letter,
+/// optional `mm` suffix); rejects an unknown axis letter, a missing or
+/// non-numeric value, a negative value (world-mm addresses are
+/// non-negative offsets from the field's bbox/envelope origin — same
+/// register as `--voxel-cure-mm`'s "must be finite and positive"),
+/// NaN/±∞, a bare number with no axis prefix, a doubled `=`, and an
+/// empty string.
+fn parse_slice_spec(s: &str) -> Result<SliceSpec, String> {
+    if s.is_empty() {
+        return Err(
+            "--slice must not be empty; expected <AXIS>=<VALUE>[mm], e.g. z=10mm".to_string(),
+        );
+    }
+    let (axis_str, value_str) = s.split_once('=').ok_or_else(|| {
+        format!("--slice {s:?} is missing '=' — expected <AXIS>=<VALUE>[mm], e.g. z=10mm")
+    })?;
+    if axis_str.len() != 1 {
+        return Err(format!(
+            "--slice axis {axis_str:?} must be a single letter (x, y, or z)"
+        ));
+    }
+    let axis = match axis_str.to_ascii_lowercase().as_str() {
+        "x" => SliceAxisArg::X,
+        "y" => SliceAxisArg::Y,
+        "z" => SliceAxisArg::Z,
+        other => return Err(format!("--slice axis {other:?} is not one of x, y, z")),
+    };
+    if value_str.contains('=') {
+        return Err(format!(
+            "--slice {s:?} has more than one '=' — expected <AXIS>=<VALUE>[mm]"
+        ));
+    }
+    if value_str.is_empty() {
+        return Err(format!(
+            "--slice {s:?} is missing a value after '=' — expected <AXIS>=<VALUE>[mm]"
+        ));
+    }
+    let numeric_part = value_str.strip_suffix("mm").unwrap_or(value_str);
+    if numeric_part.is_empty() {
+        return Err(format!(
+            "--slice {s:?} is missing a numeric value before 'mm'"
+        ));
+    }
+    let value: f32 = numeric_part.parse().map_err(|e: std::num::ParseFloatError| {
+        format!("--slice {s:?} has an invalid value {numeric_part:?}: {e}")
+    })?;
+    if !value.is_finite() || value < 0.0 {
+        return Err(format!(
+            "--slice {s:?} value must be finite and >= 0 (got {value}); world-mm addresses are \
+             non-negative offsets from the field's bbox/envelope origin"
+        ));
+    }
+    Ok(SliceSpec {
+        axis,
+        value_mm: value,
+    })
+}
 
 #[derive(Parser)]
 #[command(name = "resinsim", about = "Resin 3D printer physics simulation")]
@@ -373,6 +504,70 @@ enum InspectDomain {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect a 2D slice through one of the five Tier-2 voxel fields
+    /// (cure, photoinitiator, strain, stress, thermal) — ADR-0019 /
+    /// ADR-0023. Read-side only: loads a persisted `<stem>.sim.json` +
+    /// paired `<stem>.fields.bin` sidecar and NEVER re-runs the
+    /// solver — re-running would cost minutes per query and defeats
+    /// the whole point of the sidecar (ADR-0019).
+    ///
+    /// `--in` (not `--file`) because this is an ENVELOPE consumer,
+    /// like `report health --in` — the two raw-file inspectors
+    /// (`layers`, `athena`) and `calibrate` use `--file` for a sliced
+    /// or archive input instead; `inspect field` reads the
+    /// already-simulated envelope (ADR-0023).
+    ///
+    /// Requires the `field-sim` Cargo feature to actually execute.
+    /// This subcommand stays visible in `--help` and present in every
+    /// build for discoverability, but its handler exits 2 with an
+    /// actionable rebuild message in default builds — a deliberate
+    /// divergence from the `--voxel-cure-mm` bare-unknown-flag
+    /// precedent (ADR-0017 §5), recorded in ADR-0023.
+    ///
+    /// Example:
+    ///   resinsim sim --file model.ctb --resin generic_standard \
+    ///       --printer generic_msla_4k --voxel-cure-mm 0.2 \
+    ///       --out model.sim.json
+    ///   resinsim inspect field --in model.sim.json --field cure \
+    ///       --slice z=10mm --json
+    Field {
+        /// Path to a `sim.json` envelope produced by `resinsim sim
+        /// --voxel-cure-mm`. Must be paired with a `<stem>.fields.bin`
+        /// sidecar in the same directory (ADR-0019); a Tier-1
+        /// sim.json with no sidecar produces an actionable "no voxel
+        /// fields" error, not a panic.
+        #[arg(long)]
+        r#in: std::path::PathBuf,
+        /// Which voxel field to slice: cure, photoinitiator, strain,
+        /// stress, or thermal.
+        #[arg(long, value_enum)]
+        field: FieldKindArg,
+        /// Slice address `<AXIS>=<VALUE>[mm]`, e.g. `z=10mm`, `x=0`.
+        /// Cure/photoinitiator/strain/stress resolve Z through
+        /// cumulative CTB layer heights (the print's layer index);
+        /// thermal resolves Z as a spatial mm offset into the vat
+        /// envelope — two different physical meanings behind one
+        /// spelling (ADR-0023).
+        #[arg(long, value_parser = parse_slice_spec)]
+        slice: SliceSpec,
+        /// Histogram bin count for the text-mode ASCII histogram.
+        #[arg(long, default_value_t = 20)]
+        bins: u32,
+        /// Include the dense row-major values array in JSON output.
+        /// Opt-in — can be large; a stderr warning fires past ~1M
+        /// elements. No effect on text-mode output.
+        #[arg(long)]
+        values: bool,
+        /// Statistics over nonzero voxels only; total and nonzero
+        /// counts are always shown either way. JSON output carries
+        /// `stats_scope` so the two modes are distinguishable
+        /// downstream.
+        #[arg(long)]
+        cured_only: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() {
@@ -482,6 +677,15 @@ fn main() {
                 data_dir,
                 json,
             } => cmd_calibrate(&file, &resin, &printer, ambient, data_dir.as_deref(), json),
+            InspectDomain::Field {
+                r#in,
+                field,
+                slice,
+                bins,
+                values,
+                cured_only,
+                json,
+            } => cmd_inspect_field(&r#in, field, slice, bins, values, cured_only, json),
         },
         Commands::Report { report_type } => match report_type {
             ReportType::Health { r#in, json } => cmd_report_health(&r#in, json),
@@ -1449,6 +1653,38 @@ fn cmd_calibrate(
     }
 }
 
+/// `inspect field` handler. ONLY the handler BODY is `#[cfg]`-split
+/// (ADR-0017 §5 / plan step 6) — the subcommand and every flag stay in
+/// the clap tree in both builds, so `--help` lists `field` regardless
+/// of the `field-sim` feature. Under feature-off the message names the
+/// feature and the exact rebuild command; it must not name any
+/// ndarray-dependent type or the default build breaks (ADR-0017
+/// four-config matrix configs 1 and 3).
+#[allow(clippy::too_many_arguments)]
+fn cmd_inspect_field(
+    in_path: &std::path::Path,
+    field: FieldKindArg,
+    slice: SliceSpec,
+    bins: u32,
+    values: bool,
+    cured_only: bool,
+    json: bool,
+) {
+    #[cfg(feature = "field-sim")]
+    {
+        field_inspect::run(in_path, field, slice, bins, values, cured_only, json);
+    }
+    #[cfg(not(feature = "field-sim"))]
+    {
+        let _ = (in_path, field, slice, bins, values, cured_only, json);
+        eprintln!(
+            "the `field` inspector requires the `field-sim` Cargo feature; rebuild with \
+             `cargo build --features resinsim-inspect/field-sim`"
+        );
+        std::process::exit(2);
+    }
+}
+
 // CLI handler — 9 args after --data-dir (ADR-0004). Profile resolution is
 // unconditional here because both --printer and --resin have clap defaults.
 #[allow(clippy::too_many_arguments)]
@@ -1907,5 +2143,142 @@ mod tests {
     #[test]
     fn voxel_cure_mm_rejects_non_numeric() {
         assert!(parse_voxel_cure_mm("abc").is_err());
+    }
+
+    // --- t2f6-field-inspector `--slice` parser tests. Compiles and runs
+    // regardless of `field-sim` — parse_slice_spec is plain data (see
+    // FieldKindArg's doc-comment). Mirrors the parse_voxel_cure_mm test
+    // block above one-for-one, including the "error message explains
+    // the constraint" assertions. ---
+
+    #[test]
+    fn slice_spec_accepts_z_bare_integer() {
+        let spec = parse_slice_spec("z=10").expect("z=10 is well-formed");
+        assert_eq!(spec.axis, SliceAxisArg::Z);
+        assert_eq!(spec.value_mm, 10.0);
+    }
+
+    #[test]
+    fn slice_spec_accepts_z_with_mm_suffix() {
+        let spec = parse_slice_spec("z=10mm").expect("z=10mm is well-formed");
+        assert_eq!(spec.axis, SliceAxisArg::Z);
+        assert_eq!(spec.value_mm, 10.0);
+    }
+
+    #[test]
+    fn slice_spec_accepts_x_zero() {
+        let spec = parse_slice_spec("x=0").expect("x=0 is well-formed");
+        assert_eq!(spec.axis, SliceAxisArg::X);
+        assert_eq!(spec.value_mm, 0.0);
+    }
+
+    #[test]
+    fn slice_spec_accepts_y_decimal_with_mm_suffix() {
+        let spec = parse_slice_spec("y=3.5mm").expect("y=3.5mm is well-formed");
+        assert_eq!(spec.axis, SliceAxisArg::Y);
+        assert_eq!(spec.value_mm, 3.5);
+    }
+
+    #[test]
+    fn slice_spec_axis_is_case_insensitive() {
+        let spec = parse_slice_spec("Z=5").expect("uppercase axis letter must be accepted");
+        assert_eq!(spec.axis, SliceAxisArg::Z);
+    }
+
+    #[test]
+    fn slice_spec_rejects_unknown_axis() {
+        let err = parse_slice_spec("q=1").expect_err("test fixture: 'q' is deliberately not a valid axis, so Err is the expected outcome");
+        assert!(
+            err.contains("x, y, z") || err.contains("axis"),
+            "error must explain the constraint: {err}"
+        );
+    }
+
+    #[test]
+    fn slice_spec_rejects_empty_value() {
+        assert!(parse_slice_spec("z=").is_err());
+    }
+
+    #[test]
+    fn slice_spec_rejects_non_numeric_value() {
+        assert!(parse_slice_spec("z=abc").is_err());
+    }
+
+    #[test]
+    fn slice_spec_rejects_negative_value() {
+        let err = parse_slice_spec("z=-1").expect_err("test fixture: -1 deliberately violates the >= 0.0 constraint, so Err is the expected outcome");
+        assert!(
+            err.contains(">= 0") || err.contains("non-negative"),
+            "error must explain the constraint: {err}"
+        );
+    }
+
+    #[test]
+    fn slice_spec_rejects_nan() {
+        assert!(parse_slice_spec("z=nan").is_err());
+    }
+
+    #[test]
+    fn slice_spec_rejects_infinity() {
+        assert!(parse_slice_spec("z=inf").is_err());
+    }
+
+    #[test]
+    fn slice_spec_rejects_bare_number_with_no_axis() {
+        assert!(parse_slice_spec("10").is_err());
+    }
+
+    #[test]
+    fn slice_spec_rejects_doubled_equals() {
+        assert!(parse_slice_spec("z==1").is_err());
+    }
+
+    #[test]
+    fn slice_spec_rejects_empty_string() {
+        assert!(parse_slice_spec("").is_err());
+    }
+
+    // --- FieldKindArg <-> FieldKind drift-pinning (feature-gated: both
+    // types only exist together under field-sim) ---
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn field_kind_arg_spellings_match_field_kind_name() {
+        use resinsim_core::repositories::sidecar::FieldKind;
+        let pairs = [
+            (FieldKindArg::Cure, FieldKind::Cure),
+            (FieldKindArg::Photoinitiator, FieldKind::Photoinitiator),
+            (FieldKindArg::Strain, FieldKind::Strain),
+            (FieldKindArg::Stress, FieldKind::Stress),
+            (FieldKindArg::Thermal, FieldKind::Thermal),
+        ];
+        for (arg, kind) in pairs {
+            assert_eq!(
+                arg.name(),
+                kind.name(),
+                "CLI --field spelling must match FieldKind::name()"
+            );
+        }
+    }
+
+    #[cfg(feature = "field-sim")]
+    #[test]
+    fn field_kind_arg_clap_possible_values_match_name() {
+        // Verifies clap's ACTUAL parsed value strings (not just our own
+        // .name() method) equal FieldKind::name() too — catches drift
+        // if clap's default naming convention for ValueEnum ever changes.
+        use clap::ValueEnum;
+        for variant in FieldKindArg::value_variants() {
+            let clap_str = variant
+                .to_possible_value()
+                .expect("every FieldKindArg variant has a possible value")
+                .get_name()
+                .to_string();
+            assert_eq!(
+                clap_str,
+                variant.name(),
+                "clap's parsed --field value must match FieldKindArg::name()"
+            );
+        }
     }
 }
