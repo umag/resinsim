@@ -5362,6 +5362,7 @@ name = "resinsim-inspect"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "ndarray",
  "proptest",
  "resinsim-core",
  "serde_json",

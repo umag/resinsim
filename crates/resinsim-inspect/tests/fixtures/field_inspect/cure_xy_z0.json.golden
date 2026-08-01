@@ -1,0 +1,52 @@
+{
+  "axis": "z",
+  "dims": {
+    "nu": 4,
+    "nv": 4
+  },
+  "field": "cure",
+  "file": "<SIM_JSON_PATH>",
+  "histogram": {
+    "bins": [
+      {
+        "count": 3,
+        "hi": 1.5,
+        "lo": 0.0
+      },
+      {
+        "count": 3,
+        "hi": 3.0,
+        "lo": 1.5
+      },
+      {
+        "count": 3,
+        "hi": 4.5,
+        "lo": 3.0
+      },
+      {
+        "count": 3,
+        "hi": 6.0,
+        "lo": 4.5
+      },
+      {
+        "count": 4,
+        "hi": 7.5,
+        "lo": 6.0
+      }
+    ]
+  },
+  "index": 0,
+  "plane": "xy",
+  "stats": {
+    "count": 16,
+    "max": 7.5,
+    "mean": 3.75,
+    "min": 0.0,
+    "nonzero_count": 15,
+    "p95": 7.5,
+    "p99": 7.5
+  },
+  "stats_scope": "all",
+  "units": "mJ/cm²",
+  "world_mm": 0.0
+}

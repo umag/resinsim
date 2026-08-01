@@ -21,6 +21,13 @@ field-sim = ["resinsim-core/field-sim"]
 [dev-dependencies]
 proptest = "1.9.0"
 tempfile = "3"
+# t2f6-field-inspector: field_inspect_cli.rs builds synthetic voxel
+# fields in-process (same convention as resinsim-core's
+# sidecar_roundtrip_integration.rs) via CureField/StrainField/etc.'s
+# `from_persistence_parts(..., Array3<_>, ...)` constructors, which
+# take ndarray types directly. Matches resinsim-core's own `ndarray`
+# version pin.
+ndarray = "0.16"
 
 [lints]
 workspace = true
