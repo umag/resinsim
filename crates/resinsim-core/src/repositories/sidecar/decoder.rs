@@ -57,6 +57,30 @@ pub fn decode_sidecar<R: Read + Seek>(
     decoder.decode(reader)
 }
 
+/// Peek a sidecar's header + descriptors and return the LARGEST single
+/// field's implied in-memory allocation (`uncompressed_layer_byte_size
+/// × layer_count`), in bytes — WITHOUT enforcing the active budget and
+/// WITHOUT reading or decompressing any slab. Every other structural
+/// validation `decode_sidecar` performs on the header + descriptors
+/// (magic, format_version, field_count, per-descriptor name/kind/
+/// component-size/compression/layout/layer-count sanity) still runs,
+/// so a hostile descriptor cannot use this path to dodge the
+/// format-level guards — only the budget comparison and the slab reads
+/// are skipped.
+///
+/// Used by `simulation_repo::load_envelope_with_budget` (t2f6-field-
+/// inspector, gate decision 2026-07-28) to size an auto-extended decode
+/// budget from the (already sha256-verified) sidecar bytes BEFORE
+/// calling [`decode_sidecar`] for the real, budget-enforced pass. See
+/// `docs/adr/0023-field-inspector-read-side-contract.md`.
+pub fn peek_max_field_bytes<R: Read + Seek>(
+    reader: &mut R,
+    context: &str,
+) -> Result<u64, DecodeError> {
+    let decoder = FieldSidecarDecoder::new(context);
+    decoder.peek_max_field_bytes(reader)
+}
+
 /// Stateful decoder. Carries the error-context string used in
 /// `DecodeError::UnknownMagic` etc.
 pub struct FieldSidecarDecoder {
@@ -103,12 +127,17 @@ impl FieldSidecarDecoder {
         let total_size = reader.seek(SeekFrom::End(0))?;
         reader.seek(SeekFrom::Start(current))?;
 
-        // Read all descriptors first; defer slab decode.
+        // Read all descriptors first; defer slab decode. Budget resolved
+        // once for the whole call (env var doesn't change mid-decode in
+        // practice) and threaded explicitly through `read_descriptor` so
+        // `peek_max_field_bytes` below can share the same parser with the
+        // check disabled (`u64::MAX`) rather than duplicating it.
+        let budget = active_budget_bytes();
         let mut descriptors: Vec<ParsedDescriptor> = Vec::with_capacity(field_count as usize);
         let mut implied_payload: u64 = 0;
         let header_plus_descriptors_start = current;
         for _ in 0..field_count {
-            let d = self.read_descriptor(reader)?;
+            let d = self.read_descriptor(reader, budget)?;
             let total_compressed: u64 = d.layer_sizes.iter().map(|s| u64::from(*s)).sum();
             implied_payload = implied_payload.saturating_add(total_compressed);
             descriptors.push(d);
@@ -226,7 +255,60 @@ impl FieldSidecarDecoder {
         Ok(decoded)
     }
 
-    fn read_descriptor<R: Read>(&self, reader: &mut R) -> Result<ParsedDescriptor, DecodeError> {
+    /// Header + descriptor pass with the budget check disabled
+    /// (`u64::MAX`) and no slab reads. See [`peek_max_field_bytes`].
+    fn peek_max_field_bytes<R: Read + Seek>(&self, reader: &mut R) -> Result<u64, DecodeError> {
+        reader.seek(SeekFrom::Start(0))?;
+        let mut magic = [0u8; 8];
+        reader.read_exact(&mut magic)?;
+        if magic != RSFIELD_MAGIC {
+            return Err(DecodeError::UnknownMagic {
+                context: self.context.clone(),
+            });
+        }
+        let format_version = read_u32_le(reader)?;
+        if format_version != RSFIELD_FORMAT_VERSION {
+            return Err(DecodeError::UnknownFormatVersion {
+                got: format_version,
+                expected: RSFIELD_FORMAT_VERSION,
+            });
+        }
+        let field_count = read_u32_le(reader)?;
+        if field_count == 0 || field_count > MAX_FIELD_COUNT {
+            return Err(DecodeError::ImplausibleFieldCount {
+                got: field_count,
+                max: MAX_FIELD_COUNT,
+            });
+        }
+        let mut reserved = [0u8; 48];
+        reader.read_exact(&mut reserved)?;
+
+        let mut max_bytes: u64 = 0;
+        for _ in 0..field_count {
+            // budget = u64::MAX defers the enforce-budget branch inside
+            // read_descriptor unconditionally (implied_total > u64::MAX
+            // can never be true), while every other structural check
+            // still runs.
+            let d = self.read_descriptor(reader, u64::MAX)?;
+            let implied = d
+                .uncompressed_layer_byte_size
+                .saturating_mul(u64::from(d.dim_z));
+            max_bytes = max_bytes.max(implied);
+        }
+        Ok(max_bytes)
+    }
+
+    /// Parse one field descriptor. `budget` is the in-memory allocation
+    /// cap checked against this descriptor's implied total
+    /// (`uncompressed_layer_byte_size × layer_count`) — callers pass
+    /// [`active_budget_bytes`] for a real decode, or `u64::MAX` from
+    /// [`Self::peek_max_field_bytes`] to defer that check entirely
+    /// while still running every other structural validation.
+    fn read_descriptor<R: Read>(
+        &self,
+        reader: &mut R,
+        budget: u64,
+    ) -> Result<ParsedDescriptor, DecodeError> {
         let name_len = read_u32_le(reader)?;
         if !(1..=64).contains(&name_len) {
             return Err(DecodeError::Reconstitution {
@@ -299,11 +381,11 @@ impl FieldSidecarDecoder {
             }
         }
         let implied_total = uncompressed_layer_byte_size.saturating_mul(u64::from(layer_count));
-        if implied_total > active_budget_bytes() {
+        if implied_total > budget {
             return Err(DecodeError::ExceedsFieldBudget {
                 field_name: kind.name().into(),
                 implied: implied_total,
-                budget: active_budget_bytes(),
+                budget,
             });
         }
         let mut layer_offsets = Vec::with_capacity(layer_count as usize);
@@ -578,6 +660,78 @@ impl FieldSidecarDecoder {
 mod tests {
     use super::*;
     use crate::repositories::sidecar::encoder::{encode_sidecar, SidecarFields};
+
+    // ---- peek_max_field_bytes (t2f6-field-inspector, budget auto-extension) ----
+
+    #[test]
+    fn peek_max_field_bytes_returns_the_largest_descriptor_size() {
+        // Strain is 24 bytes/voxel vs cure's 4, so at equal dims strain
+        // dominates: 4x4x2 = 32 voxels x 24 = 768 vs 32 x 4 = 128.
+        let cure = CureField::new(4, 4, 2, 0.05, [0.0; 3]).expect("ctor");
+        let strain = StrainField::new(4, 4, 2, 0.05, [0.0; 3]).expect("ctor");
+        let fields = SidecarFields {
+            cure: Some(&cure),
+            strain: Some(&strain),
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        encode_sidecar(&fields, &mut buf).expect("encode");
+        let mut cursor = std::io::Cursor::new(buf);
+        let max_bytes =
+            peek_max_field_bytes(&mut cursor, "<test>").expect("peek must succeed on valid sidecar");
+        assert_eq!(max_bytes, 4 * 4 * 2 * 24);
+    }
+
+    #[test]
+    fn peek_max_field_bytes_does_not_enforce_the_active_budget() {
+        // A tiny active budget would make a REAL decode fail; peek must
+        // succeed regardless, since it's specifically meant to run
+        // BEFORE the caller has decided what budget to use.
+        use crate::values::field_budget::FIELD_BUDGET_ENV_VAR;
+        let cure = CureField::new(4, 4, 2, 0.05, [0.0; 3]).expect("ctor");
+        let fields = SidecarFields {
+            cure: Some(&cure),
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        encode_sidecar(&fields, &mut buf).expect("encode");
+
+        unsafe { std::env::set_var(FIELD_BUDGET_ENV_VAR, "10") };
+        let mut cursor = std::io::Cursor::new(buf.clone());
+        let peek_result = peek_max_field_bytes(&mut cursor, "<test>");
+        let mut cursor2 = std::io::Cursor::new(buf);
+        let decode_result = decode_sidecar(&mut cursor2, "<test>");
+        unsafe { std::env::remove_var(FIELD_BUDGET_ENV_VAR) };
+
+        assert!(
+            peek_result.is_ok(),
+            "peek must ignore the active budget: {peek_result:?}"
+        );
+        assert!(
+            decode_result.is_err(),
+            "sanity: a real decode SHOULD fail under a 10-byte budget \
+             (confirms the test setup actually constrains the budget)"
+        );
+    }
+
+    #[test]
+    fn peek_max_field_bytes_rejects_corrupt_magic_same_as_decode() {
+        let cure = CureField::new(2, 2, 2, 0.05, [0.0; 3]).expect("ctor");
+        let mut buf = Vec::new();
+        encode_sidecar(
+            &SidecarFields {
+                cure: Some(&cure),
+                ..Default::default()
+            },
+            &mut buf,
+        )
+        .expect("encode");
+        buf[0] = b'X';
+        let mut cursor = std::io::Cursor::new(buf);
+        let err = peek_max_field_bytes(&mut cursor, "<test>")
+            .expect_err("corrupt magic must be rejected by peek too");
+        assert!(format!("{err}").contains("unknown sidecar magic"));
+    }
 
     #[test]
     fn roundtrip_cure_only_preserves_dose_field() {

@@ -552,6 +552,49 @@ pub struct LoadedEnvelope {
 /// break). The schema_version check rejects them with the existing
 /// `"unknown schema_version"` substring + a regeneration hint.
 pub fn load_envelope(path: &Path) -> Result<LoadedEnvelope, String> {
+    // 4 GiB — mirrors `values::field_budget::DEFAULT_MAX_FIELD_ALLOCATION_BYTES`.
+    // Duplicated as a literal (rather than importing the constant)
+    // because `load_envelope` must compile in the default build too,
+    // and that constant lives behind `#[cfg(feature = "field-sim")]`.
+    // Passing the default as the ceiling means `load_envelope_with_budget`'s
+    // auto-extension branch never engages here — today's behaviour is
+    // unchanged; `RESINSIM_MAX_FIELD_BYTES` is still the only override.
+    load_envelope_with_budget(path, 4 * 1024 * 1024 * 1024)
+}
+
+/// Same as [`load_envelope`], but auto-extends the in-memory field
+/// decode budget for THIS call — descriptor-driven, up to
+/// `ceiling_bytes` — when the paired sidecar needs more than the
+/// currently active budget. Gate decision 2026-07-28 /
+/// `t2f6-field-inspector`; see
+/// `docs/adr/0023-field-inspector-read-side-contract.md`.
+///
+/// # Ordering (binding review condition)
+///
+/// Extension happens STRICTLY AFTER sha256 integrity verification of
+/// the sidecar bytes (see [`load_and_install_sidecar_with_budget`]).
+/// The untrusted descriptor `nx`/`ny`/`nz` fields are never used to
+/// size a real allocation before their containing bytes are verified
+/// against the envelope's recorded hash.
+///
+/// # `RESINSIM_MAX_FIELD_BYTES` overrides in BOTH directions
+///
+/// If the caller's environment already sets the override env var, this
+/// function makes NO budget adjustment of its own — decode proceeds
+/// with whatever `active_budget_bytes()` naturally resolves to (which
+/// may be smaller OR larger than `ceiling_bytes`). Auto-extension only
+/// engages when the env var is unset AND the sidecar's descriptor
+/// genuinely needs more than the 4 GB default.
+///
+/// [`load_envelope`] delegates here with `ceiling_bytes` equal to the
+/// default budget — i.e. no extension headroom, so its behaviour is
+/// unchanged. `t2f6-field-inspector`'s CLI passes
+/// [`crate::values::FIELD_BUDGET_CEILING_BYTES`] (24 GB) to get
+/// auto-extension.
+pub fn load_envelope_with_budget(
+    path: &Path,
+    ceiling_bytes: u64,
+) -> Result<LoadedEnvelope, String> {
     let contents = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     let envelope: SimulationEnvelope = serde_json::from_str(&contents)
@@ -584,8 +627,10 @@ pub fn load_envelope(path: &Path) -> Result<LoadedEnvelope, String> {
     // envelope carries a pointer.
     #[cfg(feature = "field-sim")]
     if let Some(pointer) = envelope.fields_sidecar.as_ref() {
-        load_and_install_sidecar(path, pointer, &mut simulation)?;
+        load_and_install_sidecar_with_budget(path, pointer, &mut simulation, ceiling_bytes)?;
     }
+    #[cfg(not(feature = "field-sim"))]
+    let _ = ceiling_bytes;
 
     Ok(LoadedEnvelope {
         simulation,
@@ -596,12 +641,38 @@ pub fn load_envelope(path: &Path) -> Result<LoadedEnvelope, String> {
 /// Decode the paired sidecar pointed at by `pointer` and install its
 /// voxel fields onto `sim`. Path validation, sha256 verification, and
 /// typed-error propagation all live here. ADR-0019.
+///
+/// `ceiling_bytes` is the descriptor-driven auto-extension ceiling
+/// (t2f6-field-inspector, gate decision 2026-07-28). Extension logic:
+///
+/// 1. Read + sha256-verify the sidecar bytes (unchanged from ADR-0019).
+/// 2. ONLY THEN — integrity established — peek the (now-trusted)
+///    descriptor bytes via `peek_max_field_bytes` to learn the largest
+///    single field's implied allocation, WITHOUT enforcing any budget
+///    yet.
+/// 3. If `RESINSIM_MAX_FIELD_BYTES` is already set by the caller's
+///    environment, skip extension entirely — the override wins in
+///    both directions.
+/// 4. Else, if the required size exceeds the default budget AND
+///    `ceiling_bytes` offers headroom above the default, temporarily
+///    set `RESINSIM_MAX_FIELD_BYTES` to `min(required, ceiling_bytes)`
+///    for the duration of the real decode, emit a one-line stderr
+///    note, and restore (remove) the env var afterward regardless of
+///    the decode outcome.
+/// 5. Run the real, budget-enforced `decode_sidecar`. A descriptor
+///    whose requirement exceeds `ceiling_bytes` still fails here with
+///    `DecodeError::ExceedsFieldBudget`, which names
+///    `RESINSIM_MAX_FIELD_BYTES` in its message.
 #[cfg(feature = "field-sim")]
-fn load_and_install_sidecar(
+fn load_and_install_sidecar_with_budget(
     sim_json_path: &Path,
     pointer: &SidecarPointer,
     sim: &mut PrintSimulation,
+    ceiling_bytes: u64,
 ) -> Result<(), String> {
+    use crate::values::field_budget::{DEFAULT_MAX_FIELD_ALLOCATION_BYTES, FIELD_BUDGET_ENV_VAR};
+    use crate::repositories::sidecar::peek_max_field_bytes;
+
     let parent = sim_json_path.parent().unwrap_or(Path::new("."));
     let canonical = pointer.validate_against_parent(parent)?;
     let meta = canonical
@@ -632,9 +703,43 @@ fn load_and_install_sidecar(
             actual_sha
         ));
     }
+
+    // ---- Integrity verified above. Only now may the (previously
+    // untrusted) descriptor bytes be used to size a real allocation. ----
+    let mut extended_budget = false;
+    if std::env::var(FIELD_BUDGET_ENV_VAR).is_err() {
+        let mut peek_cursor = std::io::Cursor::new(&bytes);
+        let required = peek_max_field_bytes(&mut peek_cursor, &canonical.display().to_string())
+            .map_err(|e| format!("invalid sidecar {}: {e}", canonical.display()))?;
+        if required > DEFAULT_MAX_FIELD_ALLOCATION_BYTES && ceiling_bytes > DEFAULT_MAX_FIELD_ALLOCATION_BYTES {
+            let extended = required.min(ceiling_bytes);
+            eprintln!(
+                "note: sidecar needs {:.2} GiB (> the {} GiB default budget) — extending the \
+                 decode budget to {:.2} GiB for this load (ceiling {} GiB); override via \
+                 {FIELD_BUDGET_ENV_VAR}",
+                required as f64 / (1024.0 * 1024.0 * 1024.0),
+                DEFAULT_MAX_FIELD_ALLOCATION_BYTES / (1024 * 1024 * 1024),
+                extended as f64 / (1024.0 * 1024.0 * 1024.0),
+                ceiling_bytes / (1024 * 1024 * 1024),
+            );
+            // SAFETY: resinsim is a single-threaded CLI process — no
+            // concurrent reader of this env var exists during a single
+            // `load_envelope_with_budget` call. Always restored below,
+            // regardless of the decode outcome.
+            unsafe { std::env::set_var(FIELD_BUDGET_ENV_VAR, extended.to_string()) };
+            extended_budget = true;
+        }
+    }
+
     let mut cursor = std::io::Cursor::new(bytes);
-    let decoded = decode_sidecar(&mut cursor, &canonical.display().to_string())
-        .map_err(|e| format!("invalid sidecar {}: {e}", canonical.display()))?;
+    let decode_result = decode_sidecar(&mut cursor, &canonical.display().to_string());
+
+    if extended_budget {
+        unsafe { std::env::remove_var(FIELD_BUDGET_ENV_VAR) };
+    }
+
+    let decoded =
+        decode_result.map_err(|e| format!("invalid sidecar {}: {e}", canonical.display()))?;
     // Install via the existing aggregate setters (which enforce
     // dimension-lock invariants).
     if let (Some(cure), Some(photoinit)) = (decoded.cure, decoded.photoinitiator) {

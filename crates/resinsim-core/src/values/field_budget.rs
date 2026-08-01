@@ -46,6 +46,23 @@ use thiserror::Error;
 /// while leaving headroom for typical 4-field Tier-2 workloads.
 pub const DEFAULT_MAX_FIELD_ALLOCATION_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
+/// Ceiling for `t2f6-field-inspector`'s descriptor-driven decode-budget
+/// auto-extension (`simulation_repo::load_envelope_with_budget`).
+///
+/// Gate decision 2026-07-28: real sidecars (e.g. the 4.81 GB
+/// lilith-torso `StrainField`) must open with no env-var fiddling. The
+/// inspector extends the *decode-time* budget to the sidecar
+/// descriptor's stated requirement, but never past this ceiling — a
+/// deliberate loosening of the fixed-cap decompression posture, held
+/// by three invariants that all still apply: (1) extension only
+/// happens AFTER sha256 integrity verification of the sidecar bytes,
+/// never before; (2) the per-slab bounded-decompression guard in
+/// `sidecar::decoder` is unchanged; (3) this ceiling itself is a hard
+/// cap — a descriptor requiring more than 24 GB is rejected, same as
+/// today, naming [`FIELD_BUDGET_ENV_VAR`]. Recorded in
+/// `docs/adr/0023-field-inspector-read-side-contract.md`.
+pub const FIELD_BUDGET_CEILING_BYTES: u64 = 24 * 1024 * 1024 * 1024;
+
 /// Environment variable name that overrides
 /// `DEFAULT_MAX_FIELD_ALLOCATION_BYTES`. Value is parsed as `u64`
 /// (decimal bytes). Invalid values fall back to the default with a

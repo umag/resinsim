@@ -40,7 +40,7 @@ pub mod encoder;
 pub mod error;
 pub mod format;
 
-pub use decoder::{decode_sidecar, DecodedSidecar, FieldSidecarDecoder};
+pub use decoder::{decode_sidecar, peek_max_field_bytes, DecodedSidecar, FieldSidecarDecoder};
 pub use encoder::{encode_sidecar, FieldSidecarEncoder, SidecarFields, SidecarOutput};
 pub use error::{DecodeError, EncodeError};
 pub use format::{

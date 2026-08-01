@@ -149,8 +149,17 @@ pub enum DecodeError {
 
     /// Claimed `dim_x × dim_y × component_size × layer_count` exceeds
     /// the field-budget cap. Checked BEFORE any allocation.
+    ///
+    /// Names `RESINSIM_MAX_FIELD_BYTES` explicitly (not just the
+    /// constant `MAX_FIELD_ALLOCATION_BYTES`) so the message stays
+    /// self-help even when the active budget came from
+    /// `t2f6-field-inspector`'s auto-extension rather than the
+    /// hard-coded default — the extension is itself capped at 24 GB
+    /// (`FIELD_BUDGET_CEILING_BYTES`), and an above-ceiling descriptor
+    /// hits this exact branch.
     #[error(
-        "exceeds field budget for {field_name}: implied {implied} bytes > MAX_FIELD_ALLOCATION_BYTES ({budget})"
+        "exceeds field budget for {field_name}: implied {implied} bytes > MAX_FIELD_ALLOCATION_BYTES \
+         ({budget}); override via RESINSIM_MAX_FIELD_BYTES"
     )]
     ExceedsFieldBudget {
         field_name: String,
@@ -283,6 +292,23 @@ mod tests {
             budget: 1 << 32,
         };
         assert!(err.to_string().contains("exceeds field budget"));
+    }
+
+    #[test]
+    fn exceeds_field_budget_names_the_override_env_var() {
+        // t2f6-field-inspector binding condition: an above-ceiling
+        // rejection (whether the ordinary 4 GB default or the
+        // inspector's 24 GB auto-extension ceiling) must self-help by
+        // naming the override env var, not just the internal constant.
+        let err = DecodeError::ExceedsFieldBudget {
+            field_name: "strain".into(),
+            implied: 1 << 50,
+            budget: 1 << 32,
+        };
+        assert!(
+            err.to_string().contains("RESINSIM_MAX_FIELD_BYTES"),
+            "message must name the override env var: {err}"
+        );
     }
 
     #[test]

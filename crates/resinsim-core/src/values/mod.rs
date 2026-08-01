@@ -37,7 +37,7 @@ pub use cure_field::{CureField, CureFieldError, LayerSummary};
 #[cfg(feature = "field-sim")]
 pub use field_budget::{
     active_budget_bytes, enforce_field_budget, FieldAllocationError,
-    DEFAULT_MAX_FIELD_ALLOCATION_BYTES, FIELD_BUDGET_ENV_VAR,
+    DEFAULT_MAX_FIELD_ALLOCATION_BYTES, FIELD_BUDGET_CEILING_BYTES, FIELD_BUDGET_ENV_VAR,
 };
 #[cfg(feature = "field-sim")]
 pub use field_slice::{
