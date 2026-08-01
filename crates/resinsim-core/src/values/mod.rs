@@ -5,6 +5,8 @@ pub mod cure_depth;
 pub mod cure_field;
 #[cfg(feature = "field-sim")]
 pub mod field_budget;
+#[cfg(feature = "field-sim")]
+pub mod field_slice;
 pub mod float_range;
 pub mod force;
 pub mod int_range;
@@ -36,6 +38,10 @@ pub use cure_field::{CureField, CureFieldError, LayerSummary};
 pub use field_budget::{
     active_budget_bytes, enforce_field_budget, FieldAllocationError,
     DEFAULT_MAX_FIELD_ALLOCATION_BYTES, FIELD_BUDGET_ENV_VAR,
+};
+#[cfg(feature = "field-sim")]
+pub use field_slice::{
+    FieldSlice, FieldSliceError, FieldStats, FieldStatsScope, SliceAxis, SlicePlane,
 };
 pub use float_range::FloatRange;
 pub use force::{PeelForce, SafetyFactor, SupportCapacity};
