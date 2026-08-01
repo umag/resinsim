@@ -17,7 +17,8 @@ use cucumber::gherkin::Step;
 use cucumber::{given, then, when};
 use resinsim_core::entities::DEFAULT_VACUUM_PRESSURE_KPA;
 use resinsim_core::services::cavity_detector::{CavityDetector, MIN_SEALED_AREA_MM2};
-use resinsim_core::values::LayerMask;
+use resinsim_core::services::PeelForceCalculator;
+use resinsim_core::values::{CrossSectionArea, LayerMask};
 
 use super::world::{CavityEventSummary, UatWorld};
 
@@ -163,16 +164,44 @@ fn then_sealed_area_matches_interior(world: &mut UatWorld) {
     assert!((area - 2.25).abs() < 1e-3, "expected 2.25 mm²; got {area}",);
 }
 
-#[then(regex = r"^suction_force_n equals 50 kPa × sealed_area_mm2 × 1e-3$")]
+// Re-pointed 2026-08-01 (uat-unskip-campaign increment 1): the spec text
+// (spec/uat/suction-detector-raft-false-positive.md UAT-2) names the
+// printer profile's configurable ΔP, not a hardcoded "50 kPa" literal —
+// "suction_force_n equals the printer profile's ΔP (default 50 kPa) ×
+// sealed_area_mm2 × 1e-3". The old regex only matched the literal-50
+// wording, so this step was silently undefined (skipped) against the
+// current spec text.
+//
+// The assertion also no longer re-derives the formula by hand
+// (`50.0 * area * 1e-3`) — that mirrored
+// `PeelForceCalculator::suction_force`'s implementation instead of calling
+// it, which is the exact anti-pattern
+// docs/patterns/anti/test-mirrors-production-formula.md warns about: if
+// the production formula ever changes, a hand-rolled copy here would
+// silently stop proving anything. `world.suction_force_n` (captured in
+// `then_exactly_one_event` from `CavityEventSummary.force_n`, which
+// `collect_events` below now reads directly off `CavityEvent.suction_force_n`
+// rather than recomputing it too) is cross-checked against a SECOND,
+// independent call to the same production function — proving the
+// detector's internally-computed force and a fresh call agree, without
+// ever re-typing the kPa×mm²×1e-3 arithmetic here.
+#[then(
+    regex = r"^suction_force_n equals the printer profile's ΔP \(default 50 kPa\) × sealed_area_mm2 × 1e-3$"
+)]
 fn then_force_matches_formula(world: &mut UatWorld) {
     let force = world
         .suction_force_n
         .expect("scenario invariant: prior Then captured suction_force_n");
     let area = world.sealed_area_mm2.expect("sealed_area_mm2 set");
-    let expected = 50.0 * area * 1e-3; // kPa * mm² * 1e-3 = N
+    let expected = PeelForceCalculator::suction_force(
+        DEFAULT_VACUUM_PRESSURE_KPA,
+        CrossSectionArea::new(area as f64).expect("sealed_area_mm2 is finite and non-negative"),
+    )
+    .value();
     assert!(
         (force - expected).abs() < 1e-3,
-        "force {force} != 50 kPa × {area} mm² × 1e-3 = {expected} N",
+        "force {force} != PeelForceCalculator::suction_force({DEFAULT_VACUUM_PRESSURE_KPA}, {area}) \
+         = {expected} N",
     );
 }
 
@@ -255,7 +284,15 @@ fn collect_events(masks: &[LayerMask]) -> Vec<CavityEventSummary> {
         .map(|e| CavityEventSummary {
             layer: e.layer,
             area_mm2: e.sealed_area_mm2 as f32,
-            force_n: DEFAULT_VACUUM_PRESSURE_KPA * (e.sealed_area_mm2 as f32) * 1e-3,
+            // Read the production value directly (CavityDetector::detect
+            // already computed it via PeelForceCalculator::suction_force —
+            // see cavity_detector.rs's CavityEvent::suction_force_n
+            // rustdoc) rather than re-deriving it here. Folded 2026-08-01:
+            // this used to hand-roll `DEFAULT_VACUUM_PRESSURE_KPA * area *
+            // 1e-3`, mirroring the production formula instead of reading
+            // its output (docs/patterns/anti/test-mirrors-production-
+            // formula.md).
+            force_n: e.suction_force_n,
         })
         .collect()
 }

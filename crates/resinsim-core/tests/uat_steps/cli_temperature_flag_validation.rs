@@ -15,7 +15,14 @@ use super::world::UatWorld;
 
 // ---- UAT-1: --initial-led-temp rejects values at/below absolute zero ------
 
-#[given(regex = r"^the resinsim inspect thermal subcommand$")]
+// Re-pointed 2026-08-01 (uat-unskip-campaign increment 1): the spec text
+// was updated post-ADR-0015 ("the resinsim inspect thermal OR resinsim sim
+// subcommand") but this regex still matched the pre-ADR-0015 wording, so
+// cucumber reported UAT-1/UAT-2 as undefined-step skips with nobody
+// noticing (docs/patterns/anti/guard-that-cannot-observe-its-own-failure-
+// mode.md). The invocation body below still exercises `inspect thermal`,
+// which is a valid OR-branch of the spec's Given.
+#[given(regex = r"^the resinsim inspect thermal OR resinsim sim subcommand$")]
 fn given_inspect_thermal(world: &mut UatWorld) {
     world.cli_cmd = Some(vec![
         "inspect".into(),
@@ -115,7 +122,12 @@ fn then_no_panic(world: &mut UatWorld) {
 
 // ---- UAT-3: --ambient rejects unphysical values ---------------------------
 
-#[given(regex = r"^the resinsim inspect thermal subcommand \(or report health\)$")]
+// Re-pointed 2026-08-01 (uat-unskip-campaign increment 1), same drift as
+// UAT-1/UAT-2 above: the current spec text is "the resinsim inspect
+// thermal subcommand OR resinsim sim" (word order differs from UAT-1/2's
+// Given — the spec states the OR the other way round), not the stale
+// "(or report health)" wording this regex used to require.
+#[given(regex = r"^the resinsim inspect thermal subcommand OR resinsim sim$")]
 fn given_inspect_or_report(world: &mut UatWorld) {
     world.cli_cmd = Some(vec![
         "inspect".into(),
@@ -211,6 +223,29 @@ fn then_stderr_kb153(world: &mut UatWorld) {
     }
 }
 
+// DELIBERATELY NOT re-pointed (uat-unskip-campaign increment 1,
+// 2026-08-01). The current spec text asserts:
+//   And the warning surfaces in "resinsim sim" (the producer that loads
+//   profiles, post-ADR-0015) as well (not just "inspect thermal")
+// Empirical check (`resinsim sim --stl data/test_cube.stl --resin
+// generic_standard --printer generic_msla_4k --data-dir data --out ...`,
+// generic_standard omits cure_kinetics_ea_kj_mol): stderr does NOT contain
+// "KB-153" / "30 kJ/mol". `resinsim report health` doesn't emit it either
+// — only `resinsim inspect thermal` (UAT-4's first three steps, which DO
+// pass) currently does. This is a PRODUCTION defect surfaced by drift
+// repair, not a step-def bug: `cmd_sim` in
+// resinsim-inspect/src/main.rs never calls the Ea-default warning that
+// `cmd_thermal` does. Per the binding rule (findings-issue-unskip-
+// adversarial.yaml): do NOT weaken or re-point this assertion at
+// `report health` or `inspect thermal` — that recreates the exact drift
+// this repair exists to fix. The regex below intentionally still reads
+// "report health" so it stays undefined against the current spec text;
+// the scenario is registered as declared debt
+// (`SPECS_WITHOUT_STEP_DEFS` in uat_gherkin.rs, entry
+// `("cli-temperature-flag-validation", 1)`) pending a production fix
+// (report separately — proposed slug `kb153-warning-missing-from-
+// resinsim-sim`) to make `cmd_sim` (and `cmd_report_health`, which is
+// also silent) emit the same warning `cmd_thermal` does.
 #[then(
     regex = r#"^the warning surfaces in "report health" as well \(not just "inspect thermal"\)$"#
 )]
