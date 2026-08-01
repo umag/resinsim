@@ -30,12 +30,12 @@ use uat_steps::world::UatWorld;
 // in optimised builds.
 #[allow(unused_imports, clippy::single_component_path_imports)]
 use uat_steps::{
-    cli_profile_by_name_loading, cli_requires_resin_for_recipe_fields,
-    cli_temperature_flag_validation, ctb_layer_height_authority, cure_depth_nan_guard,
-    legacy_resin_toml_defaults, legacy_resin_toml_without_recipe,
-    legacy_resin_toml_without_ref_lift_speed, recipe_inside_printer_range, recipe_out_of_range,
-    resin_switch_changes_simulation, safety_factor_zero_force,
-    suction_detector_raft_false_positive, thermal_degradation,
+    cli_inspect_field_slices_voxel_field, cli_profile_by_name_loading,
+    cli_requires_resin_for_recipe_fields, cli_temperature_flag_validation,
+    ctb_layer_height_authority, cure_depth_nan_guard, legacy_resin_toml_defaults,
+    legacy_resin_toml_without_recipe, legacy_resin_toml_without_ref_lift_speed,
+    recipe_inside_printer_range, recipe_out_of_range, resin_switch_changes_simulation,
+    safety_factor_zero_force, suction_detector_raft_false_positive, thermal_degradation,
 };
 
 /// Specs that have NO step-definition module yet, so every scenario in them

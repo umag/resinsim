@@ -24,6 +24,7 @@ pub mod cli_fixtures;
 // Per-UAT-file step definition modules. snake_case names mirror the
 // kebab-case spec/uat/*.md file names verbatim for grep traceability
 // (docs/patterns/extracting-gherkin-from-markdown.md).
+pub mod cli_inspect_field_slices_voxel_field;
 pub mod cli_profile_by_name_loading;
 pub mod cli_requires_resin_for_recipe_fields;
 pub mod cli_temperature_flag_validation;
