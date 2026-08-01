@@ -27,8 +27,20 @@
 
 use thiserror::Error;
 
-use crate::values::field_slice::{FieldSlice, FieldSliceError, SliceAxis, SlicePlane};
-use crate::values::{CureField, PhotoinitiatorField, StrainField, StressField, ThermalField};
+use crate::values::{
+    CureField,
+    LayerHeightSeq,
+    PhotoinitiatorField,
+    StrainField,
+    StressField,
+    ThermalField,
+    field_slice::{
+        FieldSlice,
+        FieldSliceError,
+        SliceAxis,
+        SlicePlane,
+    },
+};
 
 /// Borrow of one of the five Tier-2 voxel fields a simulation may
 /// carry. The kind lives only here — no new domain enum duplicates
@@ -228,15 +240,157 @@ impl FieldSlicer {
         )?;
         Ok(slice)
     }
+
+    /// Resolve a world-mm address on `axis` to a voxel index. THE
+    /// load-bearing correctness boundary of this service — TWO
+    /// branches for Z, selected by `field.is_layer_stacked()`:
+    ///
+    /// - **Layer-stacked** (cure / photoinitiator / strain / stress),
+    ///   Z axis: resolved through CUMULATIVE per-layer heights from
+    ///   `layer_heights` (a simulation's
+    ///   `PrintSimulation::layer_height_provenance()`'s
+    ///   `LayerHeightSeq`), never `iz * voxel_size_mm`
+    ///   (`docs/patterns/anti/voxel-z-step-from-lateral-voxel-size.md`).
+    ///   `layer_heights = None` (STL / area-only runs — no CTB-derived
+    ///   per-layer heights exist) returns
+    ///   `MissingLayerHeightProvenance`; the caller must address the
+    ///   field by voxel index instead.
+    /// - **Thermal**, Z axis: resolved as
+    ///   `(z_mm - bbox_min_mm[2]) / voxel_size_mm` over the vat
+    ///   envelope — deliberately NOT layer-stacked; NEVER calls
+    ///   `world_at_voxel_center()`, which is documented as
+    ///   intentionally wrong for this purpose.
+    /// - **X and Y**, all five field kinds: resolved through
+    ///   `bbox_min_mm[axis] + i * voxel_size_mm`.
+    ///
+    /// Coordinates at the exact upper boundary of the field's extent
+    /// snap to the nearest (last) voxel rather than erroring — mirrors
+    /// `ThermalField::temperature_at_world`'s extreme-face convention.
+    pub fn resolve_index(
+        field: &FieldRef<'_>,
+        axis: SliceAxis,
+        value_mm: f32,
+        voxel_size_mm: f32,
+        bbox_min_mm: [f32; 3],
+        layer_heights: Option<&LayerHeightSeq>,
+    ) -> Result<u32, FieldSlicerError> {
+        let (nx, ny, nz) = field.dimensions();
+        match axis {
+            SliceAxis::X => {
+                resolve_lateral_index(value_mm, bbox_min_mm[0], voxel_size_mm, nx, SliceAxis::X)
+            }
+            SliceAxis::Y => {
+                resolve_lateral_index(value_mm, bbox_min_mm[1], voxel_size_mm, ny, SliceAxis::Y)
+            }
+            SliceAxis::Z => {
+                if field.is_layer_stacked() {
+                    resolve_layer_stacked_z_index(value_mm, bbox_min_mm[2], layer_heights, nz)
+                } else {
+                    resolve_lateral_index(value_mm, bbox_min_mm[2], voxel_size_mm, nz, SliceAxis::Z)
+                }
+            }
+        }
+    }
+}
+
+/// X/Y (and thermal-Z) resolution: uniform `voxel_size_mm` pitch from
+/// `origin_mm`. The exact-upper-boundary coordinate snaps to the last
+/// voxel (nearest-voxel fallback), matching
+/// `ThermalField::temperature_at_world`'s extreme-face convention.
+fn resolve_lateral_index(
+    value_mm: f32,
+    origin_mm: f32,
+    voxel_size_mm: f32,
+    dim: u32,
+    axis: SliceAxis,
+) -> Result<u32, FieldSlicerError> {
+    let max_mm = origin_mm + dim as f32 * voxel_size_mm;
+    if !value_mm.is_finite() || value_mm < origin_mm || value_mm > max_mm {
+        return Err(FieldSlicerError::WorldCoordOutOfRange {
+            axis,
+            value_mm,
+            min_mm: origin_mm,
+            max_mm,
+        });
+    }
+    let raw = ((value_mm - origin_mm) / voxel_size_mm).floor();
+    let idx = raw.clamp(0.0, (dim - 1) as f32) as u32;
+    Ok(idx)
+}
+
+/// Layer-stacked Z resolution: walk the CUMULATIVE per-layer heights
+/// (µm, converted to mm) from `layer_heights`, never
+/// `iz * voxel_size_mm`. `layer_heights = None` returns
+/// `MissingLayerHeightProvenance` — the caller must address by index.
+/// Absolute tolerance (mm) on the layer-stack Z bounds check. Cumulative
+/// µm-per-layer summation over many layers accrues f32 rounding error
+/// (e.g. 50+30+20+40 µm sums to 0.139_999_99 mm rather than the exact
+/// 0.14 mm) — without this margin, a query at the nominal top-of-stack
+/// mm value would spuriously reject as `WorldCoordOutOfRange`. 1e-4 mm
+/// (0.1 µm) is far below any physical layer thickness (tens of µm) so
+/// it cannot mask a genuinely out-of-range query.
+const Z_BOUNDARY_EPSILON_MM: f32 = 1e-4;
+
+fn resolve_layer_stacked_z_index(
+    value_mm: f32,
+    bbox_min_z: f32,
+    layer_heights: Option<&LayerHeightSeq>,
+    nz: u32,
+) -> Result<u32, FieldSlicerError> {
+    let seq = layer_heights
+        .ok_or(FieldSlicerError::MissingLayerHeightProvenance { axis: SliceAxis::Z })?;
+    let n = (nz as usize).min(seq.len());
+    if n == 0 || !value_mm.is_finite() {
+        return Err(FieldSlicerError::WorldCoordOutOfRange {
+            axis: SliceAxis::Z,
+            value_mm,
+            min_mm: bbox_min_z,
+            max_mm: bbox_min_z,
+        });
+    }
+    // boundaries[iz] is the world-mm bottom of layer iz; boundaries[n]
+    // is the top of the stack. Layer iz spans [boundaries[iz], boundaries[iz+1]).
+    let mut boundaries = Vec::with_capacity(n + 1);
+    boundaries.push(bbox_min_z);
+    let mut cursor_mm = bbox_min_z;
+    for iz in 0..n {
+        let h_mm = seq.get(iz).unwrap_or(0.0) / 1000.0;
+        cursor_mm += h_mm;
+        boundaries.push(cursor_mm);
+    }
+    let top_mm = cursor_mm;
+    if value_mm < bbox_min_z - Z_BOUNDARY_EPSILON_MM || value_mm > top_mm + Z_BOUNDARY_EPSILON_MM {
+        return Err(FieldSlicerError::WorldCoordOutOfRange {
+            axis: SliceAxis::Z,
+            value_mm,
+            min_mm: bbox_min_z,
+            max_mm: top_mm,
+        });
+    }
+    let mut resolved = None;
+    for iz in 0..n {
+        // The `|| iz == n - 1` fallback snaps the exact-top-boundary
+        // coordinate to the last layer (nearest-voxel convention).
+        if value_mm < boundaries[iz + 1] || iz == n - 1 {
+            resolved = Some(iz as u32);
+            break;
+        }
+    }
+    Ok(resolved.expect(
+        "loop always sets `resolved` via the `iz == n - 1` fallback on its final iteration, given n > 0",
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::values::{FieldStatsScope, StrainTensor, StressTensor};
+    use crate::values::{
+        FieldStatsScope,
+        StrainTensor,
+        StressTensor,
+    };
 
-    const FIXTURE_MSG: &str =
-        "test fixture: literal in-range indices and validly-constructed fields satisfy FieldSlicer preconditions";
+    const FIXTURE_MSG: &str = "test fixture: literal in-range indices and validly-constructed fields satisfy FieldSlicer preconditions";
 
     /// 4×4×3 field filled with `f(ix,iy,iz) = ix*100 + iy*10 + iz` — a
     /// transposition bug (swapped axes anywhere in the index math)
@@ -380,10 +534,8 @@ mod tests {
     #[test]
     fn stress_field_slice_reduces_via_production_von_mises_and_cross_checks_layer_max() {
         let mut field = StressField::new(3, 3, 2, 0.5, [0.0, 0.0, 0.0]).expect(FIXTURE_MSG);
-        let s50 =
-            StressTensor::new(50.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect(FIXTURE_MSG);
-        let s100 =
-            StressTensor::new(100.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect(FIXTURE_MSG);
+        let s50 = StressTensor::new(50.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect(FIXTURE_MSG);
+        let s100 = StressTensor::new(100.0, 0.0, 0.0, 0.0, 0.0, 0.0).expect(FIXTURE_MSG);
         field.accumulate_at(0, 0, 1, s50).expect(FIXTURE_MSG);
         field.accumulate_at(1, 1, 1, s100).expect(FIXTURE_MSG);
         let field_ref = FieldRef::Stress(&field);
@@ -473,6 +625,259 @@ mod tests {
                 }
             ),
             "expected IndexOutOfRange {{axis: Y, index: 4, valid_exclusive_max: 4}}, got {err_y:?}"
+        );
+    }
+
+    // ---- resolve_index: X/Y lateral resolution (all field kinds share this) ----
+
+    #[test]
+    fn resolve_index_x_and_y_resolve_through_bbox_plus_i_times_voxel_size() {
+        let field = fill_cure_field_with_index_pattern(4, 4, 3);
+        let field_ref = FieldRef::Cure(&field);
+        // voxel_size=0.5mm, bbox_min=[10.0, 20.0, 0.0]: voxel 2 on X spans
+        // [11.0, 11.5) mm; voxel 3 on Y spans [21.5, 22.0) mm.
+        let ix = FieldSlicer::resolve_index(
+            &field_ref,
+            SliceAxis::X,
+            11.2,
+            0.5,
+            [10.0, 20.0, 0.0],
+            None,
+        )
+        .expect(FIXTURE_MSG);
+        assert_eq!(ix, 2);
+        let iy = FieldSlicer::resolve_index(
+            &field_ref,
+            SliceAxis::Y,
+            21.9,
+            0.5,
+            [10.0, 20.0, 0.0],
+            None,
+        )
+        .expect(FIXTURE_MSG);
+        assert_eq!(iy, 3);
+    }
+
+    #[test]
+    fn resolve_index_lateral_out_of_range_returns_typed_world_coord_error() {
+        let field = fill_cure_field_with_index_pattern(4, 4, 3);
+        let field_ref = FieldRef::Cure(&field);
+        // Field X extent is [0.0, 2.0) mm (4 voxels x 0.5mm); 5.0mm is
+        // well past it.
+        let err = FieldSlicer::resolve_index(&field_ref, SliceAxis::X, 5.0, 0.5, [0.0; 3], None)
+            .expect_err("test fixture: 5.0mm deliberately exceeds the 2.0mm field extent, so Err is the expected outcome");
+        assert!(
+            matches!(
+                err,
+                FieldSlicerError::WorldCoordOutOfRange {
+                    axis: SliceAxis::X,
+                    ..
+                }
+            ),
+            "expected WorldCoordOutOfRange {{axis: X, ..}}, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_index_lateral_exact_upper_boundary_snaps_to_last_voxel() {
+        let field = fill_cure_field_with_index_pattern(4, 4, 3);
+        let field_ref = FieldRef::Cure(&field);
+        // Field X extent is exactly [0.0, 2.0] mm inclusive of the boundary.
+        let ix = FieldSlicer::resolve_index(&field_ref, SliceAxis::X, 2.0, 0.5, [0.0; 3], None)
+            .expect(FIXTURE_MSG);
+        assert_eq!(
+            ix, 3,
+            "exact upper boundary must snap to the last voxel (nx-1)"
+        );
+    }
+
+    // ---- resolve_index: Z branch selection ----
+
+    #[test]
+    fn resolve_index_z_thermal_uses_bbox_and_voxel_size_not_layer_heights() {
+        let field = fill_thermal_field_with_index_pattern(4, 4, 10);
+        let field_ref = FieldRef::Thermal(&field);
+        // voxel_size=0.5mm, bbox_min_z=0.0: z=1.2mm -> floor(1.2/0.5)=2.
+        let iz = FieldSlicer::resolve_index(
+            &field_ref,
+            SliceAxis::Z,
+            1.2,
+            0.5,
+            [0.0, 0.0, 0.0],
+            None, // no layer_heights supplied — Thermal must not need it
+        )
+        .expect(FIXTURE_MSG);
+        assert_eq!(iz, 2);
+    }
+
+    #[test]
+    fn resolve_index_z_layer_stacked_uses_cumulative_layer_heights() {
+        // 4 layers, non-uniform heights (µm): 50, 30, 20, 40.
+        // Cumulative boundaries (mm): 0, 0.05, 0.08, 0.10, 0.14.
+        let seq = LayerHeightSeq::try_from_vec(vec![50.0, 30.0, 20.0, 40.0]).expect(FIXTURE_MSG);
+        let field = fill_cure_field_with_index_pattern(2, 2, 4);
+        let field_ref = FieldRef::Cure(&field);
+        // z=0.09mm falls in [0.08, 0.10) -> layer index 2.
+        let iz = FieldSlicer::resolve_index(
+            &field_ref,
+            SliceAxis::Z,
+            0.09,
+            0.5, // voxel_size_mm — irrelevant to Z on a layer-stacked field
+            [0.0, 0.0, 0.0],
+            Some(&seq),
+        )
+        .expect(FIXTURE_MSG);
+        assert_eq!(iz, 2);
+        // z=0.0mm (bottom) -> layer 0; z=0.06mm -> layer 1.
+        let iz0 = FieldSlicer::resolve_index(
+            &field_ref,
+            SliceAxis::Z,
+            0.0,
+            0.5,
+            [0.0, 0.0, 0.0],
+            Some(&seq),
+        )
+        .expect(FIXTURE_MSG);
+        assert_eq!(iz0, 0);
+        let iz1 = FieldSlicer::resolve_index(
+            &field_ref,
+            SliceAxis::Z,
+            0.06,
+            0.5,
+            [0.0, 0.0, 0.0],
+            Some(&seq),
+        )
+        .expect(FIXTURE_MSG);
+        assert_eq!(iz1, 1);
+    }
+
+    #[test]
+    fn resolve_index_z_layer_stacked_exact_top_boundary_snaps_to_last_layer() {
+        let seq = LayerHeightSeq::try_from_vec(vec![50.0, 30.0, 20.0, 40.0]).expect(FIXTURE_MSG);
+        let field = fill_cure_field_with_index_pattern(2, 2, 4);
+        let field_ref = FieldRef::Cure(&field);
+        // Total stack height = 140 µm = 0.14 mm exactly.
+        let iz = FieldSlicer::resolve_index(
+            &field_ref,
+            SliceAxis::Z,
+            0.14,
+            0.5,
+            [0.0, 0.0, 0.0],
+            Some(&seq),
+        )
+        .expect(FIXTURE_MSG);
+        assert_eq!(iz, 3);
+    }
+
+    #[test]
+    fn resolve_index_z_layer_stacked_out_of_range_returns_typed_error() {
+        let seq = LayerHeightSeq::try_from_vec(vec![50.0, 30.0, 20.0, 40.0]).expect(FIXTURE_MSG);
+        let field = fill_cure_field_with_index_pattern(2, 2, 4);
+        let field_ref = FieldRef::Cure(&field);
+        let err = FieldSlicer::resolve_index(
+            &field_ref,
+            SliceAxis::Z,
+            1.0, // well past the 0.14mm stack top
+            0.5,
+            [0.0, 0.0, 0.0],
+            Some(&seq),
+        )
+        .expect_err("test fixture: 1.0mm deliberately exceeds the 0.14mm layer stack, so Err is the expected outcome");
+        assert!(
+            matches!(
+                err,
+                FieldSlicerError::WorldCoordOutOfRange {
+                    axis: SliceAxis::Z,
+                    ..
+                }
+            ),
+            "expected WorldCoordOutOfRange {{axis: Z, ..}}, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_index_z_layer_stacked_absent_provenance_returns_typed_error() {
+        // STL / area-only run: no LayerHeightSeq available. Must NOT
+        // fall back to iz * voxel_size_mm
+        // (docs/patterns/anti/voxel-z-step-from-lateral-voxel-size.md).
+        let field = fill_cure_field_with_index_pattern(2, 2, 4);
+        let field_ref = FieldRef::Cure(&field);
+        let err = FieldSlicer::resolve_index(
+            &field_ref,
+            SliceAxis::Z,
+            0.09,
+            0.5,
+            [0.0, 0.0, 0.0],
+            None,
+        )
+        .expect_err(
+            "test fixture: layer_heights deliberately omitted, so Err is the expected outcome",
+        );
+        assert!(
+            matches!(
+                err,
+                FieldSlicerError::MissingLayerHeightProvenance { axis: SliceAxis::Z }
+            ),
+            "expected MissingLayerHeightProvenance {{axis: Z}}, got {err:?}"
+        );
+    }
+
+    /// THE MANDATORY REGRESSION TEST (binding review condition,
+    /// findings-issue-t2f6-adversarial-r2.yaml): for the SAME z_mm
+    /// input, a cure field (layer-stacked, non-uniform layer heights)
+    /// and a thermal field (spatial, `bbox_min_z + iz*voxel_size_mm`)
+    /// MUST resolve to DIFFERENT voxel indices. A copy-paste collapse
+    /// of the two branches would make this pass trivially with equal
+    /// indices — the explicit inequality assertion catches that.
+    #[test]
+    fn resolve_index_z_resolutions_differ_between_cure_and_thermal_for_the_same_z_mm() {
+        // Non-uniform layer heights (µm): 50, 30, 20, 40.
+        // Cumulative boundaries (mm): 0, 0.05, 0.08, 0.10, 0.14.
+        let seq = LayerHeightSeq::try_from_vec(vec![50.0, 30.0, 20.0, 40.0]).expect(FIXTURE_MSG);
+        let cure_field = fill_cure_field_with_index_pattern(2, 2, 4);
+        let cure_ref = FieldRef::Cure(&cure_field);
+        // Thermal field: coarse voxel_size_mm=0.5mm, bbox_min_z=0.0, plenty of Z voxels.
+        let thermal_field = fill_thermal_field_with_index_pattern(2, 2, 10);
+        let thermal_ref = FieldRef::Thermal(&thermal_field);
+
+        let z_mm = 0.09_f32;
+
+        // Cure (layer-stacked): 0.09mm falls in the cumulative bracket
+        // [0.08, 0.10) -> layer index 2.
+        let cure_index = FieldSlicer::resolve_index(
+            &cure_ref,
+            SliceAxis::Z,
+            z_mm,
+            0.5,
+            [0.0, 0.0, 0.0],
+            Some(&seq),
+        )
+        .expect(FIXTURE_MSG);
+        assert_eq!(
+            cure_index, 2,
+            "cure Z index must come from cumulative layer heights"
+        );
+
+        // Thermal (spatial): floor(0.09 / 0.5) = 0.
+        let thermal_index = FieldSlicer::resolve_index(
+            &thermal_ref,
+            SliceAxis::Z,
+            z_mm,
+            0.5,
+            [0.0, 0.0, 0.0],
+            None, // Thermal never needs layer_heights
+        )
+        .expect(FIXTURE_MSG);
+        assert_eq!(
+            thermal_index, 0,
+            "thermal Z index must come from bbox_min_z + iz*voxel_size_mm"
+        );
+
+        assert_ne!(
+            cure_index, thermal_index,
+            "cure (layer-stacked, cumulative heights) and thermal (spatial, voxel_size_mm) \
+             MUST resolve the same z_mm={z_mm} to DIFFERENT indices — a copy-paste collapse \
+             of the two branches would make this pass trivially with equal indices"
         );
     }
 }
