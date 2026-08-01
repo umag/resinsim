@@ -136,23 +136,66 @@ on main for months, and — under `field-sim` specifically — how it sat red
 for two months more after that (`uat-fixtures-fieldsim-adr0020-gap`).
 
 Run BOTH whenever `spec/uat/*.md` or `tests/uat_steps/` changes. Their
-guards:
+guards (rewritten by `uat-unskip-campaign` increment 1, 2026-08-01 — see
+that campaign pointer below for what changed and why):
 
-- **(a)** the set of specs without step definitions equals
-  `SPECS_WITHOUT_STEP_DEFS` in `uat_gherkin.rs` — a debt register that must
-  only ever shrink
-- **(c)** zero parse errors, so no scenario is silently dropped
+- **(a), layer 1 (static):** every `spec/uat/*.md` file with NO step-def
+  module at all must be named in `SPECS_WITHOUT_STEP_DEFS`
+  (`uat_gherkin.rs`). Checked via `include_str!` against `uat_steps/mod.rs`'s
+  `pub mod` declarations — deterministic, independent of cucumber actually
+  running.
+- **(a), layer 2 (runtime, the real fix):** `main()` now drives cucumber
+  ONCE PER SYNTHESISED FEATURE FILE (not once over the whole tree), so
+  `StatsWriter::skipped_steps()` scoped to a single run IS that spec's
+  skipped-SCENARIO count (cucumber halts a scenario at its first undefined
+  step, so "skipped steps" and "skipped scenarios" are the same number,
+  per-spec). `SPECS_WITHOUT_STEP_DEFS` is therefore `&[(&str,
+  expected_skipped_count)]`, not just spec names, and fails in THREE
+  directions: an unregistered spec with actual skips (new debt smuggled
+  in, or drift re-appearing in an already-stepped spec — this is what
+  layer 1 structurally cannot see: a spec CAN have a module and still lose
+  scenarios if a step regex drifts from edited spec text); a registered
+  spec whose actual skips dropped to zero (stale entry — remove it); a
+  registered spec whose actual count differs from its expected count
+  (partial progress not reflected). The debt register is still meant to
+  shrink, with ONE amendment: an entry may be ADDED when it names a
+  blocking issue rather than "nobody wrote the step yet" (see
+  `cli-temperature-flag-validation`'s entry in `uat_gherkin.rs` for the
+  live example — one scenario stays declared debt against filed issue
+  `kb153-warning-missing-from-resinsim-sim`). Net scenario-debt (the sum of
+  every registered count) still monotonically shrinks; a blocking-issue
+  entry demotes a skip from silent to named and tracked, it does not hide
+  it.
+- **(a), layer 3 (structural, MUST-DECIDE-2):** the `pub mod` set in
+  `uat_steps/mod.rs` and the `use uat_steps::{...}` set in `uat_gherkin.rs`
+  (which forces every module to link so its `#[given]/#[when]/#[then]`
+  registrations aren't silently dropped in an optimised build — see
+  `-Aunused_imports` in `.cargo/config.toml`) must agree exactly. Also
+  `include_str!`-checked.
+- **(c)** zero parse errors, so no scenario is silently dropped.
 
 Authoring-time detection of malformed Gherkin lives in
 `tests/spec_gherkin_wellformed.rs`, which IS nextest-visible and so runs in
 the four-config matrix.
 
-**Expected shape is IDENTICAL in both configs**: 51 features, 153 scenarios
-(36 passed, 117 skipped, 0 failed), 320 steps (203 passed, 117 skipped, 0
-failed), exit 0. A field-sim run reporting FEWER total steps than the
-default run means a scenario is aborting early (a fixture regressed and is
-panicking before reaching every step) — treat that as a hard failure, not
-noise, even if the final failed-count still reads 0.
+**Expected shape is IDENTICAL in both configs** (current as of
+`uat-unskip-campaign` increment 1, 2026-08-01): 52 features, 160 scenarios
+(57 passed, 103 skipped, 0 failed), 395 steps (292 passed, 103 skipped, 0
+failed), exit 0, register at 36 entries. This shape moves as the campaign
+lands more increments — trust `cargo uat`'s own `[Consolidated total]` line
+over this paragraph if they disagree, and update this paragraph when they
+do. A field-sim run reporting FEWER total steps than the default run means
+a scenario is aborting early (a fixture regressed and is panicking before
+reaching every step) — treat that as a hard failure, not noise, even if the
+final failed-count still reads 0.
+
+**Campaign pointer** (`uat-unskip-campaign`, ratified 2026-07-28): recommended
+bands, in order — Band A domain/default-features, Band B nanodlp, Band C
+CLI (all DO); Band D field-sim-gated (DEFER, blocked on
+`uat-fixtures-fieldsim-adr0020-gap`); Band E viz (SPLIT into its own issue,
+`viz-uat-cucumber-harness` — a second cucumber harness hosted inside
+resinsim-viz, since driving Bevy in-process from this harness would invert
+ADR-0001's layering).
 
 Hand-rolled resin/printer TOML fixtures under `tests/uat_steps/` MUST
 compose from the shared builders (`world.rs::ResinBuilder`,
