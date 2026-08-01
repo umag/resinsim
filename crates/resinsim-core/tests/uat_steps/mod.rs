@@ -24,6 +24,7 @@ pub mod cli_fixtures;
 // Per-UAT-file step definition modules. snake_case names mirror the
 // kebab-case spec/uat/*.md file names verbatim for grep traceability
 // (docs/patterns/extracting-gherkin-from-markdown.md).
+pub mod base_adhesion_shifts_peel_peak;
 pub mod cli_inspect_field_slices_voxel_field;
 pub mod cli_profile_by_name_loading;
 pub mod cli_requires_resin_for_recipe_fields;
@@ -33,6 +34,8 @@ pub mod cure_depth_nan_guard;
 pub mod legacy_resin_toml_defaults;
 pub mod legacy_resin_toml_without_recipe;
 pub mod legacy_resin_toml_without_ref_lift_speed;
+pub mod peel_shape_factor_scales_with_aspect_ratio;
+pub mod profile_vacuum_pressure_scales_suction;
 pub mod recipe_inside_printer_range;
 pub mod recipe_out_of_range;
 pub mod resin_switch_changes_simulation;

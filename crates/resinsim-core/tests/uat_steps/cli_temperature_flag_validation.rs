@@ -242,10 +242,10 @@ fn then_stderr_kb153(world: &mut UatWorld) {
 // "report health" so it stays undefined against the current spec text;
 // the scenario is registered as declared debt
 // (`SPECS_WITHOUT_STEP_DEFS` in uat_gherkin.rs, entry
-// `("cli-temperature-flag-validation", 1)`) pending a production fix
-// (report separately — proposed slug `kb153-warning-missing-from-
-// resinsim-sim`) to make `cmd_sim` (and `cmd_report_health`, which is
-// also silent) emit the same warning `cmd_thermal` does.
+// `("cli-temperature-flag-validation", 1)`) pending a production fix,
+// tracked as issue `kb153-warning-missing-from-resinsim-sim` (filed), to
+// make `cmd_sim` (and `cmd_report_health`, which is also silent) emit the
+// same warning `cmd_thermal` does.
 #[then(
     regex = r#"^the warning surfaces in "report health" as well \(not just "inspect thermal"\)$"#
 )]

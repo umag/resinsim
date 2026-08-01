@@ -41,12 +41,14 @@ use uat_steps::world::UatWorld;
 // the same module set, so this comment cannot silently go stale either.
 #[allow(unused_imports, clippy::single_component_path_imports)]
 use uat_steps::{
-    cli_inspect_field_slices_voxel_field, cli_profile_by_name_loading,
-    cli_requires_resin_for_recipe_fields, cli_temperature_flag_validation,
-    ctb_layer_height_authority, cure_depth_nan_guard, legacy_resin_toml_defaults,
-    legacy_resin_toml_without_recipe, legacy_resin_toml_without_ref_lift_speed,
-    recipe_inside_printer_range, recipe_out_of_range, resin_switch_changes_simulation,
-    safety_factor_zero_force, suction_detector_raft_false_positive, thermal_degradation,
+    base_adhesion_shifts_peel_peak, cli_inspect_field_slices_voxel_field,
+    cli_profile_by_name_loading, cli_requires_resin_for_recipe_fields,
+    cli_temperature_flag_validation, ctb_layer_height_authority, cure_depth_nan_guard,
+    legacy_resin_toml_defaults, legacy_resin_toml_without_recipe,
+    legacy_resin_toml_without_ref_lift_speed, peel_shape_factor_scales_with_aspect_ratio,
+    profile_vacuum_pressure_scales_suction, recipe_inside_printer_range, recipe_out_of_range,
+    resin_switch_changes_simulation, safety_factor_zero_force,
+    suction_detector_raft_false_positive, thermal_degradation,
 };
 
 /// Debt register: `(spec stem, expected skipped SCENARIO count)`.
@@ -64,16 +66,32 @@ use uat_steps::{
 ///    `findings-issue-unskip-adversarial.yaml` binds here: do NOT weaken or
 ///    re-point the assertion to the surface that happens to work
 ///    (`report health`/`inspect thermal`) — that recreates the exact
-///    drift this repair exists to fix. Register the gap instead.
+///    drift this repair exists to fix. Register the gap instead, naming
+///    the blocking issue (filed as `kb153-warning-missing-from-resinsim-sim`).
 ///
 /// This list is a debt register, not a permanent exemption. It exists
 /// because step-def authoring stopped after the 2026-04 rollout while spec
 /// authoring continued (plus, now, the odd genuinely-blocked scenario
 /// above): everything here is either undocumented-in-code behaviour
 /// enforced by ordinary nextest tests, or a named, tracked production gap.
-/// The unskip campaign shrinks this register; nothing is added except a
-/// named, justified declared-debt entry like the one above. A new
-/// unexpected skip fails `assert_runtime_attribution_matches_register`
+///
+/// AMENDED RULE (uat-unskip-campaign increment 1, 2026-08-01): the
+/// original rule was "the campaign shrinks this register; nothing is ever
+/// added." That absolute no longer holds — `cli-temperature-flag-validation`
+/// above is a real, ratified counter-example: a spec CAN be freshly stepped
+/// (module lands, register entry would normally be deleted entirely) and
+/// STILL keep exactly one declared-debt entry for a single scenario that is
+/// blocked on a named, filed, external issue rather than on missing test
+/// authorship. The rule is therefore: an entry may be ADDED only when it
+/// names a blocking issue (not "TODO later" — an actual filed issue,
+/// `kb153-warning-missing-from-resinsim-sim` is the live instance), and
+/// every OTHER change to this register must be a removal or a count
+/// decrease. Net scenario-debt (the sum of every count in this list) still
+/// monotonically shrinks release over release — a blocking-issue entry
+/// trades an anonymous "nobody wrote the step" skip for a named, tracked,
+/// externally-visible one; it does not hide debt, it demotes it from
+/// silent to accounted-for. A new unexpected skip that does NOT name a
+/// blocking issue still fails `assert_runtime_attribution_matches_register`
 /// rather than being absorbed.
 ///
 /// `calibration-disclosure-3of3-predicate` is the tree's only Scenario
@@ -82,7 +100,6 @@ use uat_steps::{
 /// number and the guard will (correctly) fail — that is not a guard bug.
 const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("athena-analytic-log-ingest", 2),
-    ("base-adhesion-shifts-peel-peak", 3),
     ("calibration-disclosure-3of3-predicate", 5),
     ("cli-report-health-layer-height-provenance", 0),
     ("cli-report-health-print-time", 3),
@@ -103,9 +120,7 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("nanodlp-archive-bomb-rejected", 1),
     ("nanodlp-calibrate-compares-real-force", 3),
     ("nanodlp-import-simulates", 2),
-    ("peel-shape-factor-scales-with-aspect-ratio", 4),
     ("printer-envelope-min-extent-under-field-sim", 1),
-    ("profile-vacuum-pressure-scales-suction", 3),
     ("sim-fields-sidecar-roundtrip", 4),
     ("sim-json-roundtrips-zero-force-layer", 3),
     ("thermal-field-arrhenius-per-voxel", 2),
@@ -134,7 +149,13 @@ const STEP_DEF_MODULE_RENAMES: &[(&str, &str)] =
 /// Modules under `uat_steps/` that are shared support code, not per-spec
 /// step-def bindings. Single source for this list — both layer 1 (below)
 /// and layer 3 (`assert_mod_rs_and_use_list_agree`) read it from here.
-const NON_STEP_MODULES: [&str; 5] = ["extract", "extract_tests", "world", "fixtures", "cli_fixtures"];
+const NON_STEP_MODULES: [&str; 5] = [
+    "extract",
+    "extract_tests",
+    "world",
+    "fixtures",
+    "cli_fixtures",
+];
 
 /// Layer 1 (static): every spec/uat/*.md file with NO step-def module at
 /// all must be named in `SPECS_WITHOUT_STEP_DEFS`.
@@ -197,8 +218,10 @@ fn assert_every_spec_has_a_module_or_is_registered(spec_uat: &std::path::Path) {
         .map(String::as_str)
         .filter(|s| !stepped.contains(*s))
         .collect();
-    let registered: std::collections::BTreeSet<&str> =
-        SPECS_WITHOUT_STEP_DEFS.iter().map(|(name, _)| *name).collect();
+    let registered: std::collections::BTreeSet<&str> = SPECS_WITHOUT_STEP_DEFS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
 
     let newly_unstepped: Vec<&&str> = unstepped.difference(&registered).collect();
     assert!(
@@ -513,8 +536,7 @@ async fn main() {
     // nextest-visible `spec_gherkin_wellformed` target; this is the
     // runtime backstop.
     assert_eq!(
-        total_parsing_errors,
-        0,
+        total_parsing_errors, 0,
         "coverage guard (c) failed: {total_parsing_errors} spec/uat file(s) produced \
          unparseable Gherkin, so every scenario in them was silently dropped. Run \
          `cargo nextest run -p resinsim-core --test spec_gherkin_wellformed` \
