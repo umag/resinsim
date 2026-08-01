@@ -3,6 +3,8 @@ pub mod cavity_detector;
 pub mod crack_propagator;
 pub mod cure_calculator;
 pub mod failure_predictor;
+#[cfg(feature = "field-sim")]
+pub mod field_slicer;
 pub mod force_comparator;
 pub mod force_series_extractor;
 pub mod layer_timing_calculator;
@@ -30,6 +32,8 @@ pub use cavity_detector::{CavityDetector, CavityError, CavityEvent};
 pub use crack_propagator::CrackPropagator;
 pub use cure_calculator::CureCalculator;
 pub use failure_predictor::FailurePredictor;
+#[cfg(feature = "field-sim")]
+pub use field_slicer::{FieldRef, FieldSlicer, FieldSlicerError};
 pub use force_comparator::{ComparisonReport, ForceComparator};
 pub use force_series_extractor::{
     argmax_by, filter_layer_range, peak_index, ForceSeriesExtractor, LayerForce,
