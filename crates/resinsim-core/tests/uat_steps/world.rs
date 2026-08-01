@@ -9,7 +9,7 @@
 use cucumber::World;
 use resinsim_core::entities::{PrinterProfile, ResinProfile};
 use resinsim_core::simulation::PrintSimulation;
-use resinsim_core::values::{PeelForce, SafetyFactor, SupportCapacity};
+use resinsim_core::values::{LayerMask, PeelForce, SafetyFactor, SupportCapacity};
 
 use super::fixtures::{
     PRINTER_BUILD_ENVELOPE_INLINE, PRINTER_FIELD_SIM_SCALARS, RESIN_FIELD_SIM_THERMAL_LINES,
@@ -89,6 +89,41 @@ pub struct UatWorld {
     /// runs scenarios concurrently — a thread_local would leak state
     /// across scenarios on the same thread (caught 2026-05-19).
     pub ctb_layer_inputs: Option<Vec<resinsim_core::io::sliced::LayerInput>>,
+
+    // ---- Peel-physics band (base-adhesion-shifts-peel-peak,
+    // profile-vacuum-pressure-scales-suction,
+    // peel-shape-factor-scales-with-aspect-ratio) — uat-unskip-campaign
+    // increment 1, plan step 7. Grouped so the three sibling modules share
+    // one obvious block rather than scattering fields across the struct. ----
+    /// Resin under test, built via `ResinBuilder` — never hand-copied TOML.
+    pub peel_resin: Option<ResinProfile>,
+    /// Printer under test, built via `PrinterBuilder`.
+    pub peel_printer: Option<PrinterProfile>,
+    /// Full per-layer output from the shared "When a job is simulated"
+    /// step (`SimulationRunner::run_from_areas` / `run_from_layer_inputs`),
+    /// read directly by Then steps — never reconstructed from a formula.
+    pub peel_sim_layers: Option<Vec<resinsim_core::entities::LayerResult>>,
+    /// `validate()` error captured for profile-rejection scenarios (vacuum
+    /// UAT-3), so the step asserts on the `Result` instead of panicking at
+    /// construction time.
+    pub peel_validate_err: Option<String>,
+    /// Layer masks under direct shape-factor comparison (peel-shape
+    /// UAT-1), built via `LayerMaskBuilder`.
+    pub peel_masks: Option<Vec<LayerMask>>,
+    /// Synthetic `LayerInput` stack (e.g. a closed-cup sealed cavity) for
+    /// `run_from_layer_inputs`-driven scenarios (profile-vacuum-pressure
+    /// UAT-1). Kept distinct from `ctb_layer_inputs` above — that field is
+    /// specifically the CTB-sourced stack for ctb-layer-height-authority.
+    pub peel_layer_inputs: Option<Vec<resinsim_core::io::sliced::LayerInput>>,
+    /// Per-mask `PeelForceCalculator::peel_shape_factor` results, in the
+    /// same order as `peel_masks` (peel-shape-factor-scales-with-aspect-
+    /// ratio UAT-1's direct compact-vs-thin comparison).
+    pub peel_mask_shape_factors: Option<Vec<f32>>,
+    /// `FailurePredictor::predict_layer` output with NO shape factor
+    /// applied — the "before" half of peel-shape UAT-4's isolation check.
+    pub peel_shape_unshaped_result: Option<resinsim_core::entities::LayerResult>,
+    /// Same, WITH a shape factor applied — the "after" half.
+    pub peel_shape_shaped_result: Option<resinsim_core::entities::LayerResult>,
 }
 
 /// Summary of a single `CavityDetector` event for step-def assertions.
@@ -115,7 +150,6 @@ pub struct CavityEventSummary {
 /// deserialises it. Defaults mirror `generic_msla_4k()` (20..100 µm layer
 /// height range, 1..60 s exposure range, 460 N/mm stiffness, etc.).
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PrinterBuilder {
     name: String,
     layer_min: f32,
@@ -126,9 +160,12 @@ pub struct PrinterBuilder {
     lift_speed_max: f32,
     z_stiffness_n_per_mm: f32,
     led_power_mw_cm2: f32,
+    /// ADR-0022 Stage 2 suction ΔP. `None` ⇒ the TOML omits the key
+    /// entirely, matching the "unset" branch of `PrinterProfile`'s
+    /// `Option<f32>` field (profile-vacuum-pressure-scales-suction UAT-2).
+    vacuum_pressure_kpa: Option<f32>,
 }
 
-#[allow(dead_code)]
 impl PrinterBuilder {
     /// Defaults track `PrinterProfile::generic_msla_4k()` — the same
     /// factory the hand-written tests/cure_properties.rs, tests/force_properties.rs,
@@ -144,6 +181,7 @@ impl PrinterBuilder {
             lift_speed_max: 200.0,
             z_stiffness_n_per_mm: 460.0, // KB-130 generic_msla_4k default
             led_power_mw_cm2: 4.0,
+            vacuum_pressure_kpa: None,
         }
     }
 
@@ -164,12 +202,50 @@ impl PrinterBuilder {
         self
     }
 
+    /// Not called by any scenario landed so far (base-adhesion / vacuum /
+    /// peel-shape don't touch Z-deflection failure prediction) — scoped
+    /// `expect` rather than the blanket impl-level `allow` this builder
+    /// used to carry, so removing the blanket (uat-unskip-campaign
+    /// increment 1) doesn't silently widen into "every unused method is
+    /// now invisible to clippy" again. Reserved for a future
+    /// Z-deflection-band UAT scenario.
+    #[expect(dead_code, reason = "reserved for a future Z-deflection UAT scenario")]
     pub fn with_z_stiffness(mut self, n_per_mm: f32) -> Self {
         self.z_stiffness_n_per_mm = n_per_mm;
         self
     }
 
+    /// ADR-0022 Stage 2 suction ΔP (profile-vacuum-pressure-scales-suction
+    /// UAT-1/UAT-3). Deliberately accepts any `f32` including out-of-range
+    /// or non-finite values — validity is `PrinterProfile::validate()`'s
+    /// job, exercised via [`Self::build_unvalidated`] for the rejection
+    /// scenario, not this setter's.
+    pub fn with_vacuum_pressure_kpa(mut self, kpa: f32) -> Self {
+        self.vacuum_pressure_kpa = Some(kpa);
+        self
+    }
+
     pub fn build(self) -> resinsim_core::entities::PrinterProfile {
+        let p = self.build_unvalidated();
+        p.validate()
+            .expect("PrinterBuilder output must satisfy validate()");
+        p
+    }
+
+    /// Parse the assembled TOML WITHOUT validating. For scenarios that
+    /// intentionally construct an out-of-range profile (above-atmospheric /
+    /// zero / negative / NaN `vacuum_pressure_kpa`) and assert on the
+    /// `validate()` `Err` themselves — `build()` would panic before the
+    /// step ever got to make that assertion.
+    pub fn build_unvalidated(self) -> resinsim_core::entities::PrinterProfile {
+        // TOML has no `NaN` literal (Rust's `{v}` Display prints "NaN",
+        // capitalised, which the TOML parser rejects) — the spec-lowercase
+        // `nan` keyword is what TOML 1.0 / the `toml` crate accept.
+        let vacuum_line = match self.vacuum_pressure_kpa {
+            None => String::new(),
+            Some(v) if v.is_nan() => "vacuum_pressure_kpa = nan\n".to_string(),
+            Some(v) => format!("vacuum_pressure_kpa = {v}\n"),
+        };
         let toml_str = format!(
             r#"
 name = "{name}"
@@ -183,7 +259,7 @@ z_stiffness_n_per_mm = {stiff}
 delta_t_steady_c = 10.0
 thermal_tau_sec = 1200.0
 lcd_uniformity_variation = 0.22
-{field_sim_scalars}{envelope}"#,
+{vacuum_line}{field_sim_scalars}{envelope}"#,
             name = self.name,
             led = self.led_power_mw_cm2,
             layer_min = self.layer_min,
@@ -201,11 +277,7 @@ lcd_uniformity_variation = 0.22
             field_sim_scalars = PRINTER_FIELD_SIM_SCALARS,
             envelope = PRINTER_BUILD_ENVELOPE_INLINE,
         );
-        let p: resinsim_core::entities::PrinterProfile =
-            toml::from_str(&toml_str).expect("PrinterBuilder TOML must parse");
-        p.validate()
-            .expect("PrinterBuilder output must satisfy validate()");
-        p
+        toml::from_str(&toml_str).expect("PrinterBuilder TOML must parse")
     }
 }
 
@@ -234,6 +306,14 @@ pub struct ResinBuilder {
     linear_shrinkage_pct: f32,
     degradation_temp_c: Option<f32>,
     min_safe_temp_c: Option<f32>,
+    /// ADR-0022 Stage 1 first-layer base-adhesion term (KB-116). `None` ⇒
+    /// the TOML omits the key, matching the "unset" branch
+    /// (base-adhesion-shifts-peel-peak UAT-2).
+    base_adhesion_elevation_kpa: Option<f32>,
+    /// ADR-0022 Stage 3 A/L peel shape factor strength (KB-185 Tier-1).
+    /// `None` ⇒ the TOML omits the key (peel-shape-factor-scales-with-
+    /// aspect-ratio UAT-2).
+    peel_shape_factor_strength: Option<f32>,
     recipe: RecipeBuilder,
 }
 
@@ -254,6 +334,8 @@ impl ResinBuilder {
             linear_shrinkage_pct: 1.5,
             degradation_temp_c: None,
             min_safe_temp_c: None,
+            base_adhesion_elevation_kpa: None,
+            peel_shape_factor_strength: None,
             recipe: RecipeBuilder::new(),
         }
     }
@@ -294,11 +376,36 @@ impl ResinBuilder {
         self
     }
 
+    /// ADR-0022 Stage 1 first-layer base-adhesion term (KB-116).
+    /// base-adhesion-shifts-peel-peak UAT-1.
+    pub fn with_base_adhesion_elevation_kpa(mut self, kpa: f32) -> Self {
+        self.base_adhesion_elevation_kpa = Some(kpa);
+        self
+    }
+
+    /// ADR-0022 Stage 3 A/L peel shape factor strength (KB-185 Tier-1).
+    /// peel-shape-factor-scales-with-aspect-ratio UAT-1/UAT-3/UAT-4.
+    pub fn with_peel_shape_factor_strength(mut self, strength: f32) -> Self {
+        self.peel_shape_factor_strength = Some(strength);
+        self
+    }
+
     pub fn build(self) -> resinsim_core::entities::ResinProfile {
         let thermal_lines = match (self.degradation_temp_c, self.min_safe_temp_c) {
             (Some(d), Some(m)) => format!("degradation_temp_c = {d}\nmin_safe_temp_c = {m}\n"),
             _ => String::new(),
         };
+        // Both opt-in ADR-0022 scalars are plain root-level keys — `None`
+        // omits the line entirely so the profile round-trips through the
+        // same "unset" branch as a pre-Stage-1/Stage-3 TOML.
+        let base_adhesion_line = self
+            .base_adhesion_elevation_kpa
+            .map(|v| format!("base_adhesion_elevation_kpa = {v}\n"))
+            .unwrap_or_default();
+        let peel_shape_line = self
+            .peel_shape_factor_strength
+            .map(|v| format!("peel_shape_factor_strength = {v}\n"))
+            .unwrap_or_default();
         let toml_str = format!(
             r#"name = "{name}"
 penetration_depth_um = {dp}
@@ -311,7 +418,7 @@ viscosity_mpa_s = {visc}
 reference_temp_c = {ref_t}
 activation_energy_kj_mol = {ea}
 density_g_cm3 = {dens}
-{field_sim_thermal}{thermal_lines}
+{base_adhesion_line}{peel_shape_line}{field_sim_thermal}{thermal_lines}
 {recipe}
 "#,
             name = self.name,
@@ -488,5 +595,61 @@ impl PredictLayerInputs {
             resinsim_core::values::CrossSectionArea::new(0.0).expect("0 mm² is non-negative");
         self.prev_area = self.area;
         self
+    }
+}
+
+/// Builder for the `LayerMask` shapes the peel-physics band's shape-factor
+/// scenarios need (plan step 7). Named shapes only — no general-purpose
+/// mask DSL, so each factory documents exactly which UAT it exists for.
+pub struct LayerMaskBuilder;
+
+impl LayerMaskBuilder {
+    /// A solid `side × side` block MARGINED inside a `(side + 2) × (side +
+    /// 2)` grid — i.e. NOT fully solid — so it exercises the real
+    /// `raw = 4√A / L` formula rather than the `is_fully_solid()`
+    /// placeholder guard (that guard is what UAT-3 tests separately, via
+    /// [`Self::fully_solid`]). `side = 3` (9-cell area, matching the
+    /// shipped `build_shape_factor_map_off_fully_solid_and_thin` nextest
+    /// fixture) is the KB-181 square baseline: perimeter 12 mm at 1 mm
+    /// voxels → `raw = 4·3/12 = 1.0`.
+    ///
+    /// Pair with [`Self::thin_1xn`]`(side * side, ..)` for an EQUAL-AREA
+    /// compact-vs-thin comparison (peel-shape-factor-scales-with-aspect-
+    /// ratio UAT-1's exact requirement — the existing nextest fixture
+    /// compares a 9-cell square against a 5-cell line, which is NOT
+    /// equal-area and so cannot stand in for this UAT).
+    pub fn compact_square(side: u32, voxel_mm: f32) -> LayerMask {
+        let grid = side + 2;
+        let mut m = LayerMask::new(grid, grid, voxel_mm).expect("margined square grid constructs");
+        for x in 1..=side {
+            for y in 1..=side {
+                m.set(x, y).expect("block is inside the 1-cell margin");
+            }
+        }
+        m
+    }
+
+    /// A solid 1-cell-wide, `length`-cell-tall line, margined inside a
+    /// `3 × (length + 2)` grid (same "not fully solid" rationale as
+    /// [`Self::compact_square`]). `length = side * side` from a paired
+    /// `compact_square(side, ..)` call gives equal solid area with a much
+    /// larger perimeter, so the ranking + `(0, 1)` bound in UAT-1 come from
+    /// a genuine aspect-ratio difference, not an area difference.
+    pub fn thin_1xn(length: u32, voxel_mm: f32) -> LayerMask {
+        let mut m = LayerMask::new(3, length + 2, voxel_mm).expect("margined line grid constructs");
+        for y in 1..=length {
+            m.set(1, y).expect("line is inside the 1-cell margin");
+        }
+        m
+    }
+
+    /// A fully-solid `width × height` mask — the exact shape
+    /// `SimulationRunner::run_from_areas` (`1×1`) and the
+    /// `run_from_layer_inputs` maskless-input fallback (`W×H`) synthesise.
+    /// `is_fully_solid()` is `true` by construction, so ADR-0022 Stage 3
+    /// discriminates it to shape factor `1.0` regardless of strength
+    /// (peel-shape-factor-scales-with-aspect-ratio UAT-3).
+    pub fn fully_solid(width: u32, height: u32, voxel_mm: f32) -> LayerMask {
+        LayerMask::new_all_solid(width, height, voxel_mm).expect("fully-solid grid constructs")
     }
 }
