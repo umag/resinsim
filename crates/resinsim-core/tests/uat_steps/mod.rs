@@ -41,5 +41,6 @@ pub mod recipe_inside_printer_range;
 pub mod recipe_out_of_range;
 pub mod resin_switch_changes_simulation;
 pub mod safety_factor_zero_force;
+pub mod sim_json_roundtrips_zero_force_layer;
 pub mod suction_detector_raft_false_positive;
 pub mod thermal_degradation;
