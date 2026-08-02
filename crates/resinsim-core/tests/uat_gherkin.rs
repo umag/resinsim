@@ -106,8 +106,46 @@ use uat_steps::{
 /// Outline: 3 authored rows expand to 5 RUNTIME scenarios, so its
 /// registered count is 5, not 3. A future Examples-table edit moves this
 /// number and the guard will (correctly) fail — that is not a guard bug.
+///
+/// THIRD DEBT CLASS (uat-unskip-campaign increment A2, 2026-08-02):
+/// **config-asymmetric field-sim scenarios.** Distinct from "no module"
+/// (nobody wrote steps) and "blocked scenario" (one scenario in an
+/// otherwise-stepped spec waits on a named production gap, e.g. the
+/// `cli-temperature-flag-validation` worked example above) — here EVERY
+/// scenario in the spec is unreachable on default features because its
+/// only production entry point is `#[cfg(feature = "field-sim")]`, while
+/// `cargo uat` and `cargo uat-field-sim` share this ONE `const` register.
+/// A step-def module gated the same way would satisfy one config's
+/// expected count and violate the other's — the "identical shape in both
+/// configs" invariant the harness enforces. A2 established this class BY
+/// SYMBOL (grep the exact producer/consumer function for `#[cfg(feature =
+/// "field-sim")]`, not by band label or guesswork) for
+/// `calibration-disclosure-3of3-predicate` and
+/// `honest-zero-yield-fraction-on-calibrated-solid` below; both cite the
+/// filed blocking issue `uat-unskip-band-d` (2026-08-02) per this file's
+/// amended register rule.
+///
+/// FAULT-INJECTION BRANCH REACHABILITY (folded from A2's dispatch-1 review):
+/// an undefined step in a spec whose register entry is STILL PRESENT
+/// (stale or wrong count) surfaces as a MISMATCH (direction 3 below), not
+/// as UNEXPECTED (direction 1) — direction 1 only fires once the entry is
+/// genuinely ABSENT from this list. A fault-injection probe run BEFORE a
+/// spec's entry is removed must temporarily remove it too (and revert),
+/// or it will exercise direction 3 instead of the direction it intended.
 const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("athena-analytic-log-ingest", 2),
+    // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
+    // filed 2026-08-02): every one of this Scenario Outline's 5 runtime
+    // scenarios needs `FailurePredictor::predict_strain_failures`
+    // (failure_predictor.rs:423) — the sole producer of `FailureType::
+    // WarpingRisk` in the workspace — which is `#[cfg(feature = "field-sim")]`
+    // and consumes `&StrainField` / `&StressField`, themselves
+    // `#[cfg(feature = "field-sim")]` re-exports (values/mod.rs:56-61). A
+    // step-def module gated the same way would skip under `cargo uat`
+    // (register wants 5) and not skip under `cargo uat-field-sim` (register
+    // wants 0) — one shared `const` register cannot satisfy both configs at
+    // once. See uat-unskip-band-d (NOT uat-fixtures-fieldsim-adr0020-gap,
+    // which is the unrelated missing-TOML-fixture-fields constraint).
     ("calibration-disclosure-3of3-predicate", 5),
     ("cli-report-health-layer-height-provenance", 0),
     ("cli-report-health-print-time", 3),
@@ -118,8 +156,17 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("cli-sim-voxel-cure-emits-tier2-thermal-log", 1),
     ("cross-feature-toml-interchange", 2),
     ("cumulative-times-sec-accessor", 2),
+    // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
+    // filed 2026-08-02): both scenarios need voxel-mode
+    // `LayerResult.voxel_yield_fraction` / `.strain_magnitude_max`,
+    // populated only inside the `#[cfg(feature = "field-sim")]` block at
+    // simulation_runner.rs:801-847; the entry point `SimulationRunner::
+    // run_from_layer_inputs_with_voxel` (simulation_runner.rs:446-448) is
+    // itself feature-gated. On default features both fields are permanently
+    // `None`, so `Some(0.0)` is unrepresentable, not merely untested. Same
+    // config-asymmetry constraint as calibration-disclosure-3of3-predicate
+    // above — see uat-unskip-band-d.
     ("honest-zero-yield-fraction-on-calibrated-solid", 2),
-    ("interlayer-crack-knockdown-scales-with-perimeter", 4),
     ("light-crosstalk-3d-gaussian-convolution", 9),
     ("nanodlp-archive-bomb-rejected", 1),
     ("nanodlp-calibrate-compares-real-force", 3),
