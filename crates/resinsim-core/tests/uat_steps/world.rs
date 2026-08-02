@@ -161,6 +161,18 @@ pub struct UatWorld {
     /// UAT-4's second When/Then pair: same, for the branch where capacity
     /// still EXCEEDS the peel load (no Delamination).
     pub crack_failures_above: Option<Vec<resinsim_core::entities::FailureEvent>>,
+
+    // ---- sim-json-roundtrips-zero-force-layer — uat-unskip-campaign
+    // ratified A2 top-up. Reuses `sim_primary` (recipe + pairing band,
+    // above) for the constructed `PrintSimulation`, and `last_sim_err` /
+    // `cli_exit_code` / `cli_stdout` / `cli_stderr` (CLI subprocess band,
+    // above) for the two consumer scenarios' real `resinsim report
+    // health` invocations. This is the one field genuinely new to this
+    // spec. ----
+    /// Path of the `sim.json` this spec's Given/When steps produced via
+    /// the real `save_to_path` / `save_with_provenance` entry points —
+    /// never a hand-serialized JSON literal.
+    pub sim_json_path: Option<std::path::PathBuf>,
 }
 
 /// Summary of a single `CavityDetector` event for step-def assertions.
