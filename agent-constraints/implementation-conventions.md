@@ -179,24 +179,38 @@ Authoring-time detection of malformed Gherkin lives in
 `tests/spec_gherkin_wellformed.rs`, which IS nextest-visible and so runs in
 the four-config matrix.
 
-**Expected shape is IDENTICAL in both configs** (current as of the KB-153
-single-emission-seam fix, 2026-08-02): 52 features, 160 scenarios
-(58 passed, 102 skipped, 0 failed), 395 steps (293 passed, 102 skipped, 0
-failed), exit 0, register at 35 entries. This shape moves as the campaign
-lands more increments — trust `cargo uat`'s own `[Consolidated total]` line
-over this paragraph if they disagree, and update this paragraph when they
-do. A field-sim run reporting FEWER total steps than the default run means
-a scenario is aborting early (a fixture regressed and is panicking before
-reaching every step) — treat that as a hard failure, not noise, even if the
-final failed-count still reads 0.
+**Expected shape is IDENTICAL in both configs** (current as of
+`uat-unskip-campaign` increment A2 — `interlayer-crack-knockdown-scales-
+with-perimeter` plus the ratified `sim-json-roundtrips-zero-force-layer`
+top-up, 2026-08-02): 52 features, 160 scenarios (65 passed, 95 skipped, 0
+failed), 424 steps (329 passed, 95 skipped, 0 failed), exit 0, register at
+33 entries. This shape moves as the campaign lands more increments — trust
+`cargo uat`'s own `[Consolidated total]` line over this paragraph if they
+disagree, and update this paragraph when they do. A field-sim run reporting
+FEWER total steps than the default run means a scenario is aborting early
+(a fixture regressed and is panicking before reaching every step) — treat
+that as a hard failure, not noise, even if the final failed-count still
+reads 0.
 
 **Campaign pointer** (`uat-unskip-campaign`, ratified 2026-07-28): recommended
 bands, in order — Band A domain/default-features, Band B nanodlp, Band C
-CLI (all DO); Band D field-sim-gated (DEFER, blocked on
-`uat-fixtures-fieldsim-adr0020-gap`); Band E viz (SPLIT into its own issue,
-`viz-uat-cucumber-harness` — a second cucumber harness hosted inside
+CLI (all DO); Band D field-sim-gated (DEFER); Band E viz (SPLIT into its own
+issue, `viz-uat-cucumber-harness` — a second cucumber harness hosted inside
 resinsim-viz, since driving Bevy in-process from this harness would invert
-ADR-0001's layering).
+ADR-0001's layering). Increment A2 established Band-D membership BY SYMBOL,
+not by guess: of the increment's original 3-spec selection, only
+`interlayer-crack-knockdown-scales-with-perimeter` turned out to be fully
+default-features; `calibration-disclosure-3of3-predicate` and
+`honest-zero-yield-fraction-on-calibrated-solid` were demoted to Band D and
+now carry declared-debt register entries naming the exact blocking
+`#[cfg(feature = "field-sim")]` symbol each depends on and citing the filed
+issue `uat-unskip-band-d` (2026-08-02) — NOT
+`uat-fixtures-fieldsim-adr0020-gap`, which is the unrelated missing-TOML-
+fixture-fields constraint. A2's ratified top-up
+(`sim-json-roundtrips-zero-force-layer`) was symbol-verified default-
+features BEFORE any step def was written, precisely the check the original
+3-spec selection skipped — do the same for any future increment's scope
+before writing steps, not after.
 
 Hand-rolled resin/printer TOML fixtures under `tests/uat_steps/` MUST
 compose from the shared builders (`world.rs::ResinBuilder`,
