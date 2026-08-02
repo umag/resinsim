@@ -223,57 +223,61 @@ fn then_stderr_kb153(world: &mut UatWorld) {
     }
 }
 
-// DELIBERATELY NOT re-pointed (uat-unskip-campaign increment 1,
-// 2026-08-01). The current spec text asserts:
-//   And the warning surfaces in "resinsim sim" (the producer that loads
-//   profiles, post-ADR-0015) as well (not just "inspect thermal")
-// Empirical check (`resinsim sim --stl data/test_cube.stl --resin
-// generic_standard --printer generic_msla_4k --data-dir data --out ...`,
-// generic_standard omits cure_kinetics_ea_kj_mol): stderr does NOT contain
-// "KB-153" / "30 kJ/mol". `resinsim report health` doesn't emit it either
-// — only `resinsim inspect thermal` (UAT-4's first three steps, which DO
-// pass) currently does. This is a PRODUCTION defect surfaced by drift
-// repair, not a step-def bug: `cmd_sim` in
-// resinsim-inspect/src/main.rs never calls the Ea-default warning that
-// `cmd_thermal` does. Per the binding rule (findings-issue-unskip-
-// adversarial.yaml): do NOT weaken or re-point this assertion at
-// `report health` or `inspect thermal` — that recreates the exact drift
-// this repair exists to fix. The regex below intentionally still reads
-// "report health" so it stays undefined against the current spec text;
-// the scenario is registered as declared debt
-// (`SPECS_WITHOUT_STEP_DEFS` in uat_gherkin.rs, entry
-// `("cli-temperature-flag-validation", 1)`) pending a production fix,
-// tracked as issue `kb153-warning-missing-from-resinsim-sim` (filed), to
-// make `cmd_sim` (and `cmd_report_health`, which is also silent) emit the
-// same warning `cmd_thermal` does.
+// Re-pointed (KB-153 seam fix, kb153-warning-missing-from-resinsim-sim).
+// The production defect this scenario used to document is fixed: the
+// warning now emits from the single seam at
+// `profile_loader::load_resin`, which `resolve_profiles` (and therefore
+// `cmd_sim`) passes through, so `resinsim sim` warns exactly like
+// `inspect thermal` does. Do not re-point this step at a different
+// surface — the spec asserts `resinsim sim` specifically (the ADR-0015
+// producer), and that is what the fix satisfies.
 #[then(
-    regex = r#"^the warning surfaces in "report health" as well \(not just "inspect thermal"\)$"#
+    regex = r#"^the warning surfaces in "resinsim sim" \(the producer that loads profiles, post-ADR-0015\) as well \(not just "inspect thermal"\)$"#
 )]
-fn then_warning_in_report_health(_world: &mut UatWorld) {
-    // Invoke report health separately and assert the same warning.
-    // Uses cube.stl fallback — if the fixture is absent, the binary
-    // will still error at a later stage but the KB-153 warning fires
-    // during profile load which is BEFORE stl handling.
+fn then_warning_surfaces_in_sim(_world: &mut UatWorld) {
+    // Real `resinsim sim` invocation against the repo's committed
+    // test_cube.stl fixture. Measured cost: ~0.05 s / 200 layers on a
+    // warm debug binary — cheap enough for a per-scenario subprocess.
+    // Assert exit 0 (not just "stderr happens to contain the needles on
+    // an error path") so a broken producer path fails loudly.
     let data_dir = workspace_data_dir();
+    let stl = data_dir.join("test_cube.stl");
+    let out_dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("uat-kb153-sim");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("mkdir uat-kb153-sim tmpdir");
+    let out_path = out_dir.join("out.sim.json");
     let outcome = invoke_resinsim(
         &[
-            "report",
-            "health",
+            "sim",
+            "--stl",
+            stl.to_str().unwrap_or_default(),
             "--resin",
             "generic_standard",
             "--printer",
             "generic_msla_4k",
             "--data-dir",
             data_dir.to_str().unwrap_or_default(),
-            "--stl",
-            "/nonexistent/stl/path.stl",
+            "--out",
+            out_path.to_str().unwrap_or_default(),
         ],
         &[],
     );
+    assert_eq!(
+        outcome.exit_code, 0,
+        "resinsim sim must succeed; stderr={}",
+        outcome.stderr
+    );
     let stderr = &outcome.stderr;
-    assert!(
-        stderr.contains("KB-153") || stderr.contains("30 kJ/mol"),
-        "report health must also surface the Ea-default warning; got: {stderr}",
+    for needle in ["30 kJ/mol", "literature midpoint estimate", "KB-153"] {
+        assert!(
+            stderr.contains(needle),
+            "resinsim sim must also surface the Ea-default warning ('{needle}'); got: {stderr}",
+        );
+    }
+    assert_eq!(
+        stderr.matches("KB-153").count(),
+        1,
+        "warning must appear exactly once on the sim producer path; got: {stderr}",
     );
 }
 

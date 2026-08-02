@@ -57,17 +57,21 @@ use uat_steps::{
 ///  - **No step-def module at all.** Expected count == the spec's total
 ///    scenario count; every scenario skips (undefined steps).
 ///  - **A step-def module exists, but one or more scenarios are
-///    INTENTIONALLY left undefined as declared debt** — e.g.
-///    `cli-temperature-flag-validation`'s UAT-4 asserts the KB-153 warning
-///    surfaces from `resinsim sim`, which does not currently emit it (a
-///    PRODUCTION defect uncovered while repairing this spec's regex drift,
-///    2026-08-01 — see the comment above `then_warning_in_report_health` in
-///    `uat_steps/cli_temperature_flag_validation.rs`). The rule from
-///    `findings-issue-unskip-adversarial.yaml` binds here: do NOT weaken or
-///    re-point the assertion to the surface that happens to work
-///    (`report health`/`inspect thermal`) — that recreates the exact
-///    drift this repair exists to fix. Register the gap instead, naming
-///    the blocking issue (filed as `kb153-warning-missing-from-resinsim-sim`).
+///    INTENTIONALLY left undefined as declared debt.** Worked example,
+///    ratified and since paid down: `cli-temperature-flag-validation`'s
+///    UAT-4 briefly carried exactly this shape — its trailing "warning
+///    surfaces in resinsim sim" step was undefined because `resinsim sim`
+///    did not yet emit the KB-153 warning (a PRODUCTION defect uncovered
+///    while repairing this spec's regex drift, 2026-08-01). Per
+///    `findings-issue-unskip-adversarial.yaml`: the right move was NOT to
+///    weaken or re-point the assertion to the surface that happened to
+///    work (`report health`/`inspect thermal`) — that would have
+///    recreated the exact drift this repair exists to fix. The gap was
+///    registered instead, naming the blocking issue
+///    (`kb153-warning-missing-from-resinsim-sim`), and the entry was
+///    removed once the production fix landed — the single emission seam
+///    at `profile_loader::load_resin` (see
+///    `uat_steps/cli_temperature_flag_validation.rs`).
 ///
 /// This list is a debt register, not a permanent exemption. It exists
 /// because step-def authoring stopped after the 2026-04 rollout while spec
@@ -78,15 +82,18 @@ use uat_steps::{
 /// AMENDED RULE (uat-unskip-campaign increment 1, 2026-08-01): the
 /// original rule was "the campaign shrinks this register; nothing is ever
 /// added." That absolute no longer holds — `cli-temperature-flag-validation`
-/// above is a real, ratified counter-example: a spec CAN be freshly stepped
+/// above is the worked, ratified example: a spec CAN be freshly stepped
 /// (module lands, register entry would normally be deleted entirely) and
 /// STILL keep exactly one declared-debt entry for a single scenario that is
 /// blocked on a named, filed, external issue rather than on missing test
 /// authorship. The rule is therefore: an entry may be ADDED only when it
-/// names a blocking issue (not "TODO later" — an actual filed issue,
-/// `kb153-warning-missing-from-resinsim-sim` is the live instance), and
-/// every OTHER change to this register must be a removal or a count
-/// decrease. Net scenario-debt (the sum of every count in this list) still
+/// names a blocking issue (not "TODO later" — an actual filed issue;
+/// `kb153-warning-missing-from-resinsim-sim` was the live instance that
+/// motivated this amendment, since closed by the KB-153 seam fix — the
+/// register entry it justified has been removed, but the amendment and its
+/// worked example stand), and every OTHER change to this register must be
+/// a removal or a count decrease. Net scenario-debt (the sum of every
+/// count in this list) still
 /// monotonically shrinks release over release — a blocking-issue entry
 /// trades an anonymous "nobody wrote the step" skip for a named, tracked,
 /// externally-visible one; it does not hide debt, it demotes it from
@@ -108,10 +115,6 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("cli-sim-rejects-tampered-sidecar", 4),
     ("cli-sim-rejects-unknown-schema-version", 4),
     ("cli-sim-voxel-cure-emits-tier2-thermal-log", 1),
-    // Declared debt WITHIN an otherwise-stepped spec — see the doc comment
-    // above. Only UAT-4's trailing "warning surfaces in resinsim sim" step
-    // stays undefined; UAT-1/2/3/5/6 are stepped and pass.
-    ("cli-temperature-flag-validation", 1),
     ("cross-feature-toml-interchange", 2),
     ("cumulative-times-sec-accessor", 2),
     ("honest-zero-yield-fraction-on-calibrated-solid", 2),
