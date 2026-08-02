@@ -51,14 +51,28 @@ initiation ⇒ less energy needed to cross the gel threshold. Tested in
 
 When `ResinProfile.cure_kinetics_ea_kj_mol = None`, the simulator uses
 `DEFAULT_CURE_KINETICS_EA_KJ_MOL = 30.0` and the CLI emits a loud stderr
-warning. The warning SHOULD appear consistently across:
+warning. The emission lives at a single seam,
+`profile_loader::load_resin` (`crates/resinsim-inspect/src/profile_loader.rs`)
+— every subcommand that loads a resin profile passes through it exactly
+once per load, so the warning surfaces consistently across:
 
-- `resinsim inspect thermal` stderr (table mode) and
-  `"cure_kinetics_ea_is_default": true` in JSON mode.
-- `resinsim report health` stderr (non-JSON).
+- `resinsim sim` stderr — the ADR-0015 producer surface.
+- `resinsim inspect thermal` stderr, in BOTH table mode and `--json` mode
+  (stdout JSON is a separate stream and is unaffected; it additionally
+  carries `"cure_kinetics_ea_is_default": true`).
+- `resinsim inspect cure` / `inspect force` / `inspect zaxis` /
+  `inspect calibrate` stderr, whenever a `--resin` profile is loaded.
 - This KB entry.
 - `ResinProfile::cure_kinetics_ea_kj_mol` doc comment.
 - `CureCalculator::cure_depth_at_temp` doc comment.
+
+`resinsim report health --in` is a deliberate exception: post-ADR-0015 it
+consumes a `sim.json` envelope and loads no resin TOML at all, so it
+cannot pass through the `load_resin` seam and stays silent. Surfacing the
+flag there would require a `cure_kinetics_ea_is_default` field on the
+sim.json v2 envelope schema — tracked as a follow-up,
+`sim-json-envelope-ea-default-flag`, pinned in code by
+`report_health_in_does_not_warn` (`crates/resinsim-inspect/tests/thermal_cli_warnings.rs`).
 
 If any surface drops the estimate-only framing, downstream users may treat
 30 kJ/mol as measured.

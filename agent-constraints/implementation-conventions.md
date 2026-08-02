@@ -159,13 +159,14 @@ that campaign pointer below for what changed and why):
   registered spec whose actual count differs from its expected count
   (partial progress not reflected). The debt register is still meant to
   shrink, with ONE amendment: an entry may be ADDED when it names a
-  blocking issue rather than "nobody wrote the step yet" (see
-  `cli-temperature-flag-validation`'s entry in `uat_gherkin.rs` for the
-  live example — one scenario stays declared debt against filed issue
-  `kb153-warning-missing-from-resinsim-sim`). Net scenario-debt (the sum of
-  every registered count) still monotonically shrinks; a blocking-issue
-  entry demotes a skip from silent to named and tracked, it does not hide
-  it.
+  blocking issue rather than "nobody wrote the step yet" — the worked,
+  ratified example is `cli-temperature-flag-validation`'s brief entry
+  against filed issue `kb153-warning-missing-from-resinsim-sim` (see the
+  doc comment on `SPECS_WITHOUT_STEP_DEFS` in `uat_gherkin.rs`), since paid
+  down and removed once the KB-153 single-emission-seam fix landed. Net
+  scenario-debt (the sum of every registered count) still monotonically
+  shrinks; a blocking-issue entry demotes a skip from silent to named and
+  tracked, it does not hide it.
 - **(a), layer 3 (structural, MUST-DECIDE-2):** the `pub mod` set in
   `uat_steps/mod.rs` and the `use uat_steps::{...}` set in `uat_gherkin.rs`
   (which forces every module to link so its `#[given]/#[when]/#[then]`
@@ -178,10 +179,10 @@ Authoring-time detection of malformed Gherkin lives in
 `tests/spec_gherkin_wellformed.rs`, which IS nextest-visible and so runs in
 the four-config matrix.
 
-**Expected shape is IDENTICAL in both configs** (current as of
-`uat-unskip-campaign` increment 1, 2026-08-01): 52 features, 160 scenarios
-(57 passed, 103 skipped, 0 failed), 395 steps (292 passed, 103 skipped, 0
-failed), exit 0, register at 36 entries. This shape moves as the campaign
+**Expected shape is IDENTICAL in both configs** (current as of the KB-153
+single-emission-seam fix, 2026-08-02): 52 features, 160 scenarios
+(58 passed, 102 skipped, 0 failed), 395 steps (293 passed, 102 skipped, 0
+failed), exit 0, register at 35 entries. This shape moves as the campaign
 lands more increments — trust `cargo uat`'s own `[Consolidated total]` line
 over this paragraph if they disagree, and update this paragraph when they
 do. A field-sim run reporting FEWER total steps than the default run means
