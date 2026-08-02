@@ -49,7 +49,8 @@ use uat_steps::{
     peel_shape_factor_scales_with_aspect_ratio,
     profile_vacuum_pressure_scales_suction, recipe_inside_printer_range, recipe_out_of_range,
     resin_switch_changes_simulation, safety_factor_zero_force,
-    suction_detector_raft_false_positive, thermal_degradation,
+    sim_json_roundtrips_zero_force_layer, suction_detector_raft_false_positive,
+    thermal_degradation,
 };
 
 /// Debt register: `(spec stem, expected skipped SCENARIO count)`.
@@ -173,7 +174,6 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("nanodlp-import-simulates", 2),
     ("printer-envelope-min-extent-under-field-sim", 1),
     ("sim-fields-sidecar-roundtrip", 4),
-    ("sim-json-roundtrips-zero-force-layer", 3),
     ("thermal-field-arrhenius-per-voxel", 2),
     ("thermal-field-sidecar-roundtrip", 3),
     ("viz-allow-mismatch-soft-fallback", 1),
