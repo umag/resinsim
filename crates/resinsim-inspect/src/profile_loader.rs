@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use resinsim_core::entities::{PrinterProfile, ResinProfile};
+use resinsim_core::entities::{PrinterProfile, ResinProfile, DEFAULT_CURE_KINETICS_EA_KJ_MOL};
 use resinsim_core::repositories::{PrinterProfileRepository, ResinProfileRepository};
 
 const DATA_DIR_ENV: &str = "RESINSIM_DATA_DIR";
@@ -92,10 +92,49 @@ pub fn load_printer(data_dir: &Path, name: &str) -> Result<PrinterProfile, Strin
 /// Load a resin profile TOML by name from `data_dir/resins/<name>.toml`.
 ///
 /// Same hard-error shape as `load_printer`.
+///
+/// **This is the single KB-153 emission seam.** Every subcommand that loads
+/// a resin profile — directly (`inspect cure`/`force`/`thermal`/`zaxis`) or
+/// via [`resolve_profiles`] (`sim`, `inspect calibrate`) — passes through
+/// here exactly once per load, so this is the one place where "a resin
+/// profile whose TOML omits `cure_kinetics_ea_kj_mol` entered the process"
+/// can be observed exactly once. On the success branch, if
+/// [`cure_kinetics_ea_default_warning`] returns `Some`, it is printed to
+/// stderr here. Callers MUST NOT re-emit it themselves — doing so
+/// reintroduces the per-command-copy bug this seam exists to close (see
+/// KB-153 / the `kb153-warning-missing-from-resinsim-sim` issue).
 pub fn load_resin(data_dir: &Path, name: &str) -> Result<ResinProfile, String> {
     let repo = ResinProfileRepository::new(&data_dir.join("resins"));
-    repo.load(name)
-        .map_err(|e| format_load_error(data_dir, "resin", name, &e, repo.list().ok()))
+    let resin = repo
+        .load(name)
+        .map_err(|e| format_load_error(data_dir, "resin", name, &e, repo.list().ok()))?;
+    if let Some(warning) = cure_kinetics_ea_default_warning(&resin) {
+        eprintln!("{warning}");
+    }
+    Ok(resin)
+}
+
+/// KB-153 policy: the cure-kinetics Ea warning text, or `None` when the
+/// resin's TOML carries a measured value.
+///
+/// Pure and total — no I/O, no side effects — so the wording is
+/// unit-testable in isolation from the CLI process. The single call site
+/// that turns `Some(msg)` into an `eprintln!` lives in [`load_resin`]'s
+/// caller-facing seam (see the doc comment there); this function must stay
+/// side-effect-free so it cannot become a second emission point.
+///
+/// The literal is moved BYTE-IDENTICALLY from the pre-move `cmd_thermal`
+/// site (main.rs, pre-KB-153-fix): em dash (U+2014), ASCII apostrophe in
+/// "resin's", single rendered line via `\`-continuations.
+pub fn cure_kinetics_ea_default_warning(resin: &ResinProfile) -> Option<String> {
+    if resin.cure_kinetics_ea_kj_mol().is_some() {
+        return None;
+    }
+    Some(format!(
+        "WARNING: cure-kinetics Ea = {DEFAULT_CURE_KINETICS_EA_KJ_MOL} kJ/mol (literature midpoint estimate) \
+         — replace with a measured value in the resin's TOML profile before \
+         trusting cure-depth drift (KB-153)"
+    ))
 }
 
 /// One-shot helper that resolves the data dir + loads both profiles in one
@@ -377,6 +416,95 @@ max_z_mm = 200.0
         .expect("write toml");
         let p = load_printer(&d, "test").expect("test.toml must load");
         assert_eq!(p.name(), "Test Printer");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn cure_kinetics_ea_default_warning_present_when_field_omitted() {
+        let d = tmpdir();
+        write_test_resin(&d, "test_resin");
+        let resin = load_resin(&d, "test_resin").expect("test_resin.toml must load");
+        let msg = cure_kinetics_ea_default_warning(&resin)
+            .expect("resin omits cure_kinetics_ea_kj_mol; warning must be Some");
+        assert!(msg.contains("30 kJ/mol"), "msg must cite the default value: {msg}");
+        assert!(
+            msg.contains("literature midpoint estimate"),
+            "msg must carry the estimate framing: {msg}"
+        );
+        assert!(msg.contains("KB-153"), "msg must cite KB-153: {msg}");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn cure_kinetics_ea_default_warning_absent_when_measured() {
+        let d = tmpdir();
+        fs::create_dir_all(d.join("resins")).expect("mkdir resins");
+        // Same fixture as write_test_resin, plus a measured cure_kinetics_ea_kj_mol.
+        fs::write(
+            d.join("resins").join("test_resin.toml"),
+            r#"
+name = "Test Resin"
+penetration_depth_um = 170.0
+critical_energy_mj_cm2 = 5.0
+tensile_strength_mpa = 35.0
+peel_adhesion_kpa = 13.0
+ref_lift_speed_mm_min = 60.0
+linear_shrinkage_pct = 1.5
+viscosity_mpa_s = 200.0
+reference_temp_c = 25.0
+activation_energy_kj_mol = 52.0
+density_g_cm3 = 1.1
+degradation_temp_c = 50.0
+min_safe_temp_c = 15.0
+cure_kinetics_ea_kj_mol = 45.0
+# ADR-0020 / t2f4: required under field-sim.
+thermal_conductivity_w_mk = 0.20
+specific_heat_j_kgk = 1700.0
+convective_top_h_w_m2k = 10.0
+
+[recipe]
+layer_height_um = 50.0
+bottom_layer_count = 6
+transition_layers = 3
+normal_exposure_sec = 2.5
+bottom_exposure_sec = 25.0
+wait_before_cure_sec = 0.5
+wait_before_release_sec = 1.0
+wait_after_release_sec = 0.0
+lift_speed_mm_min = 60.0
+lift_cycle_sec = 7.5
+lift_distance_mm = 5.0
+"#,
+        )
+        .expect("write resin toml");
+        let resin = load_resin(&d, "test_resin").expect("test_resin.toml must load");
+        assert_eq!(
+            cure_kinetics_ea_default_warning(&resin),
+            None,
+            "resin has a measured cure_kinetics_ea_kj_mol; warning must be None"
+        );
+        fs::remove_dir_all(&d).ok();
+    }
+
+    /// Wording-stability guard: the exact literal captured from the shipped
+    /// binary before the KB-153 seam move, character for character (em dash
+    /// U+2014, ASCII apostrophe in "resin's", single rendered line via the
+    /// source's `\`-continuations). A future reword that keeps the three
+    /// substring needles (tested above) but drifts the surrounding prose
+    /// would pass the other two tests and fail only this one — that is the
+    /// point of pinning it separately.
+    #[test]
+    fn warning_text_is_byte_identical_to_pre_move_wording() {
+        let d = tmpdir();
+        write_test_resin(&d, "test_resin");
+        let resin = load_resin(&d, "test_resin").expect("test_resin.toml must load");
+        let msg = cure_kinetics_ea_default_warning(&resin).expect("resin omits the field");
+        assert_eq!(
+            msg,
+            "WARNING: cure-kinetics Ea = 30 kJ/mol (literature midpoint estimate) \u{2014} \
+             replace with a measured value in the resin's TOML profile before trusting \
+             cure-depth drift (KB-153)"
+        );
         fs::remove_dir_all(&d).ok();
     }
 }

@@ -964,7 +964,7 @@ fn cmd_thermal(
     data_dir: Option<&std::path::Path>,
     json: bool,
 ) {
-    use resinsim_core::entities::{ResinProfile, DEFAULT_CURE_KINETICS_EA_KJ_MOL};
+    use resinsim_core::entities::ResinProfile;
     use resinsim_core::services::{CureCalculator, LayerTimingCalculator, ThermalCalculator};
     use resinsim_core::values::{
         AmbientTemperature, Energy, InitialLedTemperature, ThermalTimeConstant,
@@ -1093,15 +1093,11 @@ fn cmd_thermal(
             printer,
             layers.max(1),
         );
+        // KB-153: the default-Ea warning (when applicable) was already
+        // emitted once by profile_loader::load_resin at load time — see
+        // that function's doc comment for why this must not re-emit it.
         let ea_cure = resin_prof.effective_cure_kinetics_ea_kj_mol();
         let ea_cure_is_default = resin_prof.cure_kinetics_ea_kj_mol().is_none();
-        if ea_cure_is_default && !json {
-            eprintln!(
-                "WARNING: cure-kinetics Ea = {DEFAULT_CURE_KINETICS_EA_KJ_MOL} kJ/mol (literature midpoint estimate) \
-                 — replace with a measured value in the resin's TOML profile before \
-                 trusting cure-depth drift (KB-153)"
-            );
-        }
 
         let ec_ref = Energy::new(resin_prof.critical_energy_mj_cm2())
             .expect("validated ResinProfile has positive critical_energy_mj_cm2");
