@@ -124,6 +124,43 @@ pub struct UatWorld {
     pub peel_shape_unshaped_result: Option<resinsim_core::entities::LayerResult>,
     /// Same, WITH a shape factor applied — the "after" half.
     pub peel_shape_shaped_result: Option<resinsim_core::entities::LayerResult>,
+
+    // ---- Interlayer-crack band (interlayer-crack-knockdown-scales-with-
+    // perimeter) — uat-unskip-campaign increment A2. Grouped per the
+    // peel-physics band's precedent above. ----
+    /// The equal-area compact/thin `LayerResult` stacks — UAT-1's
+    /// compact-square-vs-thin pair AND UAT-2's without/with-real-perimeter
+    /// pair AND UAT-4's still-holds branch (`crack_compact_layers`) reuse
+    /// this field across their scenarios (cucumber resets `World` between
+    /// scenarios, so there is no cross-scenario leakage). "No-crack" side
+    /// first, "cracked" side second, by convention.
+    pub crack_compact_layers: Option<Vec<resinsim_core::entities::LayerResult>>,
+    /// The "cracked" side of the pair above — UAT-1's thin mask, UAT-2's
+    /// with-real-perimeter run, UAT-4's fires branch.
+    pub crack_thin_layers: Option<Vec<resinsim_core::entities::LayerResult>>,
+    /// `CrackPropagator::effective_bonded_fraction` output, compact-then-
+    /// thin order (UAT-1).
+    pub crack_bonded_fractions: Option<Vec<f64>>,
+    /// `SupportAnalyzer::assess(..).plate_capacity_n` SCALARS only — never
+    /// the full `SupportAssessment` (the scalar is all any Then step
+    /// reads). Reused across UAT-1 (compact-then-thin interlayer capacity),
+    /// UAT-3 (bottom-layer baseline-then-cracked plate adhesion), and
+    /// UAT-4 (the single reduced_interlayer_n on whichever side of the
+    /// Delamination gate the current When/Then pair is proving).
+    pub crack_interlayer_capacity_n: Option<Vec<f32>>,
+    /// UAT-3's placeholder-mask layers — the bottom-layer-with-real-
+    /// perimeter run is captured separately (via
+    /// `crack_interlayer_capacity_n`); this field holds the
+    /// `run_from_areas` (1×1) and `run_from_layer_inputs` (W×H fallback)
+    /// layer stacks, concatenated.
+    pub crack_placeholder_layers: Option<Vec<resinsim_core::entities::LayerResult>>,
+    /// UAT-4's first When/Then pair: `PrintSimulation::failures()` from the
+    /// branch where the crack-reduced interlayer capacity is BELOW the
+    /// shaped peel load (Delamination fires).
+    pub crack_failures_below: Option<Vec<resinsim_core::entities::FailureEvent>>,
+    /// UAT-4's second When/Then pair: same, for the branch where capacity
+    /// still EXCEEDS the peel load (no Delamination).
+    pub crack_failures_above: Option<Vec<resinsim_core::entities::FailureEvent>>,
 }
 
 /// Summary of a single `CavityDetector` event for step-def assertions.
