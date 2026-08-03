@@ -1,3 +1,20 @@
+# group_imports, imports_granularity and imports_layout below are
+# nightly-only rustfmt options. They are real and enforced PER NEW FILE via
+# the scratch-copy `--check` route in
+# agent-constraints/implementation-conventions.md (### Formatting) — never
+# tree-wide. The pre-existing tree diverges from them by design: it has
+# never been formatted tree-wide, and that divergence is intentional, not a
+# bug to "fix" with `cargo fmt --all`. Stable rustfmt silently ignores all
+# three (stderr warning, no error) and falls back to older, less
+# aggressive rules — it will not corrupt anything, it just won't enforce
+# these three.
+#
+# Do not delete, comment out, or label these options aspirational: several
+# of the newest files in the repo already conform to the full config below
+# (see ### Formatting for the current list), so the config is live and
+# adopted incrementally, not dead. `cargo fmt --all` must never be used to
+# "fix" the divergence between old and new files — see ### Formatting for
+# the how.
 edition = "2024"
 group_imports = "StdExternalCrate"
 imports_granularity = "Crate"

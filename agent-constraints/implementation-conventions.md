@@ -94,8 +94,54 @@ For everything else: linear stack, advance main on completion.
 
 - `cargo build --workspace` — fast sanity-check
 - `cargo nextest run --workspace` — full test suite (pinned via memory: always `cargo nextest run`, never `cargo test`)
-- `cargo fmt --all`
+- formatting — do NOT run `cargo fmt`; see ### Formatting below
 - `cargo clippy -p resinsim-core -p resinsim-inspect --all-targets -- -D warnings` — clippy clean on core + inspect (resinsim-viz has pre-existing warnings unrelated to issue 15; not blocking)
+
+### Formatting
+
+**Do NOT run `cargo fmt --all` or `cargo fmt` against the live tree.** Two
+problems stack: this machine's `PATH` resolves `rustfmt` to a stale Homebrew
+1.6.0-stable that shadows rustup's nightly toolchain, and — the part that
+actually matters — the tree has never been formatted tree-wide, so any
+`cargo fmt --all` rewrites files unrelated to your change no matter which
+binary runs it. A *correct* nightly binary rewrites MORE files than the
+stale one, not fewer — roughly four times as many, order-of-magnitude,
+measured 2026-08-02 over the tracked mod-free leaf files under `crates/`
+via scratch `--check` runs. `c0256a1` had to rebuild ~23 unrelated fixture
+files after a stray `cargo fmt --all`; `9532775` is the commit where that
+run actually fired and shipped restyled unrelated workspace files inside a
+calibration commit.
+
+Instead, check formatting on a scratch copy and never write to the live
+tree:
+
+```sh
+# Leaf file with no `mod x;` declarations of its own
+SCRATCH=$(mktemp -d)
+cp path/to/your_file.rs rustfmt.toml "$SCRATCH/"
+cd "$SCRATCH"
+rustup run nightly rustfmt --config-path rustfmt.toml --check your_file.rs
+```
+
+```sh
+# Whole crate tree — required whenever the file has sibling `mod` decls;
+# a single-file copy can't resolve them and the check silently misses hunks
+SCRATCH=$(mktemp -d)
+cp -R crates/<crate>/src "$SCRATCH/src"
+cp rustfmt.toml "$SCRATCH/"
+cd "$SCRATCH"
+rustup run nightly rustfmt --config-path rustfmt.toml --check src/main.rs
+```
+
+Do not add `--unstable-features`; it is not required on nightly.
+
+Two adjudication rules, from practice: **existing files** keep their own
+local convention — fix only the hunks your change touched, leave
+pre-existing drift alone. **New files** may adopt the full configured style
+in `rustfmt.toml` end-to-end; several recent files already do.
+
+A large diff from the check command is EXPECTED — the tree has never been
+formatted — and is not a signal to run `cargo fmt --all`.
 
 ### Cargo feature matrix (ADR-0017, t2f1)
 
