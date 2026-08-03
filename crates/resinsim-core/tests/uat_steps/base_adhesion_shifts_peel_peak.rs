@@ -328,11 +328,11 @@ fn then_kb114_values_unchanged(_world: &mut UatWorld) {
 
 // ---- helpers ----------------------------------------------------------------
 
+/// Delegates to the shared home in `fixtures.rs` (moved there in
+/// uat-unskip-a3-b step 2 so every nanodlp step-def module shares one path
+/// literal — docs/patterns/anti/fixture-copy-of-shared-builder.md).
 fn mini_nanodlp_path() -> std::path::PathBuf {
-    workspace_data_dir()
-        .parent()
-        .expect("workspace_data_dir has a repo-root parent")
-        .join("crates/resinsim-core/tests/fixtures/mini.nanodlp")
+    super::fixtures::mini_nanodlp_path()
 }
 
 /// A temp `--data-dir` (printers/ copied unchanged, resins/generic_standard.toml

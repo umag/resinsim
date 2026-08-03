@@ -173,6 +173,54 @@ pub struct UatWorld {
     /// the real `save_to_path` / `save_with_provenance` entry points —
     /// never a hand-serialized JSON literal.
     pub sim_json_path: Option<std::path::PathBuf>,
+
+    // ---- Nanodlp band (athena-analytic-log-ingest,
+    // cumulative-times-sec-accessor, nanodlp-import-simulates,
+    // nanodlp-archive-bomb-rejected, nanodlp-calibrate-compares-real-force)
+    // — uat-unskip-a3-b. Grouped per the peel-physics / interlayer-crack
+    // bands' precedent above. Reuses `cli_cmd` / `cli_exit_code` /
+    // `cli_stdout` / `cli_stderr` / `sim_json_path` (CLI subprocess band,
+    // above) for every CLI-subprocess scenario in this band — the fields
+    // below are only the ones genuinely new to these five specs. ----
+    /// Path of a `.nanodlp` fixture under test — either a committed fixture
+    /// (`mini.nanodlp` / `bomb-dimensions.nanodlp`) or a
+    /// `NanoDlpJobBuilder`-synthesised archive.
+    pub nanodlp_fixture_path: Option<std::path::PathBuf>,
+    /// Committed Athena analytic-CSV twin paths (plain + `.csv.gz`) or a
+    /// synthesised malformed-row temp CSV — athena-analytic-log-ingest.
+    pub athena_csv_paths: Option<Vec<std::path::PathBuf>>,
+    /// Raw `--json` stdout from one or more `inspect athena --json`
+    /// invocations, parsed by the Then steps that cross-check the text-mode
+    /// numbers against a second production observation.
+    pub athena_json_stdout: Option<Vec<String>>,
+    /// In-process `io::sliced::parse_sliced` output — nanodlp-import-
+    /// simulates UAT-2's "the job is imported" When. `values::LayerInput`
+    /// (NOT the `io::sliced::LayerInput` re-export path — plan-review
+    /// finding 1) since `values::layer_input` is the canonical home post
+    /// ctb-layer-height-authority's move (`io::sliced` only re-exports it
+    /// for old callers).
+    pub imported_layers: Option<Vec<resinsim_core::values::LayerInput>>,
+    /// `(K, support_exposure_sec, normal_exposure_sec)` recorded by
+    /// `NanoDlpJobBuilder::build` at fixture-construction time — Thens
+    /// compare per-layer `exposure_sec` against THESE recorded inputs,
+    /// never a re-derived `if i < K` branch expression.
+    pub imported_recipe_exposures: Option<(u32, f32, f32)>,
+    /// `PrintSimulation` built for cumulative-times-sec-accessor's two
+    /// scenarios (100-layer cube via `run_from_layer_inputs`, and the empty
+    /// aggregate via `PrintSimulation::new`).
+    pub cumulative_sim: Option<PrintSimulation>,
+    /// `sim.cumulative_times_sec()` output, captured once by the shared
+    /// When so both UAT-1 and UAT-2's Thens read the same production Vec.
+    pub cumulative_times: Option<Vec<f32>>,
+    /// `(bytes, mtime)` of `data/printers/athena_ii.toml`, captured before
+    /// a calibrate invocation so the Then can assert the file is
+    /// byte-identical and un-touched afterward (nanodlp-calibrate-compares-
+    /// real-force UAT-1).
+    pub printer_toml_before: Option<(Vec<u8>, std::time::SystemTime)>,
+    /// Wall-clock duration of a CLI invocation — nanodlp-archive-bomb-
+    /// rejected's 30s advisory bound (relative to the branch-message
+    /// discrimination, not a strict timing assertion; see the module doc).
+    pub cli_elapsed: Option<std::time::Duration>,
 }
 
 /// Summary of a single `CavityDetector` event for step-def assertions.
