@@ -37,6 +37,7 @@ pub mod interlayer_crack_knockdown_scales_with_perimeter;
 pub mod legacy_resin_toml_defaults;
 pub mod legacy_resin_toml_without_recipe;
 pub mod legacy_resin_toml_without_ref_lift_speed;
+pub mod nanodlp_archive_bomb_rejected;
 pub mod nanodlp_import_simulates;
 pub mod peel_shape_factor_scales_with_aspect_ratio;
 pub mod profile_vacuum_pressure_scales_suction;
