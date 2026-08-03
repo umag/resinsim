@@ -363,6 +363,13 @@ impl NanoDlpJobBuilder {
         self
     }
 
+    /// Not called by any scenario landed so far — every builder call site
+    /// wants the 8×8 default. Scoped `expect(dead_code)`, same rationale as
+    /// `with_layers_count` below.
+    #[expect(
+        dead_code,
+        reason = "reserved for a future scenario needing a non-default PNG resolution"
+    )]
     pub fn with_resolution(mut self, p_width: u32, p_height: u32) -> Self {
         self.p_width = p_width;
         self.p_height = p_height;
@@ -388,6 +395,14 @@ impl NanoDlpJobBuilder {
         self
     }
 
+    /// Not called by any scenario landed so far — every builder call site
+    /// wants the mini.nanodlp-mirroring defaults (`CureTime = 2.0`,
+    /// `SupportCureTime = 8.0`). Scoped `expect(dead_code)`, same rationale
+    /// as `with_layers_count` above.
+    #[expect(
+        dead_code,
+        reason = "reserved for a future scenario needing non-default cure times"
+    )]
     pub fn with_cure_times(mut self, normal_sec: f32, support_sec: f32) -> Self {
         self.cure_time = normal_sec;
         self.support_cure_time = support_sec;

@@ -47,8 +47,8 @@ use uat_steps::{
     cli_temperature_flag_validation, ctb_layer_height_authority, cumulative_times_sec_accessor,
     cure_depth_nan_guard, interlayer_crack_knockdown_scales_with_perimeter, legacy_resin_toml_defaults,
     legacy_resin_toml_without_recipe, legacy_resin_toml_without_ref_lift_speed,
-    nanodlp_archive_bomb_rejected, nanodlp_import_simulates,
-    peel_shape_factor_scales_with_aspect_ratio,
+    nanodlp_archive_bomb_rejected, nanodlp_calibrate_compares_real_force,
+    nanodlp_import_simulates, peel_shape_factor_scales_with_aspect_ratio,
     profile_vacuum_pressure_scales_suction, recipe_inside_printer_range, recipe_out_of_range,
     resin_switch_changes_simulation, safety_factor_zero_force,
     sim_json_roundtrips_zero_force_layer, suction_detector_raft_false_positive,
@@ -169,7 +169,6 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     // above — see uat-unskip-band-d.
     ("honest-zero-yield-fraction-on-calibrated-solid", 2),
     ("light-crosstalk-3d-gaussian-convolution", 9),
-    ("nanodlp-calibrate-compares-real-force", 3),
     ("printer-envelope-min-extent-under-field-sim", 1),
     ("sim-fields-sidecar-roundtrip", 4),
     ("thermal-field-arrhenius-per-voxel", 2),
