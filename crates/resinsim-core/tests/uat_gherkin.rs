@@ -44,8 +44,8 @@ use uat_steps::{
     athena_analytic_log_ingest, base_adhesion_shifts_peel_peak,
     cli_inspect_field_slices_voxel_field,
     cli_profile_by_name_loading, cli_requires_resin_for_recipe_fields,
-    cli_temperature_flag_validation, ctb_layer_height_authority, cure_depth_nan_guard,
-    interlayer_crack_knockdown_scales_with_perimeter, legacy_resin_toml_defaults,
+    cli_temperature_flag_validation, ctb_layer_height_authority, cumulative_times_sec_accessor,
+    cure_depth_nan_guard, interlayer_crack_knockdown_scales_with_perimeter, legacy_resin_toml_defaults,
     legacy_resin_toml_without_recipe, legacy_resin_toml_without_ref_lift_speed,
     peel_shape_factor_scales_with_aspect_ratio,
     profile_vacuum_pressure_scales_suction, recipe_inside_printer_range, recipe_out_of_range,
@@ -156,7 +156,6 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("cli-sim-rejects-unknown-schema-version", 4),
     ("cli-sim-voxel-cure-emits-tier2-thermal-log", 1),
     ("cross-feature-toml-interchange", 2),
-    ("cumulative-times-sec-accessor", 2),
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): both scenarios need voxel-mode
     // `LayerResult.voxel_yield_fraction` / `.strain_magnitude_max`,
