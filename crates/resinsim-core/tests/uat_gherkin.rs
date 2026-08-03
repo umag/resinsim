@@ -135,6 +135,28 @@ use uat_steps::{
 /// genuinely ABSENT from this list. A fault-injection probe run BEFORE a
 /// spec's entry is removed must temporarily remove it too (and revert),
 /// or it will exercise direction 3 instead of the direction it intended.
+///
+/// INCREMENT A3+B (uat-unskip-a3-b, 2026-08-04): paid down five specs whose
+/// entry points were re-derived and verified default-features BY SYMBOL
+/// before any step was authored (docs/patterns/band-membership-by-symbol.md)
+/// — `athena-analytic-log-ingest`, `cumulative-times-sec-accessor`,
+/// `nanodlp-import-simulates`, `nanodlp-archive-bomb-rejected`, and
+/// `nanodlp-calibrate-compares-real-force`. All five were REMOVED outright
+/// (none became declared debt): net scenario debt 95 -> 85 (10 scenarios /
+/// 48 steps paid down), register 33 -> 28 entries. Each module's register
+/// entry was deleted in the SAME change as the module landing, not in a
+/// separate later "shrink" step — the FAULT-INJECTION BRANCH REACHABILITY
+/// note above and layer 2's direction-2 check are why a late shrink step is
+/// not executable (a registered spec with zero actual skips fails the very
+/// next `cargo uat`). This increment also corrects the campaign's earlier
+/// "Band B (nanodlp) is in-process" classification: all three nanodlp
+/// specs' `When` clauses subprocess the real binary, so they follow the
+/// Band C CLI shape through `uat_steps/cli_fixtures.rs`
+/// (`ensure_resinsim_built`, `invoke_resinsim`, `CliOutcome`,
+/// `workspace_data_dir`); only `cumulative-times-sec-accessor` is genuinely
+/// in-process, and the sole in-process exception inside a nanodlp spec is
+/// `nanodlp-import-simulates` UAT-2 ("the job is imported"), which calls
+/// `io::sliced::parse_sliced` directly.
 const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): every one of this Scenario Outline's 5 runtime
