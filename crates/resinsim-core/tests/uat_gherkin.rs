@@ -41,7 +41,8 @@ use uat_steps::world::UatWorld;
 // the same module set, so this comment cannot silently go stale either.
 #[allow(unused_imports, clippy::single_component_path_imports)]
 use uat_steps::{
-    base_adhesion_shifts_peel_peak, cli_inspect_field_slices_voxel_field,
+    athena_analytic_log_ingest, base_adhesion_shifts_peel_peak,
+    cli_inspect_field_slices_voxel_field,
     cli_profile_by_name_loading, cli_requires_resin_for_recipe_fields,
     cli_temperature_flag_validation, ctb_layer_height_authority, cure_depth_nan_guard,
     interlayer_crack_knockdown_scales_with_perimeter, legacy_resin_toml_defaults,
@@ -134,7 +135,6 @@ use uat_steps::{
 /// spec's entry is removed must temporarily remove it too (and revert),
 /// or it will exercise direction 3 instead of the direction it intended.
 const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
-    ("athena-analytic-log-ingest", 2),
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): every one of this Scenario Outline's 5 runtime
     // scenarios needs `FailurePredictor::predict_strain_failures`

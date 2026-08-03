@@ -24,6 +24,7 @@ pub mod cli_fixtures;
 // Per-UAT-file step definition modules. snake_case names mirror the
 // kebab-case spec/uat/*.md file names verbatim for grep traceability
 // (docs/patterns/extracting-gherkin-from-markdown.md).
+pub mod athena_analytic_log_ingest;
 pub mod base_adhesion_shifts_peel_peak;
 pub mod cli_inspect_field_slices_voxel_field;
 pub mod cli_profile_by_name_loading;

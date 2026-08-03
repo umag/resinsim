@@ -193,6 +193,10 @@ pub struct UatWorld {
     /// invocations, parsed by the Then steps that cross-check the text-mode
     /// numbers against a second production observation.
     pub athena_json_stdout: Option<Vec<String>>,
+    /// Raw text-mode stdout from one or more `inspect athena` invocations
+    /// (no `--json`), index-parallel with `athena_json_stdout` when both are
+    /// populated by the same When (plain-CSV entry first, gzip twin second).
+    pub athena_text_stdout: Option<Vec<String>>,
     /// In-process `io::sliced::parse_sliced` output — nanodlp-import-
     /// simulates UAT-2's "the job is imported" When. `values::LayerInput`
     /// (NOT the `io::sliced::LayerInput` re-export path — plan-review
