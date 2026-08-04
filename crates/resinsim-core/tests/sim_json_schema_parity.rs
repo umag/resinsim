@@ -25,7 +25,7 @@ use boon::{Compiler, Schemas};
 use resinsim_core::entities::{
     FailureEvent, FailureType, LayerResult, PrinterProfile, ResinProfile, Severity,
 };
-use resinsim_core::repositories::{save_with_provenance, Provenance};
+use resinsim_core::repositories::{save_stamped, save_with_provenance, EnvelopeStamp, Provenance};
 use resinsim_core::simulation::PrintSimulation;
 use std::path::{Path, PathBuf};
 
@@ -142,6 +142,65 @@ fn fresh_envelope_validates_against_v2_schema() {
              Validation errors:\n{err}"
         )
     });
+}
+
+#[test]
+fn stamped_ea_default_true_envelope_validates_against_v2_schema() {
+    // sim-json-envelope-ea-default-flag: the schema edit is otherwise
+    // untestable via the positive case alone, because `additionalProperties:
+    // true` means the committed schema validates the new field whether or
+    // not it declares it. This positive case at least confirms the happy
+    // path stays green through the new field's addition; the negative case
+    // below (tampered_ea_flag_type_fails_v2_schema) is what actually ties
+    // the JSON Schema edit to CI.
+    let dir = tmp_dir("positive-ea-stamped");
+    let path = dir.join("stamped.sim.json");
+    let sim = build_known_envelope();
+    let prov = provenance();
+    let stamp = EnvelopeStamp {
+        provenance: Some(&prov),
+        cure_kinetics_ea_is_default: Some(true),
+    };
+    save_stamped(&path, &sim, stamp).expect("save_stamped");
+    let bytes = std::fs::read_to_string(&path).expect("read written envelope");
+    let value: serde_json::Value = serde_json::from_str(&bytes).expect("parse envelope JSON");
+
+    let (schemas, id) = compile_v2_schema();
+    schemas.validate(&value, id).unwrap_or_else(|err| {
+        panic!(
+            "envelope produced by save_stamped with cure_kinetics_ea_is_default=Some(true) \
+             must validate against v2.schema.json. Validation errors:\n{err}"
+        )
+    });
+}
+
+#[test]
+fn tampered_ea_flag_type_fails_v2_schema() {
+    // The only assertion that can fail because of the v2.schema.json edit
+    // for this field — `additionalProperties: true` means the positive
+    // case above passes whether or not the schema declares
+    // `cure_kinetics_ea_is_default`. This is what ties the schema edit to
+    // CI. Modelled on tampered_field_type_fails_v2_schema above.
+    let dir = tmp_dir("negative-ea-flag");
+    let path = dir.join("tampered-ea-flag.sim.json");
+    let sim = build_known_envelope();
+    save_with_provenance(&path, &sim, &provenance()).expect("save_with_provenance");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read written envelope"))
+            .expect("parse envelope JSON");
+
+    // Tamper: inject a wrong-typed cure_kinetics_ea_is_default (string
+    // instead of boolean). The schema's declared `{"type": "boolean"}"`
+    // requires validation to fail.
+    value["cure_kinetics_ea_is_default"] = serde_json::Value::String("yes".into());
+
+    let (schemas, id) = compile_v2_schema();
+    let result = schemas.validate(&value, id);
+    assert!(
+        result.is_err(),
+        "tampered cure_kinetics_ea_is_default (string instead of boolean) must fail \
+         v2.schema.json validation (otherwise the schema doesn't declare the field's type)"
+    );
 }
 
 #[test]

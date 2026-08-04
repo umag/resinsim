@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://resinsim.local/schemas/sim-json/v2.schema.json",
   "title": "SimulationEnvelopeV2",
-  "description": "Canonical sim.json envelope (schema_version=2). Source: schemas/sim-json/v2.ts (zod 4). v1 envelopes are no longer supported (clean break per ADR-0019 / t2f3.5); historical reference under schemas/sim-json/archive/. Adds optional fields_sidecar pointer to paired binary sidecar carrying voxel fields.",
+  "description": "Canonical sim.json envelope (schema_version=2). Source: schemas/sim-json/v2.ts (zod 4). v1 envelopes are no longer supported (clean break per ADR-0019 / t2f3.5); historical reference under schemas/sim-json/archive/. Adds optional fields_sidecar pointer to paired binary sidecar carrying voxel fields. 2026-08 (KB-153): adds optional top-level cure_kinetics_ea_is_default (additive, schema_version stays 2).",
   "type": "object",
   "required": ["schema_version", "simulation"],
   "additionalProperties": true,
@@ -18,7 +18,8 @@
     },
     "fields_sidecar": {
       "$ref": "#/$defs/SidecarPointerV2"
-    }
+    },
+    "cure_kinetics_ea_is_default": { "type": "boolean" }
   },
   "$defs": {
     "NumericRangeV2": {

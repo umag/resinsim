@@ -16,6 +16,10 @@
  *     the sidecar, not the envelope.
  *   - The existing v1.{ts,schema.json} files are preserved under
  *     `schemas/sim-json/archive/` for historical reference only.
+ *   - 2026-08 (KB-153, sim-json-envelope-ea-default-flag): added optional
+ *     `cure_kinetics_ea_is_default` at the envelope top level. Additive —
+ *     schema_version stays 2. See the field's own doc comment for the
+ *     three-valued (true / false / absent) wire contract.
  *
  * Versioning rules (per ADR-0015):
  *   - Adding an optional field is additive — do NOT bump schema_version.
@@ -169,6 +173,14 @@ export const SimulationEnvelopeV2 = z.object({
   simulation: PrintSimulationV2,
   provenance: ProvenanceV2.optional(),
   fields_sidecar: SidecarPointerV2.optional(),
+  /**
+   * KB-153. true — the producing run's resin TOML omitted
+   * cure_kinetics_ea_kj_mol, so every cure depth was computed from the
+   * 30 kJ/mol literature-midpoint ESTIMATE. false — measured value.
+   * ABSENT — the producer did not record it; consumers MUST NOT read
+   * absent as false. Additive per ADR-0015: schema_version stays 2.
+   */
+  cure_kinetics_ea_is_default: z.boolean().optional(),
 });
 
 export type SimulationEnvelopeV2Type = z.infer<typeof SimulationEnvelopeV2>;
