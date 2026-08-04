@@ -14,6 +14,11 @@
 //! The pattern mirrors `safety_factor_zero_force.rs`, which also
 //! drives a high-level entry point programmatically rather than via
 //! CLI subprocess.
+//!
+//! `then_exit_zero` (below) is shared: uat-unskip-c1 generalised it with
+//! an observation-mode XOR guard so `cli-sim-producer-writes-sim-json`
+//! UAT-1/UAT-3 (CLI subprocess) can reuse the same `^the process exits
+//! with code 0$` regex this module's own UAT-1/UAT-2 (in-process) use.
 
 use cucumber::{given, then, when};
 use resinsim_core::app::SimulationRunner;
@@ -162,13 +167,44 @@ fn when_user_runs_sim(world: &mut UatWorld) {
 
 // ---- Then steps -----------------------------------------------------------
 
+// Shared step: owned here for this module's own in-process UAT-1/UAT-2
+// scenarios, and reused (uat-unskip-c1) by CLI-subprocess scenarios in
+// `cli-sim-producer-writes-sim-json` UAT-1 and UAT-3 (pointer comments
+// there name this owner — a second registration of the same regex would
+// be a runtime ambiguous-match error). Exactly one observation mode may
+// be populated per scenario: in-process (`sim_primary` / `last_sim_err`,
+// set by this module's own When) XOR CLI subprocess (`cli_exit_code`,
+// set by `invoke_resinsim`). The XOR guard is load-bearing, not
+// decoration — without it a scenario whose When silently populated
+// neither field would pass vacuously.
 #[then(regex = r"^the process exits with code 0$")]
 fn then_exit_zero(world: &mut UatWorld) {
+    let in_process = world.sim_primary.is_some() || world.last_sim_err.is_some();
+    let cli = world.cli_exit_code.is_some();
     assert!(
-        world.sim_primary.is_some() && world.last_sim_err.is_none(),
-        "expected successful simulation (exit 0 equivalent); err={:?}",
-        world.last_sim_err
+        in_process ^ cli,
+        "expected exactly one observation mode populated (in-process XOR cli_exit_code); \
+         in_process={in_process} cli={cli}"
     );
+    if cli {
+        assert_eq!(
+            world.cli_exit_code,
+            Some(0),
+            "expected CLI subprocess to exit 0; stderr={:?}",
+            world.cli_stderr
+        );
+        let stderr = world.cli_stderr.as_deref().unwrap_or("");
+        assert!(
+            !stderr.contains("panicked at") && !stderr.contains("stack backtrace"),
+            "expected no panic in stderr, got: {stderr}"
+        );
+    } else {
+        assert!(
+            world.sim_primary.is_some() && world.last_sim_err.is_none(),
+            "expected successful simulation (exit 0 equivalent); err={:?}",
+            world.last_sim_err
+        );
+    }
 }
 
 // Phrase-specific assertions for the layer-height-mismatch warning text.
