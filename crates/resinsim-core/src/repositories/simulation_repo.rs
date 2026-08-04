@@ -85,6 +85,15 @@ struct SimulationEnvelope {
     #[serde(default)]
     #[allow(dead_code)] // Read by load_envelope under `#[cfg(feature = "field-sim")]`.
     fields_sidecar: Option<SidecarPointer>,
+    /// KB-153 (ADR-0015 additive). `Some(true)` — the producing run's
+    /// resin TOML omitted `cure_kinetics_ea_kj_mol`, so every cure depth
+    /// in `simulation` was computed from the 30 kJ/mol literature-midpoint
+    /// ESTIMATE. `Some(false)` — the TOML carried a measured value.
+    /// `None` — the producer did not record it (envelope predates this
+    /// field, or was written by `save_to_path` / `save_with_provenance`).
+    /// Consumers MUST NOT read `None` as `false`; see ADR-0002.
+    #[serde(default)]
+    cure_kinetics_ea_is_default: Option<bool>,
 }
 
 /// Borrowed view of [`SimulationEnvelope`] used for serialize-only paths so
@@ -97,6 +106,8 @@ struct SimulationEnvelopeRef<'a> {
     provenance: Option<&'a Provenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fields_sidecar: Option<&'a SidecarPointer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cure_kinetics_ea_is_default: Option<bool>,
 }
 
 /// Pointer from a v2+ `sim.json` envelope to its paired binary sidecar
@@ -273,7 +284,7 @@ impl Provenance {
 /// `.tmp` open). Long-running data dirs may want a periodic sweep for
 /// `*.tmp` files older than a threshold.
 pub fn save_to_path(path: &Path, sim: &PrintSimulation) -> Result<(), String> {
-    save_envelope_to_path(path, sim, None)
+    save_envelope_to_path(path, sim, None, None)
 }
 
 /// Atomically write a `PrintSimulation` plus run-context [`Provenance`] to
@@ -285,13 +296,47 @@ pub fn save_with_provenance(
     sim: &PrintSimulation,
     provenance: &Provenance,
 ) -> Result<(), String> {
-    save_envelope_to_path(path, sim, Some(provenance))
+    save_envelope_to_path(path, sim, Some(provenance), None)
+}
+
+/// Producer-side envelope metadata beyond the payload. Exists so the
+/// envelope's optional top-level slots can grow without sprouting one
+/// `save_with_X_and_Y` wrapper per field.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct EnvelopeStamp<'a> {
+    pub provenance: Option<&'a Provenance>,
+    /// KB-153 (ADR-0015 additive). Three-valued wire contract: `Some(true)`
+    /// — the resin TOML omitted `cure_kinetics_ea_kj_mol`; `Some(false)` —
+    /// it carried a measured value; `None` — "producer did not record it",
+    /// propagated verbatim onto the wire. Must not be coerced to
+    /// `Some(false)`.
+    pub cure_kinetics_ea_is_default: Option<bool>,
+}
+
+/// Atomically write a `PrintSimulation` plus an [`EnvelopeStamp`] to
+/// `path`. The general stamped entry point for producer-side envelope
+/// metadata; [`save_to_path`] and [`save_with_provenance`] are narrower,
+/// unchanged callers that delegate here with
+/// `cure_kinetics_ea_is_default: None`. See [`save_to_path`] for the
+/// atomic-write contract.
+pub fn save_stamped(
+    path: &Path,
+    sim: &PrintSimulation,
+    stamp: EnvelopeStamp<'_>,
+) -> Result<(), String> {
+    save_envelope_to_path(
+        path,
+        sim,
+        stamp.provenance,
+        stamp.cure_kinetics_ea_is_default,
+    )
 }
 
 fn save_envelope_to_path(
     path: &Path,
     sim: &PrintSimulation,
     provenance: Option<&Provenance>,
+    cure_kinetics_ea_is_default: Option<bool>,
 ) -> Result<(), String> {
     // Ensure parent dir exists for both .sim.json and .fields.bin tmp files.
     let tmp_json = tmp_sibling(path);
@@ -323,6 +368,7 @@ fn save_envelope_to_path(
         simulation: sim,
         provenance,
         fields_sidecar: sidecar_pointer,
+        cure_kinetics_ea_is_default,
     };
     let json = serde_json::to_string_pretty(&envelope)
         .map_err(|e| format!("failed to serialize simulation for {}: {e}", path.display()))?;
@@ -541,6 +587,10 @@ pub fn load_from_path(path: &Path) -> Result<PrintSimulation, String> {
 pub struct LoadedEnvelope {
     pub simulation: PrintSimulation,
     pub provenance: Option<Provenance>,
+    /// KB-153 (ADR-0015 additive). See [`EnvelopeStamp::cure_kinetics_ea_is_default`]
+    /// for the wire-state contract; `None` means the producer did not
+    /// record the fact, not that the Ea was measured.
+    pub cure_kinetics_ea_is_default: Option<bool>,
 }
 
 /// Load the full envelope (simulation + optional provenance + optional
@@ -635,6 +685,7 @@ pub fn load_envelope_with_budget(
     Ok(LoadedEnvelope {
         simulation,
         provenance: envelope.provenance,
+        cure_kinetics_ea_is_default: envelope.cure_kinetics_ea_is_default,
     })
 }
 
@@ -1379,6 +1430,161 @@ mod tests {
         assert!(
             path.is_file(),
             "envelope file must exist after save_to_path"
+        );
+    }
+
+    // --- sim-json-envelope-ea-default-flag: top-level `cure_kinetics_ea_is_default` ---
+    //
+    // Four cases covering all three wire states (Some(true) / Some(false) /
+    // absent) plus old-file compat, via the new `save_stamped` /
+    // `EnvelopeStamp` producer entry point. `save_to_path` and
+    // `save_with_provenance` are untouched delegates (case 3 pins that).
+
+    fn sample_provenance() -> Provenance {
+        Provenance {
+            input_path: "fixture.ctb".into(),
+            resin_name: "Test".into(),
+            printer_name: "Test".into(),
+            n_supports: 20,
+            tip_radius_mm: 0.2,
+        }
+    }
+
+    #[test]
+    fn stamped_true_serialises_flag_as_true() {
+        let dir = test_dir("stamped-true");
+        let path = dir.join("stamped-true.sim.json");
+        let sim = build_sim();
+        let provenance = sample_provenance();
+        let stamp = EnvelopeStamp {
+            provenance: Some(&provenance),
+            cure_kinetics_ea_is_default: Some(true),
+        };
+        save_stamped(&path, &sim, stamp).expect("save_stamped must succeed");
+
+        let bytes = std::fs::read_to_string(&path).expect("read written file");
+        let value: serde_json::Value = serde_json::from_str(&bytes).expect("parse JSON");
+        assert_eq!(
+            value["schema_version"],
+            serde_json::json!(CURRENT_SCHEMA_VERSION),
+            "save_stamped must not bump schema_version"
+        );
+        assert_eq!(
+            value["cure_kinetics_ea_is_default"],
+            serde_json::json!(true),
+            "Some(true) must serialise the flag as JSON true; got: {value}"
+        );
+
+        let loaded = load_envelope(&path).expect("load_envelope must round-trip the flag");
+        assert_eq!(loaded.cure_kinetics_ea_is_default, Some(true));
+    }
+
+    #[test]
+    fn stamped_false_serialises_flag_as_false() {
+        let dir = test_dir("stamped-false");
+        let path = dir.join("stamped-false.sim.json");
+        let sim = build_sim();
+        let stamp = EnvelopeStamp {
+            provenance: None,
+            cure_kinetics_ea_is_default: Some(false),
+        };
+        save_stamped(&path, &sim, stamp).expect("save_stamped must succeed");
+
+        let bytes = std::fs::read_to_string(&path).expect("read written file");
+        let value: serde_json::Value = serde_json::from_str(&bytes).expect("parse JSON");
+        assert_eq!(
+            value["schema_version"],
+            serde_json::json!(CURRENT_SCHEMA_VERSION),
+            "save_stamped must not bump schema_version"
+        );
+        assert_eq!(
+            value["cure_kinetics_ea_is_default"],
+            serde_json::json!(false),
+            "Some(false) must serialise as JSON false — specifically not absent, and not null; got: {value}"
+        );
+
+        let loaded = load_envelope(&path).expect("load_envelope must round-trip the flag");
+        assert_eq!(loaded.cure_kinetics_ea_is_default, Some(false));
+    }
+
+    #[test]
+    fn unstamped_save_omits_the_key_entirely() {
+        // "No gratuitous wire growth" guard: the untouched save_with_provenance
+        // path must not emit the new key at all when nothing was told about it.
+        let dir = test_dir("unstamped-omits-key");
+        let path = dir.join("unstamped.sim.json");
+        let sim = build_sim();
+        let provenance = sample_provenance();
+        save_with_provenance(&path, &sim, &provenance).expect("save_with_provenance must succeed");
+
+        let bytes = std::fs::read_to_string(&path).expect("read written file");
+        let value: serde_json::Value = serde_json::from_str(&bytes).expect("parse JSON");
+        assert_eq!(
+            value["schema_version"],
+            serde_json::json!(CURRENT_SCHEMA_VERSION),
+            "save_with_provenance must not bump schema_version"
+        );
+        assert!(
+            value.get("cure_kinetics_ea_is_default").is_none(),
+            "save_with_provenance must not emit cure_kinetics_ea_is_default at all; got: {value}"
+        );
+
+        let loaded = load_envelope(&path).expect("load_envelope must succeed");
+        assert_eq!(loaded.cure_kinetics_ea_is_default, None);
+    }
+
+    #[test]
+    fn pre_flag_envelope_loads_with_none_flag() {
+        // Old-files-must-still-load acceptance criterion, executable: a
+        // hand-written v2 envelope predating this field must load fine and
+        // report None — not error, and not silently coerce to Some(false).
+        let dir = test_dir("pre-flag-envelope");
+        let saved = build_sim();
+        let sim_value = serde_json::to_value(&saved).expect("serialize");
+        let envelope = serde_json::json!({
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "simulation": sim_value,
+        });
+        let path = dir.join("pre-flag.sim.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&envelope).expect("serialize pre-flag envelope"),
+        )
+        .expect("write pre-flag envelope");
+
+        let loaded = load_envelope(&path).expect("pre-flag envelope must still load");
+        assert_eq!(
+            loaded.cure_kinetics_ea_is_default, None,
+            "pre-flag envelope must load with the flag as None, not Some(false)"
+        );
+    }
+
+    #[test]
+    fn save_stamped_with_provenance_and_no_flag_matches_save_with_provenance_byte_for_byte() {
+        // Review finding: save_stamped(provenance Some, flag None) must be
+        // wire-indistinguishable from save_with_provenance on the same
+        // inputs — the stamped entry point is a strict superset, not a
+        // divergent serialisation path.
+        let dir = test_dir("stamped-equivalence");
+        let sim = build_sim();
+        let provenance = sample_provenance();
+
+        let via_provenance_path = dir.join("via-save-with-provenance.sim.json");
+        save_with_provenance(&via_provenance_path, &sim, &provenance)
+            .expect("save_with_provenance must succeed");
+
+        let via_stamped_path = dir.join("via-save-stamped.sim.json");
+        let stamp = EnvelopeStamp {
+            provenance: Some(&provenance),
+            cure_kinetics_ea_is_default: None,
+        };
+        save_stamped(&via_stamped_path, &sim, stamp).expect("save_stamped must succeed");
+
+        let bytes_a = std::fs::read(&via_provenance_path).expect("read save_with_provenance output");
+        let bytes_b = std::fs::read(&via_stamped_path).expect("read save_stamped output");
+        assert_eq!(
+            bytes_a, bytes_b,
+            "save_stamped(provenance Some, flag None) must be byte-identical to save_with_provenance"
         );
     }
 }
