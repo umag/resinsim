@@ -129,6 +129,40 @@ Future work — promote the regenerate script to a CI step that fails on
 `git diff --exit-code` after a fresh regenerate. Tracked as a follow-up
 issue out of scope for issue 15.
 
+> **Amendment, 2026-08-04 (schemas-sim-json-tooling-stale-at-v1).** The
+> TypeScript toolchain in `schemas/sim-json/` had gone stale at v1 —
+> `package.json` still pointed `main`/`types`/the regenerate script at
+> `v1.ts` after ADR-0019 moved the canonical schema to `v2.ts`, so
+> `npm run regenerate-schema` failed outright (`Cannot find module
+> '../v1.ts'`). This lifecycle re-pointed the toolchain at v2 and, for the
+> first time, actually ran `z.toJSONSchema(SimulationEnvelopeV2, …)` and
+> committed its output as `v2.schema.json` — previously that file was
+> hand-written, never machine-generated. Two things made that safe:
+>
+> - zod's default `io: "output"` mode emits `additionalProperties: false`
+>   on every object, which would have narrowed the published contract and
+>   rejected real Rust-produced envelopes (the Rust producer serialises
+>   eleven fields `v2.ts` doesn't declare). The script now passes
+>   `io: "input"` plus a post-generation `override` that stamps
+>   `additionalProperties: true` explicitly — a config choice, not a zod
+>   default, and therefore worth re-verifying against whichever zod 4.x
+>   minor is installed if this script is touched again.
+> - `.meta({ id })` was added to the nine `$defs`-eligible schemas in
+>   `v2.ts` (and `.meta({ title, description })` to the root) so
+>   `reused: "ref"` extracts them under their human names
+>   (`NumericRangeV2`, …) instead of zod's default `reused: "inline"`
+>   collapsing them or a bare extraction naming them `__schema0`…
+>   `__schema8`. This is additive metadata; it changes no `z.infer` type.
+>
+> Surface 2 (`v2.ts` ↔ `v2.schema.json`) is now generated-and-committed
+> rather than hand-aligned, closing the gap this ADR originally left open.
+> It is not yet CI-enforced — there is still no `.github/` in this
+> repository — but `npm run regenerate-schema && git diff --exit-code
+> v2.schema.json` is now the one command that would enforce it if a CI
+> system existed. See `schemas/sim-json/README.md` for the current
+> command set and the TS-side parity guard
+> (`schemas/sim-json/tests/parse-goldens.test.ts`) added alongside.
+
 ### Legacy-flags policy on `report health`
 
 The pre-ADR-0015 `report health --stl ... --resin ... --printer ...`
