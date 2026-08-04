@@ -174,7 +174,59 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("calibration-disclosure-3of3-predicate", 5),
     ("cli-report-health-layer-height-provenance", 0),
     ("cli-report-health-print-time", 3),
+    // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
+    // filed 2026-08-02): all three scenarios need a producer-written
+    // sidecar — `--voxel-cure-mm` (main.rs:237-239, `#[cfg(feature =
+    // "field-sim")]`) to produce one, `encode_paired_sidecar`
+    // (simulation_repo.rs:428) to write it, and `values::field_budget` /
+    // `decode_sidecar` (both gated) to read it under a budget — and
+    // `ensure_resinsim_built` (cli_fixtures.rs:64-98) forwards NO
+    // `--features` to the subprocessed `resinsim` binary, so every one of
+    // these symbols is compiled out of the binary under test TODAY,
+    // uniformly, in BOTH `cargo uat` and `cargo uat-field-sim`. This is a
+    // NEW sub-shape of the Band-D class: asymmetric at the BINARY-BUILD
+    // SEAM, not at an in-process `#[cfg]` boundary — `ensure_resinsim_built`
+    // would need to forward `--features field-sim` under `#[cfg(feature =
+    // "field-sim")]` before these scenarios become reachable at all, at
+    // which point they convert into the canonical config-asymmetric shape
+    // (register wants N under one alias, 0 under the other) that a single
+    // shared `const` register cannot satisfy — exactly the design decision
+    // uat-unskip-band-d owns. UAT-3 is additionally marked **future** in
+    // the spec itself (depends on an unbuilt SidecarPointer field that
+    // stamps the producer's budget into the envelope) — not gated by
+    // t2f3.5 v1 at all. See uat-unskip-band-d (NOT
+    // uat-fixtures-fieldsim-adr0020-gap, which is the unrelated
+    // missing-TOML-fixture-fields constraint).
     ("cli-sim-budget-mismatch-on-load", 3),
+    // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
+    // filed 2026-08-02): all four scenarios need a producer-written sidecar
+    // (`--voxel-cure-mm` main.rs:237-239, `encode_paired_sidecar`
+    // simulation_repo.rs:428, both `#[cfg(feature = "field-sim")]`) and the
+    // consumer `load_and_install_sidecar_with_budget`
+    // (simulation_repo.rs:718, called only from the `#[cfg(feature =
+    // "field-sim")]` branch at :677-680) — and `ensure_resinsim_built`
+    // (cli_fixtures.rs:64-98) forwards NO `--features` to the subprocessed
+    // `resinsim` binary, so every one of these symbols is compiled out of
+    // the binary under test TODAY, uniformly, in BOTH `cargo uat` and
+    // `cargo uat-field-sim`. Same NEW Band-D sub-shape as
+    // `cli-sim-budget-mismatch-on-load` above — asymmetric at the
+    // BINARY-BUILD SEAM, not at an in-process `#[cfg]` boundary;
+    // `ensure_resinsim_built` forwarding `--features field-sim` under
+    // `#[cfg(feature = "field-sim")]` is the design decision that converts
+    // these into the canonical config-asymmetric shape uat-unskip-band-d
+    // owns.
+    //
+    // UAT-3 (path traversal) was checked specifically as a possible
+    // ENVELOPE-LEVEL exception — a crafted `fields_sidecar.path =
+    // "../escape.bin"` pointer parses fine on default features
+    // (`#[serde(default)] fields_sidecar: Option<SidecarPointer>`,
+    // simulation_repo.rs:87, carries no `#[cfg]`) — and is NOT one: the
+    // only consumer of that pointer is the gated call site
+    // (simulation_repo.rs:677-680, reached only from
+    // `load_and_install_sidecar_with_budget` at :718), so a crafted
+    // pointer is silently IGNORED and `report health --in` exits 0 rather
+    // than rejecting it. See uat-unskip-band-d (NOT
+    // uat-fixtures-fieldsim-adr0020-gap).
     ("cli-sim-rejects-tampered-sidecar", 4),
     ("cli-sim-voxel-cure-emits-tier2-thermal-log", 1),
     ("cross-feature-toml-interchange", 2),
