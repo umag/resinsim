@@ -4,10 +4,9 @@
   "title": "SimulationEnvelopeV2",
   "description": "Canonical sim.json envelope (schema_version=2). Source: schemas/sim-json/v2.ts (zod 4). v1 envelopes are no longer supported (clean break per ADR-0019 / t2f3.5); historical reference under schemas/sim-json/archive/. Adds optional fields_sidecar pointer to paired binary sidecar carrying voxel fields. 2026-08 (KB-153): adds optional top-level cure_kinetics_ea_is_default (additive, schema_version stays 2).",
   "type": "object",
-  "required": ["schema_version", "simulation"],
-  "additionalProperties": true,
   "properties": {
     "schema_version": {
+      "type": "number",
       "const": 2
     },
     "simulation": {
@@ -19,30 +18,97 @@
     "fields_sidecar": {
       "$ref": "#/$defs/SidecarPointerV2"
     },
-    "cure_kinetics_ea_is_default": { "type": "boolean" }
+    "cure_kinetics_ea_is_default": {
+      "type": "boolean"
+    }
   },
+  "required": [
+    "schema_version",
+    "simulation"
+  ],
+  "additionalProperties": true,
   "$defs": {
-    "NumericRangeV2": {
+    "PrintSimulationV2": {
       "type": "object",
-      "required": ["min", "max"],
-      "additionalProperties": true,
       "properties": {
-        "min": { "type": "number" },
-        "max": { "type": "number" }
-      }
-    },
-    "BuildEnvelopeMmV2": {
-      "type": "object",
-      "required": ["width_mm", "depth_mm", "max_z_mm"],
-      "additionalProperties": true,
-      "properties": {
-        "width_mm": { "type": "number" },
-        "depth_mm": { "type": "number" },
-        "max_z_mm": { "type": "number" }
-      }
+        "recipe": {
+          "$ref": "#/$defs/RecipeV2"
+        },
+        "printer": {
+          "$ref": "#/$defs/PrinterProfileV2"
+        },
+        "layers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LayerResultV2"
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FailureEventV2"
+          }
+        }
+      },
+      "required": [
+        "recipe",
+        "printer",
+        "layers",
+        "failures"
+      ],
+      "additionalProperties": true
     },
     "RecipeV2": {
       "type": "object",
+      "properties": {
+        "layer_height_um": {
+          "type": "number"
+        },
+        "bottom_layer_count": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "transition_layers": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "normal_exposure_sec": {
+          "type": "number"
+        },
+        "bottom_exposure_sec": {
+          "type": "number"
+        },
+        "wait_before_cure_sec": {
+          "type": "number"
+        },
+        "wait_before_release_sec": {
+          "type": "number"
+        },
+        "wait_after_release_sec": {
+          "type": "number"
+        },
+        "lift_speed_mm_min": {
+          "type": "number"
+        },
+        "lift_cycle_sec": {
+          "type": "number"
+        },
+        "lift_distance_mm": {
+          "type": "number"
+        },
+        "retract_speed_mm_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
       "required": [
         "layer_height_um",
         "bottom_layer_count",
@@ -56,26 +122,69 @@
         "lift_cycle_sec",
         "lift_distance_mm"
       ],
-      "additionalProperties": true,
-      "properties": {
-        "layer_height_um": { "type": "number" },
-        "bottom_layer_count": { "type": "integer" },
-        "transition_layers": { "type": "integer" },
-        "normal_exposure_sec": { "type": "number" },
-        "bottom_exposure_sec": { "type": "number" },
-        "wait_before_cure_sec": { "type": "number" },
-        "wait_before_release_sec": { "type": "number" },
-        "wait_after_release_sec": { "type": "number" },
-        "lift_speed_mm_min": { "type": "number" },
-        "lift_cycle_sec": { "type": "number" },
-        "lift_distance_mm": { "type": "number" },
-        "retract_speed_mm_min": {
-          "type": ["number", "null"]
-        }
-      }
+      "additionalProperties": true
     },
     "PrinterProfileV2": {
       "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "led_power_mw_cm2": {
+          "type": "number"
+        },
+        "pixel_pitch_um": {
+          "type": "number"
+        },
+        "layer_height_range_um": {
+          "$ref": "#/$defs/NumericRangeV2"
+        },
+        "exposure_range_sec": {
+          "$ref": "#/$defs/NumericRangeV2"
+        },
+        "lift_speed_range_mm_min": {
+          "$ref": "#/$defs/NumericRangeV2"
+        },
+        "bottom_layer_count_max": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "z_stiffness_n_per_mm": {
+          "type": "number"
+        },
+        "delta_t_steady_c": {
+          "type": "number"
+        },
+        "thermal_tau_sec": {
+          "type": "number"
+        },
+        "lcd_uniformity_variation": {
+          "type": "number"
+        },
+        "voxel_size_mm": {
+          "type": "number"
+        },
+        "release_mechanism": {
+          "type": "string",
+          "enum": [
+            "linear",
+            "tilt"
+          ]
+        },
+        "led_delta_t_steady_c": {
+          "type": "number"
+        },
+        "led_tau_sec": {
+          "type": "number"
+        },
+        "led_to_vat_coupling": {
+          "type": "number"
+        },
+        "build_envelope_mm": {
+          "$ref": "#/$defs/BuildEnvelopeMmV2"
+        }
+      },
       "required": [
         "name",
         "led_power_mw_cm2",
@@ -95,32 +204,103 @@
         "led_to_vat_coupling",
         "build_envelope_mm"
       ],
-      "additionalProperties": true,
+      "additionalProperties": true
+    },
+    "NumericRangeV2": {
+      "type": "object",
       "properties": {
-        "name": { "type": "string" },
-        "led_power_mw_cm2": { "type": "number" },
-        "pixel_pitch_um": { "type": "number" },
-        "layer_height_range_um": { "$ref": "#/$defs/NumericRangeV2" },
-        "exposure_range_sec": { "$ref": "#/$defs/NumericRangeV2" },
-        "lift_speed_range_mm_min": { "$ref": "#/$defs/NumericRangeV2" },
-        "bottom_layer_count_max": { "type": "integer" },
-        "z_stiffness_n_per_mm": { "type": "number" },
-        "delta_t_steady_c": { "type": "number" },
-        "thermal_tau_sec": { "type": "number" },
-        "lcd_uniformity_variation": { "type": "number" },
-        "voxel_size_mm": { "type": "number" },
-        "release_mechanism": {
-          "type": "string",
-          "enum": ["linear", "tilt"]
+        "min": {
+          "type": "number"
         },
-        "led_delta_t_steady_c": { "type": "number" },
-        "led_tau_sec": { "type": "number" },
-        "led_to_vat_coupling": { "type": "number" },
-        "build_envelope_mm": { "$ref": "#/$defs/BuildEnvelopeMmV2" }
-      }
+        "max": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "additionalProperties": true
+    },
+    "BuildEnvelopeMmV2": {
+      "type": "object",
+      "properties": {
+        "width_mm": {
+          "type": "number"
+        },
+        "depth_mm": {
+          "type": "number"
+        },
+        "max_z_mm": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "width_mm",
+        "depth_mm",
+        "max_z_mm"
+      ],
+      "additionalProperties": true
     },
     "LayerResultV2": {
       "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "cure_depth_um": {
+          "type": "number"
+        },
+        "peel_force_n": {
+          "type": "number"
+        },
+        "suction_force_n": {
+          "type": "number"
+        },
+        "base_force_n": {
+          "default": 0,
+          "type": "number"
+        },
+        "total_force_n": {
+          "type": "number"
+        },
+        "support_capacity_n": {
+          "type": "number"
+        },
+        "safety_factor": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cross_section_area_mm2": {
+          "type": "number"
+        },
+        "area_delta_mm2": {
+          "type": "number"
+        },
+        "vat_temperature_c": {
+          "type": "number"
+        },
+        "viscosity_mpa_s": {
+          "type": "number"
+        },
+        "z_deflection_um": {
+          "type": "number"
+        },
+        "effective_layer_height_um": {
+          "type": "number"
+        },
+        "worst_cure_depth_um": {
+          "type": "number"
+        }
+      },
       "required": [
         "index",
         "cure_depth_um",
@@ -137,33 +317,16 @@
         "effective_layer_height_um",
         "worst_cure_depth_um"
       ],
-      "additionalProperties": true,
-      "properties": {
-        "index": { "type": "integer" },
-        "cure_depth_um": { "type": "number" },
-        "peel_force_n": { "type": "number" },
-        "suction_force_n": { "type": "number" },
-        "base_force_n": { "type": "number" },
-        "total_force_n": { "type": "number" },
-        "support_capacity_n": { "type": "number" },
-        "safety_factor": {
-          "type": ["number", "null"]
-        },
-        "cross_section_area_mm2": { "type": "number" },
-        "area_delta_mm2": { "type": "number" },
-        "vat_temperature_c": { "type": "number" },
-        "viscosity_mpa_s": { "type": "number" },
-        "z_deflection_um": { "type": "number" },
-        "effective_layer_height_um": { "type": "number" },
-        "worst_cure_depth_um": { "type": "number" }
-      }
+      "additionalProperties": true
     },
     "FailureEventV2": {
       "type": "object",
-      "required": ["layer", "failure_type", "severity", "message"],
-      "additionalProperties": true,
       "properties": {
-        "layer": { "type": "integer" },
+        "layer": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
         "failure_type": {
           "type": "string",
           "enum": [
@@ -177,30 +340,45 @@
         },
         "severity": {
           "type": "string",
-          "enum": ["Info", "Warning", "Critical"]
+          "enum": [
+            "Info",
+            "Warning",
+            "Critical"
+          ]
         },
-        "message": { "type": "string" }
-      }
-    },
-    "PrintSimulationV2": {
-      "type": "object",
-      "required": ["recipe", "printer", "layers", "failures"],
-      "additionalProperties": true,
-      "properties": {
-        "recipe": { "$ref": "#/$defs/RecipeV2" },
-        "printer": { "$ref": "#/$defs/PrinterProfileV2" },
-        "layers": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/LayerResultV2" }
-        },
-        "failures": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/FailureEventV2" }
+        "message": {
+          "type": "string"
         }
-      }
+      },
+      "required": [
+        "layer",
+        "failure_type",
+        "severity",
+        "message"
+      ],
+      "additionalProperties": true
     },
     "ProvenanceV2": {
       "type": "object",
+      "properties": {
+        "input_path": {
+          "type": "string"
+        },
+        "resin_name": {
+          "type": "string"
+        },
+        "printer_name": {
+          "type": "string"
+        },
+        "n_supports": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "tip_radius_mm": {
+          "type": "number"
+        }
+      },
       "required": [
         "input_path",
         "resin_name",
@@ -208,28 +386,36 @@
         "n_supports",
         "tip_radius_mm"
       ],
-      "additionalProperties": true,
-      "properties": {
-        "input_path": { "type": "string" },
-        "resin_name": { "type": "string" },
-        "printer_name": { "type": "string" },
-        "n_supports": { "type": "integer" },
-        "tip_radius_mm": { "type": "number" }
-      }
+      "additionalProperties": true
     },
     "SidecarPointerV2": {
       "type": "object",
-      "required": ["path", "byte_size", "sha256", "fields_present"],
-      "additionalProperties": true,
       "properties": {
-        "path": { "type": "string" },
-        "byte_size": { "type": "integer" },
-        "sha256": { "type": "string" },
+        "path": {
+          "type": "string"
+        },
+        "byte_size": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string"
+        },
         "fields_present": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
-      }
+      },
+      "required": [
+        "path",
+        "byte_size",
+        "sha256",
+        "fields_present"
+      ],
+      "additionalProperties": true
     }
   }
 }
