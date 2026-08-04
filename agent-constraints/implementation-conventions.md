@@ -226,11 +226,12 @@ Authoring-time detection of malformed Gherkin lives in
 the four-config matrix.
 
 **Expected shape is IDENTICAL in both configs** (current as of
-`uat-unskip-campaign` increment A2 — `interlayer-crack-knockdown-scales-
-with-perimeter` plus the ratified `sim-json-roundtrips-zero-force-layer`
-top-up, 2026-08-02): 52 features, 160 scenarios (65 passed, 95 skipped, 0
-failed), 424 steps (329 passed, 95 skipped, 0 failed), exit 0, register at
-33 entries. This shape moves as the campaign lands more increments — trust
+`uat-unskip-campaign` increment A3+B — `athena-analytic-log-ingest`,
+`cumulative-times-sec-accessor`, `nanodlp-import-simulates`,
+`nanodlp-archive-bomb-rejected`, and `nanodlp-calibrate-compares-real-force`,
+2026-08-04): 52 features, 160 scenarios (75 passed, 85 skipped, 0 failed),
+462 steps (377 passed, 85 skipped, 0 failed), exit 0, register at 28
+entries. This shape moves as the campaign lands more increments — trust
 `cargo uat`'s own `[Consolidated total]` line over this paragraph if they
 disagree, and update this paragraph when they do. A field-sim run reporting
 FEWER total steps than the default run means a scenario is aborting early
@@ -257,6 +258,29 @@ fixture-fields constraint. A2's ratified top-up
 features BEFORE any step def was written, precisely the check the original
 3-spec selection skipped — do the same for any future increment's scope
 before writing steps, not after.
+
+Increment A3+B (`uat-unskip-a3-b`, 2026-08-04) corrects the recommended-band
+list above: **"Band B nanodlp" is NOT in-process.** All three nanodlp specs'
+`When` clauses subprocess the real binary (`resinsim sim --file ...`,
+`resinsim inspect calibrate --file ...`), so they follow the Band C CLI
+shape through `tests/uat_steps/cli_fixtures.rs`
+(`ensure_resinsim_built`, `invoke_resinsim`, `CliOutcome`,
+`workspace_data_dir`) — not a distinct in-process band. Only
+`cumulative-times-sec-accessor` is genuinely in-process among this
+increment's five specs; the single in-process exception inside a nanodlp
+spec is `nanodlp-import-simulates` UAT-2 ("the job is imported"), which
+calls `io::sliced::parse_sliced` directly. All five specs were verified
+default-features BY SYMBOL before any step def was written
+(`docs/patterns/band-membership-by-symbol.md`), following A2's precedent;
+all five were REMOVED outright from `SPECS_WITHOUT_STEP_DEFS` (none became
+declared debt). The increment also introduced `tests/uat_steps/fixtures.rs`
+`NanoDlpJobBuilder` — the single home for synthesised `.nanodlp` archives
+(`zip::write::ZipWriter` + `CompressionMethod::Stored`, `png::Encoder`,
+`flate2::write::GzEncoder`; all reachable from the test target as regular
+`resinsim-core` `[dependencies]`) — for the two nanodlp specs whose
+committed `mini.nanodlp` fixture could not satisfy every scenario's Given
+premise (verified by a real-CLI probe before any assertion was written, not
+assumed).
 
 Hand-rolled resin/printer TOML fixtures under `tests/uat_steps/` MUST
 compose from the shared builders (`world.rs::ResinBuilder`,
