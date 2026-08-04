@@ -32,76 +32,86 @@
 import { z } from "zod";
 
 /** Inclusive numeric range value-object used by PrinterProfile envelope fields. */
-export const NumericRangeV2 = z.object({
-  min: z.number(),
-  max: z.number(),
-});
+export const NumericRangeV2 = z
+  .object({
+    min: z.number(),
+    max: z.number(),
+  })
+  .meta({ id: "NumericRangeV2" });
 
 /** Build-envelope value-object on PrinterProfile. */
-export const BuildEnvelopeMmV2 = z.object({
-  width_mm: z.number(),
-  depth_mm: z.number(),
-  max_z_mm: z.number(),
-});
+export const BuildEnvelopeMmV2 = z
+  .object({
+    width_mm: z.number(),
+    depth_mm: z.number(),
+    max_z_mm: z.number(),
+  })
+  .meta({ id: "BuildEnvelopeMmV2" });
 
 /** Recipe value-object — the resin's concrete operating point. */
-export const RecipeV2 = z.object({
-  layer_height_um: z.number(),
-  bottom_layer_count: z.number().int(),
-  transition_layers: z.number().int(),
-  normal_exposure_sec: z.number(),
-  bottom_exposure_sec: z.number(),
-  wait_before_cure_sec: z.number(),
-  wait_before_release_sec: z.number(),
-  wait_after_release_sec: z.number(),
-  lift_speed_mm_min: z.number(),
-  lift_cycle_sec: z.number(),
-  lift_distance_mm: z.number(),
-  retract_speed_mm_min: z.number().nullable().optional(),
-});
+export const RecipeV2 = z
+  .object({
+    layer_height_um: z.number(),
+    bottom_layer_count: z.number().int(),
+    transition_layers: z.number().int(),
+    normal_exposure_sec: z.number(),
+    bottom_exposure_sec: z.number(),
+    wait_before_cure_sec: z.number(),
+    wait_before_release_sec: z.number(),
+    wait_after_release_sec: z.number(),
+    lift_speed_mm_min: z.number(),
+    lift_cycle_sec: z.number(),
+    lift_distance_mm: z.number(),
+    retract_speed_mm_min: z.number().nullable().optional(),
+  })
+  .meta({ id: "RecipeV2" });
 
 /** PrinterProfile aggregate (hardware envelope only — recipe lives on Recipe). */
-export const PrinterProfileV2 = z.object({
-  name: z.string(),
-  led_power_mw_cm2: z.number(),
-  pixel_pitch_um: z.number(),
-  layer_height_range_um: NumericRangeV2,
-  exposure_range_sec: NumericRangeV2,
-  lift_speed_range_mm_min: NumericRangeV2,
-  bottom_layer_count_max: z.number().int(),
-  z_stiffness_n_per_mm: z.number(),
-  delta_t_steady_c: z.number(),
-  thermal_tau_sec: z.number(),
-  lcd_uniformity_variation: z.number(),
-  voxel_size_mm: z.number(),
-  release_mechanism: z.enum(["linear", "tilt"]),
-  led_delta_t_steady_c: z.number(),
-  led_tau_sec: z.number(),
-  led_to_vat_coupling: z.number(),
-  build_envelope_mm: BuildEnvelopeMmV2,
-});
+export const PrinterProfileV2 = z
+  .object({
+    name: z.string(),
+    led_power_mw_cm2: z.number(),
+    pixel_pitch_um: z.number(),
+    layer_height_range_um: NumericRangeV2,
+    exposure_range_sec: NumericRangeV2,
+    lift_speed_range_mm_min: NumericRangeV2,
+    bottom_layer_count_max: z.number().int(),
+    z_stiffness_n_per_mm: z.number(),
+    delta_t_steady_c: z.number(),
+    thermal_tau_sec: z.number(),
+    lcd_uniformity_variation: z.number(),
+    voxel_size_mm: z.number(),
+    release_mechanism: z.enum(["linear", "tilt"]),
+    led_delta_t_steady_c: z.number(),
+    led_tau_sec: z.number(),
+    led_to_vat_coupling: z.number(),
+    build_envelope_mm: BuildEnvelopeMmV2,
+  })
+  .meta({ id: "PrinterProfileV2" });
 
 /** Single completed layer's physical state. */
-export const LayerResultV2 = z.object({
-  index: z.number().int(),
-  cure_depth_um: z.number(),
-  peel_force_n: z.number(),
-  suction_force_n: z.number(),
-  // ADR-0022 Stage 1 (KB-116). Optional with a 0 default so pre-Stage-1 v2
-  // sim.json files (no base_force_n) still parse; mirrors the Rust
-  // `#[serde(default)]` on LayerResult.base_force_n.
-  base_force_n: z.number().default(0),
-  total_force_n: z.number(),
-  support_capacity_n: z.number(),
-  safety_factor: z.number().nullable(),
-  cross_section_area_mm2: z.number(),
-  area_delta_mm2: z.number(),
-  vat_temperature_c: z.number(),
-  viscosity_mpa_s: z.number(),
-  z_deflection_um: z.number(),
-  effective_layer_height_um: z.number(),
-  worst_cure_depth_um: z.number(),
-});
+export const LayerResultV2 = z
+  .object({
+    index: z.number().int(),
+    cure_depth_um: z.number(),
+    peel_force_n: z.number(),
+    suction_force_n: z.number(),
+    // ADR-0022 Stage 1 (KB-116). Optional with a 0 default so pre-Stage-1 v2
+    // sim.json files (no base_force_n) still parse; mirrors the Rust
+    // `#[serde(default)]` on LayerResult.base_force_n.
+    base_force_n: z.number().default(0),
+    total_force_n: z.number(),
+    support_capacity_n: z.number(),
+    safety_factor: z.number().nullable(),
+    cross_section_area_mm2: z.number(),
+    area_delta_mm2: z.number(),
+    vat_temperature_c: z.number(),
+    viscosity_mpa_s: z.number(),
+    z_deflection_um: z.number(),
+    effective_layer_height_um: z.number(),
+    worst_cure_depth_um: z.number(),
+  })
+  .meta({ id: "LayerResultV2" });
 
 /** Failure-event severity discriminant. Serialised as a string tag. */
 export const SeverityV2 = z.enum(["Info", "Warning", "Critical"]);
@@ -117,33 +127,39 @@ export const FailureTypeV2 = z.enum([
 ]);
 
 /** A single failure event tagged onto a layer. */
-export const FailureEventV2 = z.object({
-  layer: z.number().int(),
-  failure_type: FailureTypeV2,
-  severity: SeverityV2,
-  message: z.string(),
-});
+export const FailureEventV2 = z
+  .object({
+    layer: z.number().int(),
+    failure_type: FailureTypeV2,
+    severity: SeverityV2,
+    message: z.string(),
+  })
+  .meta({ id: "FailureEventV2" });
 
 /** PrintSimulation aggregate — the canonical simulation payload. */
-export const PrintSimulationV2 = z.object({
-  recipe: RecipeV2,
-  printer: PrinterProfileV2,
-  layers: z.array(LayerResultV2),
-  failures: z.array(FailureEventV2),
-});
+export const PrintSimulationV2 = z
+  .object({
+    recipe: RecipeV2,
+    printer: PrinterProfileV2,
+    layers: z.array(LayerResultV2),
+    failures: z.array(FailureEventV2),
+  })
+  .meta({ id: "PrintSimulationV2" });
 
 /**
  * Run-context metadata. Producers (resinsim sim) populate this so consumers
  * (resinsim report health --in, downstream LLM tooling) can render the
  * report header without needing the original CLI args.
  */
-export const ProvenanceV2 = z.object({
-  input_path: z.string(),
-  resin_name: z.string(),
-  printer_name: z.string(),
-  n_supports: z.number().int(),
-  tip_radius_mm: z.number(),
-});
+export const ProvenanceV2 = z
+  .object({
+    input_path: z.string(),
+    resin_name: z.string(),
+    printer_name: z.string(),
+    n_supports: z.number().int(),
+    tip_radius_mm: z.number(),
+  })
+  .meta({ id: "ProvenanceV2" });
 
 /**
  * Sidecar pointer (ADR-0019, t2f3.5). Carried on v2 envelopes when the
@@ -155,12 +171,14 @@ export const ProvenanceV2 = z.object({
  * voxel fields the sidecar carries; consumers can branch without
  * fully decoding the binary.
  */
-export const SidecarPointerV2 = z.object({
-  path: z.string(),
-  byte_size: z.number().int(),
-  sha256: z.string(),
-  fields_present: z.array(z.string()),
-});
+export const SidecarPointerV2 = z
+  .object({
+    path: z.string(),
+    byte_size: z.number().int(),
+    sha256: z.string(),
+    fields_present: z.array(z.string()),
+  })
+  .meta({ id: "SidecarPointerV2" });
 
 /**
  * Top-level `sim.json` envelope. `schema_version` is a literal `2`
@@ -168,20 +186,26 @@ export const SidecarPointerV2 = z.object({
  * `resinsim sim` always writes it). `fields_sidecar` is optional
  * (Tier-1 scalar simulations omit it; Tier-2 voxel-cure runs emit it).
  */
-export const SimulationEnvelopeV2 = z.object({
-  schema_version: z.literal(2),
-  simulation: PrintSimulationV2,
-  provenance: ProvenanceV2.optional(),
-  fields_sidecar: SidecarPointerV2.optional(),
-  /**
-   * KB-153. true — the producing run's resin TOML omitted
-   * cure_kinetics_ea_kj_mol, so every cure depth was computed from the
-   * 30 kJ/mol literature-midpoint ESTIMATE. false — measured value.
-   * ABSENT — the producer did not record it; consumers MUST NOT read
-   * absent as false. Additive per ADR-0015: schema_version stays 2.
-   */
-  cure_kinetics_ea_is_default: z.boolean().optional(),
-});
+export const SimulationEnvelopeV2 = z
+  .object({
+    schema_version: z.literal(2),
+    simulation: PrintSimulationV2,
+    provenance: ProvenanceV2.optional(),
+    fields_sidecar: SidecarPointerV2.optional(),
+    /**
+     * KB-153. true — the producing run's resin TOML omitted
+     * cure_kinetics_ea_kj_mol, so every cure depth was computed from the
+     * 30 kJ/mol literature-midpoint ESTIMATE. false — measured value.
+     * ABSENT — the producer did not record it; consumers MUST NOT read
+     * absent as false. Additive per ADR-0015: schema_version stays 2.
+     */
+    cure_kinetics_ea_is_default: z.boolean().optional(),
+  })
+  .meta({
+    title: "SimulationEnvelopeV2",
+    description:
+      "Canonical sim.json envelope (schema_version=2). Source: schemas/sim-json/v2.ts (zod 4). v1 envelopes are no longer supported (clean break per ADR-0019 / t2f3.5); historical reference under schemas/sim-json/archive/. Adds optional fields_sidecar pointer to paired binary sidecar carrying voxel fields. 2026-08 (KB-153): adds optional top-level cure_kinetics_ea_is_default (additive, schema_version stays 2).",
+  });
 
 export type SimulationEnvelopeV2Type = z.infer<typeof SimulationEnvelopeV2>;
 export type PrintSimulationV2Type = z.infer<typeof PrintSimulationV2>;
