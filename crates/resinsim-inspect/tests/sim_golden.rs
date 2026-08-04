@@ -30,7 +30,7 @@
 //! show only the change you intended.
 
 use resinsim_core::entities::{LayerResult, PrinterProfile, ResinProfile};
-use resinsim_core::repositories::{save_with_provenance, Provenance};
+use resinsim_core::repositories::{save_stamped, save_with_provenance, EnvelopeStamp, Provenance};
 use resinsim_core::simulation::PrintSimulation;
 use std::path::{Path, PathBuf};
 
@@ -117,11 +117,21 @@ fn fixed_provenance() -> Provenance {
     }
 }
 
-fn assert_or_regenerate(label: &str, sim: &PrintSimulation) {
+/// `ea_flag` covers all three wire states across the three golden cases
+/// (sim-json-envelope-ea-default-flag): `baseline` uses `Some(true)`,
+/// `single_layer` uses `Some(false)`, `zero_layers` uses `None` — the
+/// `None` case stays byte-identical to the pre-field golden by design
+/// (`skip_serializing_if` omits the key entirely), which is the acceptance
+/// check that old-shape envelopes are unaffected by this field's addition.
+fn assert_or_regenerate(label: &str, sim: &PrintSimulation, ea_flag: Option<bool>) {
     let dir = tmp_dir(label);
     let produced = dir.join(format!("{label}.sim.json"));
-    save_with_provenance(&produced, sim, &fixed_provenance())
-        .expect("save_with_provenance must succeed");
+    let provenance = fixed_provenance();
+    let stamp = EnvelopeStamp {
+        provenance: Some(&provenance),
+        cure_kinetics_ea_is_default: ea_flag,
+    };
+    save_stamped(&produced, sim, stamp).expect("save_stamped must succeed");
     let actual = std::fs::read_to_string(&produced).expect("read produced");
 
     let golden_path = fixtures_dir().join(format!("{label}.sim.json"));
@@ -155,17 +165,17 @@ fn assert_or_regenerate(label: &str, sim: &PrintSimulation) {
 
 #[test]
 fn baseline_envelope_matches_golden() {
-    assert_or_regenerate("baseline", &baseline_fixture());
+    assert_or_regenerate("baseline", &baseline_fixture(), Some(true));
 }
 
 #[test]
 fn zero_layer_envelope_matches_golden() {
-    assert_or_regenerate("zero_layers", &zero_layer_fixture());
+    assert_or_regenerate("zero_layers", &zero_layer_fixture(), None);
 }
 
 #[test]
 fn single_layer_envelope_matches_golden() {
-    assert_or_regenerate("single_layer", &single_layer_fixture());
+    assert_or_regenerate("single_layer", &single_layer_fixture(), Some(false));
 }
 
 /// Optional env-gated 10000-layer smoke. Builds a synthetic 10000-layer

@@ -81,5 +81,6 @@
     "printer_name": "Generic MSLA 4K",
     "n_supports": 20,
     "tip_radius_mm": 0.2
-  }
+  },
+  "cure_kinetics_ea_is_default": false
 }
