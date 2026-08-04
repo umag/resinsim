@@ -2,17 +2,20 @@
   "name": "@resinsim/sim-json-schema",
   "version": "1.0.0",
   "private": true,
-  "description": "Canonical zod 4 schema for resinsim's sim.json interchange format. See docs/adr/0015-sim-json-canonical-interchange.md.",
-  "main": "v1.ts",
-  "types": "v1.ts",
+  "type": "module",
+  "description": "Canonical zod 4 schema for resinsim's sim.json interchange format (v2). See docs/adr/0015-sim-json-canonical-interchange.md and docs/adr/0019-voxel-field-on-disk-persistence.md.",
+  "main": "v2.ts",
+  "types": "v2.ts",
   "scripts": {
     "regenerate-schema": "tsx scripts/regenerate-schema.ts",
-    "build": "tsc"
+    "typecheck": "tsc",
+    "test": "node --import tsx tests/parse-goldens.test.ts"
   },
   "dependencies": {
     "zod": "4.0.0"
   },
   "devDependencies": {
+    "@types/node": "22.20.1",
     "tsx": "4.19.2",
     "typescript": "5.7.2"
   }
