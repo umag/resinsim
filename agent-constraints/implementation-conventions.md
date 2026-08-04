@@ -228,12 +228,11 @@ the four-config matrix; the same is true of
 directory's own path and symbol references.
 
 **Expected shape is IDENTICAL in both configs** (current as of
-`uat-unskip-campaign` increment A3+B — `athena-analytic-log-ingest`,
-`cumulative-times-sec-accessor`, `nanodlp-import-simulates`,
-`nanodlp-archive-bomb-rejected`, and `nanodlp-calibrate-compares-real-force`,
-2026-08-04): 52 features, 160 scenarios (75 passed, 85 skipped, 0 failed),
-462 steps (377 passed, 85 skipped, 0 failed), exit 0, register at 28
-entries. This shape moves as the campaign lands more increments — trust
+`uat-unskip-campaign` increment C1 — `cli-sim-producer-writes-sim-json` and
+`cli-sim-rejects-unknown-schema-version`, 2026-08-04): 52 features, 160
+scenarios (85 passed, 75 skipped, 0 failed), 512 steps (427 passed, 75
+skipped, 0 failed), exit 0, register at 26 entries (sum 75). This shape
+moves as the campaign lands more increments — trust
 `cargo uat`'s own `[Consolidated total]` line over this paragraph if they
 disagree, and update this paragraph when they do. A field-sim run reporting
 FEWER total steps than the default run means a scenario is aborting early
@@ -283,6 +282,46 @@ declared debt). The increment also introduced `tests/uat_steps/fixtures.rs`
 committed `mini.nanodlp` fixture could not satisfy every scenario's Given
 premise (verified by a real-CLI probe before any assertion was written, not
 assumed).
+
+Increment C1 (`uat-unskip-c1`, 2026-08-04) is the Band C CLI increment
+proper. It landed two modules covering 10 scenarios
+(`cli-sim-producer-writes-sim-json` 6, `cli-sim-rejects-unknown-schema-
+version` 4), corrected two stale `schema_version` literals in
+`spec/uat/` that ADR-0019's v1→v2 clean break had left behind (the binary
+was right, the spec was stale — a correction, not a weakening), and
+demoted two specs to Band-D declared debt:
+`cli-sim-rejects-tampered-sidecar` (4) and
+`cli-sim-budget-mismatch-on-load` (3). Print-time
+(`cli-report-health-print-time`, 3 scenarios) was scoped in but deferred
+to C2 on sizing (6+4+3 exceeds the increment cap, and print-time is an
+unrelated `ReportGenerator`-rendering surface with its own
+formula-mirroring / cross-comparison review hazards) — its register entry
+is untouched.
+
+The two demotions introduce a NEW Band-D sub-shape: **binary-build-seam
+asymmetry**, distinct from the in-process `#[cfg]` asymmetry the existing
+Band-D entries (above) carry. `ensure_resinsim_built`
+(`tests/uat_steps/cli_fixtures.rs:64-98`) builds the subprocessed
+`resinsim` binary with `--bin resinsim -p resinsim-inspect` and NO
+`--features`, so any scenario whose only production entry point requires
+`field-sim` is unreachable in BOTH `cargo uat` and `cargo uat-field-sim`
+TODAY — not merely asymmetric between them. These two specs become the
+canonical config-asymmetric shape only once `ensure_resinsim_built` is
+taught to forward `--features field-sim` under `#[cfg(feature =
+"field-sim")]` — a design decision `uat-unskip-band-d` owns, not this
+increment. tampered-sidecar UAT-3 (path traversal) was checked as a
+possible envelope-level exception (its `fields_sidecar` pointer parses
+fine on default features) and is NOT one: the pointer's only consumer is
+itself gated, so a crafted `../escape.bin` pointer is silently ignored
+and `report health --in` exits 0.
+
+C1 also generalised `ctb_layer_height_authority.rs`'s incumbent
+`^the process exits with code 0$` step with an observation-mode XOR guard
+(in-process `sim_primary`/`last_sim_err` XOR CLI-subprocess
+`cli_exit_code`) so a CLI-subprocess spec could share it without a second,
+ambiguous registration — see that module's doc comment for the pattern if
+a future spec needs the same step against a different observation
+surface.
 
 Hand-rolled resin/printer TOML fixtures under `tests/uat_steps/` MUST
 compose from the shared builders (`world.rs::ResinBuilder`,
