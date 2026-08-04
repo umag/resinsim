@@ -300,8 +300,8 @@ is untouched.
 
 The two demotions introduce a NEW Band-D sub-shape: **binary-build-seam
 asymmetry**, distinct from the in-process `#[cfg]` asymmetry the existing
-Band-D entries (above) carry. `ensure_resinsim_built`
-(`tests/uat_steps/cli_fixtures.rs:64-98`) builds the subprocessed
+Band-D entries (above) carry. `tests/uat_steps/cli_fixtures.rs`'s
+`ensure_resinsim_built` builds the subprocessed
 `resinsim` binary with `--bin resinsim -p resinsim-inspect` and NO
 `--features`, so any scenario whose only production entry point requires
 `field-sim` is unreachable in BOTH `cargo uat` and `cargo uat-field-sim`
@@ -315,12 +315,14 @@ fine on default features) and is NOT one: the pointer's only consumer is
 itself gated, so a crafted `../escape.bin` pointer is silently ignored
 and `report health --in` exits 0.
 
-C1 also generalised `ctb_layer_height_authority.rs`'s incumbent
-`^the process exits with code 0$` step with an observation-mode XOR guard
-(in-process `sim_primary`/`last_sim_err` XOR CLI-subprocess
-`cli_exit_code`) so a CLI-subprocess spec could share it without a second,
-ambiguous registration — see that module's doc comment for the pattern if
-a future spec needs the same step against a different observation
+C1 also generalised the incumbent `^the process exits with code 0$` step
+in `ctb_layer_height_authority.rs` with an observation-mode XOR guard, so
+a CLI-subprocess spec could share it without a second, ambiguous
+registration. The two observation modes are captured as fields on
+`crates/resinsim-core/tests/uat_steps/world.rs`'s `UatWorld`:
+in-process `sim_primary`/`last_sim_err` XOR CLI-subprocess
+`cli_exit_code`. See the generalised step's doc comment for the pattern
+if a future spec needs the same step against a different observation
 surface.
 
 Hand-rolled resin/printer TOML fixtures under `tests/uat_steps/` MUST
