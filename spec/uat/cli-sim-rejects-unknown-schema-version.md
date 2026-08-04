@@ -52,11 +52,15 @@ Scenario: UAT-3 garbage JSON triggers parse error not panic
 **Rationale.** Per ADR-0009 the deserialise-bypass guard re-runs
 `PrintSimulation::validate()` after parsing so a child-entity violation
 (e.g. negative `layer_height_um`) cannot silently land in a downstream
-consumer. ADR-0015 inherits this guard.
+consumer. ADR-0015 inherits this guard. ADR-0019 bumped
+`CURRENT_SCHEMA_VERSION` from 1 to 2 as a deliberate clean break; the
+Given below is corrected to use a currently-accepted schema_version so
+this scenario still reaches the validate branch instead of being rejected
+earlier by the version check.
 
 ```gherkin
 Scenario: UAT-4 tampered child entity surfaces "invalid simulation"
-  Given a sim.json with valid schema_version=1 but recipe.layer_height_um set to -1.0
+  Given a sim.json with valid schema_version=2 but recipe.layer_height_um set to -1.0
   When the user invokes `resinsim report health --in <PATH>`
   Then the process exits with non-zero code
   And stderr contains "invalid simulation"

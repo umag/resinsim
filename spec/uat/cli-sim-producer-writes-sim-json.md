@@ -12,9 +12,13 @@ between simulation producer and downstream consumers (resinsim-viz
 `--load-sim`, `resinsim report health --in`, future LLM tooling). The
 producer side of that contract is the new `resinsim sim` subcommand. The
 acceptance shape: a `{schema_version, simulation, provenance}` envelope
-written atomically (tmp + rename), schema_version = 1, provenance carrying
+written atomically (tmp + rename), schema_version = 2, provenance carrying
 the run-context metadata so downstream consumers can reconstruct the
 report header without re-supplying CLI args.
+
+ADR-0019 bumped `CURRENT_SCHEMA_VERSION` from 1 to 2 as a deliberate
+clean break (no v1 compat); the schema_version literal below is corrected
+to match.
 
 ## UAT-1: Happy path — `sim --stl ... --out` produces a valid envelope
 
@@ -26,7 +30,7 @@ Scenario: UAT-1 sim subcommand writes a valid envelope to --out
   Then the process exits with code 0
   And cube.sim.json exists at the requested path
   And the file is valid JSON with top-level fields schema_version, simulation, provenance
-  And schema_version equals 1
+  And schema_version equals 2
   And provenance.input_path equals the input path
   And provenance.resin_name equals "Generic Standard"
   And provenance.printer_name equals "Generic MSLA 4K"
