@@ -290,6 +290,103 @@ fn sim_warns_exactly_once() {
     );
 }
 
+/// sim-json-envelope-ea-default-flag: `resinsim sim` is the ADR-0015
+/// producer for the sim.json envelope; it must stamp the top-level
+/// `cure_kinetics_ea_is_default` field from the SAME predicate the stderr
+/// warning uses, so a downstream `report health --in` consumer can recover
+/// the KB-153 fact without re-loading the resin TOML. RED because `cmd_sim`
+/// still calls `save_with_provenance`, which never emits the key.
+#[test]
+fn sim_stamps_ea_default_true_in_envelope() {
+    let data = workspace_data_dir();
+    let stl = data.join("test_cube.stl");
+    let out_dir = tmpdir("sim-stamps-true");
+    let sim_out = out_dir.join("out.sim.json");
+    let out = Command::new(bin())
+        .args(["sim", "--stl"])
+        .arg(&stl)
+        .args(["--resin", "generic_standard", "--printer", "generic_msla_4k"])
+        .args(["--data-dir"])
+        .arg(&data)
+        .args(["--out"])
+        .arg(&sim_out)
+        .output()
+        .expect("spawn resinsim sim");
+    assert!(out.status.success(), "sim command failed: {:?}", out);
+
+    let bytes = std::fs::read_to_string(&sim_out).expect("read produced sim.json");
+    let value: serde_json::Value = serde_json::from_str(&bytes).expect("parse sim.json");
+    assert_eq!(
+        value["cure_kinetics_ea_is_default"],
+        serde_json::json!(true),
+        "sim.json envelope must stamp the flag as true for a default-Ea resin: {value}"
+    );
+}
+
+/// Negative polarity of the stamp: a measured Ea must be stamped `false`,
+/// not left absent — absent means "producer did not record it", which is a
+/// different claim.
+#[test]
+fn sim_stamps_ea_default_false_with_measured_resin() {
+    let data = data_dir_with_measured_ea(42.0);
+    let stl = workspace_data_dir().join("test_cube.stl");
+    let out_dir = tmpdir("sim-stamps-false");
+    let sim_out = out_dir.join("out.sim.json");
+    let out = Command::new(bin())
+        .args(["sim", "--stl"])
+        .arg(&stl)
+        .args(["--resin", "generic_standard", "--printer", "generic_msla_4k"])
+        .args(["--data-dir"])
+        .arg(&data)
+        .args(["--out"])
+        .arg(&sim_out)
+        .output()
+        .expect("spawn resinsim sim");
+    assert!(out.status.success(), "sim command failed: {:?}", out);
+
+    let bytes = std::fs::read_to_string(&sim_out).expect("read produced sim.json");
+    let value: serde_json::Value = serde_json::from_str(&bytes).expect("parse sim.json");
+    assert_eq!(
+        value["cure_kinetics_ea_is_default"],
+        serde_json::json!(false),
+        "sim.json envelope must stamp the flag as false for a measured-Ea resin: {value}"
+    );
+}
+
+/// Anti-drift tie: the stamp and the stderr warning must be computed from
+/// the SAME predicate in the SAME run. This is what makes "stamped from the
+/// same predicate the warning uses" a testable property rather than a
+/// code-review claim — it fails if a future change re-derives the flag from
+/// a different source than `resolved.resin.cure_kinetics_ea_is_default()`.
+#[test]
+fn sim_stamp_agrees_with_stderr_warning() {
+    let data = workspace_data_dir();
+    let stl = data.join("test_cube.stl");
+    let out_dir = tmpdir("sim-stamp-agrees");
+    let sim_out = out_dir.join("out.sim.json");
+    let out = Command::new(bin())
+        .args(["sim", "--stl"])
+        .arg(&stl)
+        .args(["--resin", "generic_standard", "--printer", "generic_msla_4k"])
+        .args(["--data-dir"])
+        .arg(&data)
+        .args(["--out"])
+        .arg(&sim_out)
+        .output()
+        .expect("spawn resinsim sim");
+    assert!(out.status.success(), "sim command failed: {:?}", out);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let bytes = std::fs::read_to_string(&sim_out).expect("read produced sim.json");
+    let value: serde_json::Value = serde_json::from_str(&bytes).expect("parse sim.json");
+    assert_eq!(
+        stderr.contains("KB-153"),
+        value["cure_kinetics_ea_is_default"] == serde_json::json!(true),
+        "stderr warning presence and the envelope stamp must agree in a single invocation; \
+         stderr:\n{stderr}\nenvelope: {value}"
+    );
+}
+
 /// Double-emission guard on `inspect thermal` — this must stay green
 /// unmodified across the seam move: it pins behaviour that must NOT change
 /// (the two-stage `--printer`-gated path already warned exactly once before

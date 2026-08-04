@@ -1830,7 +1830,7 @@ fn cmd_sim(
     voxel_cure_mm: Option<f32>,
 ) {
     use resinsim_core::app::SimulationRunner;
-    use resinsim_core::repositories::{save_with_provenance, Provenance};
+    use resinsim_core::repositories::{save_stamped, EnvelopeStamp, Provenance};
     use resinsim_core::services::build_plate::PlateAdhesionProfile;
     use resinsim_core::services::failure_predictor::SupportConfig;
     use resinsim_core::values::{AmbientTemperature, InitialLedTemperature};
@@ -1938,7 +1938,13 @@ fn cmd_sim(
         n_supports,
         tip_radius_mm: tip_radius,
     };
-    if let Err(e) = save_with_provenance(out_path, &sim, &provenance) {
+    let stamp = EnvelopeStamp {
+        provenance: Some(&provenance),
+        // Same predicate the KB-153 warning uses — NOT a re-derivation.
+        // `resolved.resin` is the very profile `load_resin` warned about.
+        cure_kinetics_ea_is_default: Some(resolved.resin.cure_kinetics_ea_is_default()),
+    };
+    if let Err(e) = save_stamped(out_path, &sim, stamp) {
         eprintln!("Error writing sim.json to {}: {e}", out_path.display());
         std::process::exit(1);
     }
