@@ -22,9 +22,25 @@ the reset outright, so treat it as "the counter is scoped per version,"
 not as a guaranteed reset behaviour, until you've checked it against a
 live `hydrate` call.
 
-Only two phases run the autonomous loop today (Phase 3 and Phase 5) — the
-skill's `references/autonomous-loop.md` phase-mapping table has exactly
-these two columns.
+The skill's `references/autonomous-loop.md` phase-mapping table has
+exactly two columns, Phase 3 and Phase 5 — but that reference file is not
+the only normative source for what this repo's lifecycles actually run.
+See the next section.
+
+### Model-level test-review round
+
+The `@magistr/issue-lifecycle` model (v2026.06.12.3, what this repo
+actually runs) carries a third autonomous round the skill's `references/`
+directory does not document: `writing_tests` / `reviewing_tests` states,
+driven by `review_tests` / `iterate_tests` / `tests_approved`, tracked by
+`hydrate.testReviewIteration`. Two authorities have to be checked, not
+one — the issue-lifecycle skill's `references/` directory covers Phase 3
+and Phase 5 only, and the model's own schema (in prose: the command is
+`swamp model type describe @magistr/issue-lifecycle`) is where this third
+round is actually defined. No committed cap for `testReviewIteration` is
+written down anywhere in either source; by convention, treat it as 5,
+mirroring the two documented loops, and verify against the model schema
+if that ever matters precisely.
 
 ## What "clean" means
 
@@ -50,13 +66,21 @@ and ask for **direction**, not approval. The four documented options:
 4. Manual intervention — take over the plan or code directly
 
 Never call the acceptance method in handover mode, even if the human says
-"looks fine" — the safeguard fired for a reason. There is no
-input-parameter escape hatch that bypasses re-review: after handover, the
-human either gives direction that resolves the safeguard (e.g. marks
-findings wontfix) so the loop restarts from the top, or says "force
-approve" — which still does not auto-call anything; it re-fans-out
-reviewers, confirms matrix coverage is complete, and then waits for the
-normal trigger phrase.
+"looks fine" — the safeguard fired for a reason. For Phase 3 and Phase 5
+there is no input-parameter escape hatch: after handover, the human
+either gives direction that resolves the safeguard (e.g. marks findings
+wontfix) so the loop restarts from the top, or says "force approve" —
+which still does not auto-call anything; it re-fans-out reviewers,
+confirms matrix coverage is complete, and then waits for the normal
+trigger phrase.
+
+The model-level test-review round (above) is the one documented
+exception: `tests_approved` accepts an `override_reason` input that
+bypasses the blocking-findings gate as an explicit human override — only
+after the test-review loop has hit its cap without converging, and only
+on explicit human direction, never offered proactively. Matrix coverage
+is still required even with `override_reason` set. The reason is recorded
+in that round's review-round snapshot for audit.
 
 ## Two safeguards that usually fire first
 
