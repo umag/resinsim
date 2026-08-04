@@ -315,7 +315,7 @@ This file does not override the sacred rules:
 ## See also
 
 - `agent-constraints/uat-conventions.md` — UAT format + location
-- `agent-constraints/knowledge-base.md` — KB layout (docs/patterns/, docs/patterns/anti/, docs/adr/)
+- `agent-constraints/knowledge-base.md` — KB layout (docs/patterns/, docs/patterns/anti/, docs/kb/, docs/adr/)
 - `agent-constraints/iteration-limits.md` — autonomous loop caps
 - `using-jj-workspaces` skill — sibling-workspace mechanics
 - ADR-0015 (this issue) — example of a clean linear-history feature commit
