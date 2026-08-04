@@ -19,8 +19,12 @@
 //! without `--printer` (previously silent; the emission used to live inside
 //! the two-stage `--printer`-gated branch only). `inspect thermal --json`
 //! now also carries the warning on stderr (stdout JSON is untouched).
-//! `report health --in` remains a deliberate exception — it consumes a
-//! sim.json envelope and loads no TOML at all — pinned below.
+//! `report health --in` consumes a sim.json envelope, not a resin TOML, so
+//! it cannot go through `profile_loader::load_resin` — but the envelope
+//! carries the fact via the top-level `cure_kinetics_ea_is_default` flag
+//! (stamped by the producer, `resinsim sim`), and `report health` warns
+//! from that flag via `profile_loader::warn_if_envelope_ea_is_default`.
+//! Its exactly-once guard is `report_health_warns_exactly_once` below.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -490,19 +494,104 @@ fn thermal_warns_without_printer_flag() {
     );
 }
 
-/// Pins the ADR-0015 consumer boundary: `report health --in` loads a
-/// sim.json envelope, not a resin TOML, so it CANNOT go through
-/// `profile_loader::load_resin` and must stay silent. This is intentional
-/// and must NOT regress — a later reader must not "fix" this by threading
-/// --resin/--printer flags back into `report health`. Surfacing the flag on
-/// this consumer would require `cure_kinetics_ea_is_default` in the
-/// sim.json v2 envelope schema; tracked as a follow-up issue,
-/// `sim-json-envelope-ea-default-flag` — remove this pin when that lands.
+/// sim-json-envelope-ea-default-flag: `report health --in` is the
+/// envelope-consumer twin of `load_resin`'s KB-153 emission. It loads no
+/// resin TOML, but the sim.json envelope now carries the fact as the
+/// top-level `cure_kinetics_ea_is_default` flag, stamped by the producer
+/// (`resinsim sim`). RED because `cmd_report_health` prints nothing today.
 #[test]
-fn report_health_in_does_not_warn() {
+fn report_health_warns_when_envelope_flags_ea_default() {
     let data = workspace_data_dir();
     let stl = data.join("test_cube.stl");
-    let out_dir = tmpdir("report-health-no-warn");
+    let out_dir = tmpdir("report-health-warns-default");
+    let sim_out = out_dir.join("out.sim.json");
+    let sim = Command::new(bin())
+        .args(["sim", "--stl"])
+        .arg(&stl)
+        .args(["--resin", "generic_standard", "--printer", "generic_msla_4k"])
+        .args(["--data-dir"])
+        .arg(&data)
+        .args(["--out"])
+        .arg(&sim_out)
+        .output()
+        .expect("spawn resinsim sim");
+    assert!(sim.status.success(), "sim command failed: {:?}", sim);
+
+    let out = Command::new(bin())
+        .args(["report", "health", "--in"])
+        .arg(&sim_out)
+        .output()
+        .expect("spawn resinsim report health");
+    assert!(out.status.success(), "report health failed: {:?}", out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("30 kJ/mol"),
+        "stderr must mention the default Ea value:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("literature midpoint estimate"),
+        "stderr must mention the estimate framing:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("KB-153"),
+        "stderr must cite KB-153:\n{stderr}"
+    );
+    // Pin the consumer-context line warn_if_envelope_ea_is_default prints
+    // around the shared literal: it names that the fact came from the
+    // envelope and that the remedy is re-running `resinsim sim`.
+    assert!(
+        stderr.contains("sim.json envelope") && stderr.contains("resinsim sim"),
+        "stderr must name that the fact came from the envelope and that the \
+         remedy is re-running `resinsim sim`:\n{stderr}"
+    );
+}
+
+/// Double-emission guard on the consumer path, mirroring
+/// `sim_warns_exactly_once` / `thermal_warns_exactly_once` — the
+/// anti-pattern's mandated per-surface detection shape
+/// (docs/patterns/anti/warning-duplicated-per-subcommand.md §Detection).
+/// This is the exactly-once pin that REPLACES the retired
+/// `report_health_in_does_not_warn` silence pin: the envelope now carries
+/// the flag, so the consumer warns — and must warn exactly once.
+#[test]
+fn report_health_warns_exactly_once() {
+    let data = workspace_data_dir();
+    let stl = data.join("test_cube.stl");
+    let out_dir = tmpdir("report-health-warns-once");
+    let sim_out = out_dir.join("out.sim.json");
+    let sim = Command::new(bin())
+        .args(["sim", "--stl"])
+        .arg(&stl)
+        .args(["--resin", "generic_standard", "--printer", "generic_msla_4k"])
+        .args(["--data-dir"])
+        .arg(&data)
+        .args(["--out"])
+        .arg(&sim_out)
+        .output()
+        .expect("spawn resinsim sim");
+    assert!(sim.status.success(), "sim command failed: {:?}", sim);
+
+    let out = Command::new(bin())
+        .args(["report", "health", "--in"])
+        .arg(&sim_out)
+        .output()
+        .expect("spawn resinsim report health");
+    assert!(out.status.success(), "report health failed: {:?}", out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.matches("KB-153").count(),
+        1,
+        "warning must appear exactly once on the report-health consumer path:\n{stderr}"
+    );
+}
+
+/// Negative polarity: an envelope stamped `false` (measured Ea) must stay
+/// silent on the consumer path too.
+#[test]
+fn report_health_silent_when_envelope_flags_measured_ea() {
+    let data = data_dir_with_measured_ea(42.0);
+    let stl = workspace_data_dir().join("test_cube.stl");
+    let out_dir = tmpdir("report-health-silent-measured");
     let sim_out = out_dir.join("out.sim.json");
     let sim = Command::new(bin())
         .args(["sim", "--stl"])
@@ -525,7 +614,113 @@ fn report_health_in_does_not_warn() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.contains("KB-153") && !stderr.contains("30 kJ/mol"),
-        "report health --in loads no resin TOML and must stay silent on the \
-         KB-153 warning:\n{stderr}"
+        "report health --in must stay silent when the envelope flags a \
+         measured Ea:\n{stderr}"
+    );
+}
+
+/// The accepted false negative, made explicit and executable: an envelope
+/// with the flag stripped in-place (mirroring the provenance-strip
+/// technique in `report_health_time_cli.rs`) mimics a pre-flag / older
+/// producer and must load fine and stay silent — absence is not `false`,
+/// per ADR-0002 and the envelope field's doc comment. A `schema_version: 1`
+/// file is now hard-rejected (simulation_repo.rs), so tampering an
+/// existing v2 envelope is the only way to exercise this state.
+#[test]
+fn report_health_silent_on_pre_flag_envelope() {
+    let data = workspace_data_dir();
+    let stl = data.join("test_cube.stl");
+    let out_dir = tmpdir("report-health-pre-flag");
+    let sim_out = out_dir.join("out.sim.json");
+    let sim = Command::new(bin())
+        .args(["sim", "--stl"])
+        .arg(&stl)
+        .args(["--resin", "generic_standard", "--printer", "generic_msla_4k"])
+        .args(["--data-dir"])
+        .arg(&data)
+        .args(["--out"])
+        .arg(&sim_out)
+        .output()
+        .expect("spawn resinsim sim");
+    assert!(sim.status.success(), "sim command failed: {:?}", sim);
+
+    let bytes = std::fs::read_to_string(&sim_out).expect("read envelope");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&bytes).expect("envelope is valid JSON");
+    value
+        .as_object_mut()
+        .expect("envelope root is an object")
+        .remove("cure_kinetics_ea_is_default");
+    std::fs::write(
+        &sim_out,
+        serde_json::to_string_pretty(&value).expect("serialize tampered envelope"),
+    )
+    .expect("write envelope without the flag");
+
+    let out = Command::new(bin())
+        .args(["report", "health", "--in"])
+        .arg(&sim_out)
+        .output()
+        .expect("spawn resinsim report health");
+    assert!(
+        out.status.success(),
+        "report health must still exit 0 on a pre-flag envelope: {:?}",
+        out
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("KB-153") && !stderr.contains("30 kJ/mol"),
+        "report health --in must stay silent (accepted false negative) when \
+         the flag is absent:\n{stderr}"
+    );
+}
+
+/// Pins the documented non-goal: `report health --json` stdout does NOT
+/// gain a `cure_kinetics_ea_is_default` key — a `--json` caller already
+/// holds the sim.json it passed to `--in` and can read the flag from the
+/// envelope directly. stderr still carries the advisory; the streams are
+/// separate, so stdout stays parseable.
+#[test]
+fn report_health_json_stdout_unchanged_by_advisory() {
+    let data = workspace_data_dir();
+    let stl = data.join("test_cube.stl");
+    let out_dir = tmpdir("report-health-json-unchanged");
+    let sim_out = out_dir.join("out.sim.json");
+    let sim = Command::new(bin())
+        .args(["sim", "--stl"])
+        .arg(&stl)
+        .args(["--resin", "generic_standard", "--printer", "generic_msla_4k"])
+        .args(["--data-dir"])
+        .arg(&data)
+        .args(["--out"])
+        .arg(&sim_out)
+        .output()
+        .expect("spawn resinsim sim");
+    assert!(sim.status.success(), "sim command failed: {:?}", sim);
+
+    let out = Command::new(bin())
+        .args(["report", "health", "--in"])
+        .arg(&sim_out)
+        .args(["--json"])
+        .output()
+        .expect("spawn resinsim report health");
+    assert!(
+        out.status.success(),
+        "report health --json failed: {:?}",
+        out
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout must remain valid JSON");
+    assert!(
+        value.get("cure_kinetics_ea_is_default").is_none(),
+        "report health --json stdout must NOT carry cure_kinetics_ea_is_default; got: {value}"
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("KB-153"),
+        "stderr must still carry the advisory even in --json mode:\n{stderr}"
     );
 }

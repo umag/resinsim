@@ -1696,6 +1696,12 @@ fn cmd_report_health(in_path: &std::path::Path, json: bool) {
         }
     };
 
+    // KB-153: warn at the point the envelope's claim enters the process,
+    // before any stdout rendering, so the advisory precedes the report in
+    // a terminal. stderr only — stdout is the byte-identity-goldened
+    // report surface.
+    profile_loader::warn_if_envelope_ea_is_default(envelope.cure_kinetics_ea_is_default);
+
     // Reconstruct the report header from the envelope's provenance metadata
     // when present. Envelopes saved by `resinsim sim` always carry
     // provenance; envelopes saved by the GUI Save-Sim path or by older

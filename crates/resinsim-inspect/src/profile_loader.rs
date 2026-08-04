@@ -114,6 +114,24 @@ pub fn load_resin(data_dir: &Path, name: &str) -> Result<ResinProfile, String> {
     Ok(resin)
 }
 
+/// SOLE owner of the KB-153 advisory literal. Two seams render it —
+/// `load_resin` (a resin TOML entered the process without a measured Ea)
+/// and [`warn_if_envelope_ea_is_default`] (a sim.json envelope arrived
+/// with the flag set). They take different inputs, so they are genuinely
+/// different seams; the STRING must not fork between them. See
+/// docs/patterns/anti/warning-duplicated-per-subcommand.md.
+///
+/// The literal is moved BYTE-IDENTICALLY from the pre-move `cmd_thermal`
+/// site (main.rs, pre-KB-153-fix): em dash (U+2014), ASCII apostrophe in
+/// "resin's", single rendered line via `\`-continuations.
+pub fn cure_kinetics_ea_default_warning_text() -> String {
+    format!(
+        "WARNING: cure-kinetics Ea = {DEFAULT_CURE_KINETICS_EA_KJ_MOL} kJ/mol (literature midpoint estimate) \
+         — replace with a measured value in the resin's TOML profile before \
+         trusting cure-depth drift (KB-153)"
+    )
+}
+
 /// KB-153 policy: the cure-kinetics Ea warning text, or `None` when the
 /// resin's TOML carries a measured value.
 ///
@@ -122,19 +140,28 @@ pub fn load_resin(data_dir: &Path, name: &str) -> Result<ResinProfile, String> {
 /// that turns `Some(msg)` into an `eprintln!` lives in [`load_resin`]'s
 /// caller-facing seam (see the doc comment there); this function must stay
 /// side-effect-free so it cannot become a second emission point.
-///
-/// The literal is moved BYTE-IDENTICALLY from the pre-move `cmd_thermal`
-/// site (main.rs, pre-KB-153-fix): em dash (U+2014), ASCII apostrophe in
-/// "resin's", single rendered line via `\`-continuations.
 pub fn cure_kinetics_ea_default_warning(resin: &ResinProfile) -> Option<String> {
-    if !resin.cure_kinetics_ea_is_default() {
-        return None;
+    resin
+        .cure_kinetics_ea_is_default()
+        .then(cure_kinetics_ea_default_warning_text)
+}
+
+/// The envelope-consumer twin of [`load_resin`]'s emission. Every CLI
+/// subcommand that consumes a sim.json envelope routes its KB-153 advisory
+/// through here, so a new consumer cannot forget it and cannot paste a
+/// third copy of the wording. Exactly one `eprintln!` of the shared
+/// literal, optionally preceded by a consumer-context line naming where
+/// the fact came from — the shared wording itself never forks. `None`
+/// (producer did not record the fact) stays silent — absence is not
+/// `false`; see ADR-0002 and the envelope field's doc comment.
+pub fn warn_if_envelope_ea_is_default(flag: Option<bool>) {
+    if flag == Some(true) {
+        eprintln!(
+            "NOTE: this fact was read from the sim.json envelope, not a resin TOML \
+             — re-run `resinsim sim` after supplying a measured value to refresh it."
+        );
+        eprintln!("{}", cure_kinetics_ea_default_warning_text());
     }
-    Some(format!(
-        "WARNING: cure-kinetics Ea = {DEFAULT_CURE_KINETICS_EA_KJ_MOL} kJ/mol (literature midpoint estimate) \
-         — replace with a measured value in the resin's TOML profile before \
-         trusting cure-depth drift (KB-153)"
-    ))
 }
 
 /// One-shot helper that resolves the data dir + loads both profiles in one
