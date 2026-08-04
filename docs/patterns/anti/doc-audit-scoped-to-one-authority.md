@@ -54,3 +54,6 @@ grep scope, the cleaner the "zero hits" evidence looks.
 - `docs/patterns/anti/guard-that-cannot-observe-its-own-failure-mode.md` —
   the same blindness one level down: a check whose scope excludes its own
   failure mode
+- `crates/resinsim-core/tests/agent_constraints_links.rs` — the guard
+  that names this doc, per this repo's own rule that an anti-pattern doc
+  must name the guard that catches it

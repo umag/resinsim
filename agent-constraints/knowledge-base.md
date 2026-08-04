@@ -108,7 +108,10 @@ code** — module doc comments and assertion/panic messages in this tree
 already cite these docs by path (e.g. `uat_gherkin.rs`'s doc comments
 point at `docs/patterns/anti/fixture-copy-of-shared-builder.md`); a new
 doc should expect to be cited the same way from whatever it describes,
-not just linked from a sibling doc.
+not just linked from a sibling doc. The See-also graph among
+`agent-constraints/*.md` files closes this loop on itself: symmetry and
+no-orphan are asserted by `crates/resinsim-core/tests/agent_constraints_links.rs`,
+so a one-way link here is a guard failure, not just a stale doc.
 
 ## Prior-art lookup at planning Step 6
 

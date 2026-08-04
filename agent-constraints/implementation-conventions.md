@@ -223,7 +223,9 @@ that campaign pointer below for what changed and why):
 
 Authoring-time detection of malformed Gherkin lives in
 `tests/spec_gherkin_wellformed.rs`, which IS nextest-visible and so runs in
-the four-config matrix.
+the four-config matrix; the same is true of
+`tests/agent_constraints_links.rs`, the authoring-time guard over this
+directory's own path and symbol references.
 
 **Expected shape is IDENTICAL in both configs** (current as of
 `uat-unskip-campaign` increment A3+B — `athena-analytic-log-ingest`,
