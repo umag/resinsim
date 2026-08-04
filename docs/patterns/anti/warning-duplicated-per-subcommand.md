@@ -41,6 +41,26 @@ forget the warning, and double-emission is structurally impossible.
   retire it).
 - `git log -S<warning-text>` finds copy deletions during refactors.
 
+## Follow-up (2026-08, sim-json-envelope-ea-default-flag)
+
+The deliberate-silence pin named above, `report_health_in_does_not_warn`,
+was retired: `report health --in` now warns too, because the sim.json
+envelope gained a top-level `cure_kinetics_ea_is_default` flag that the
+producer (`resinsim sim`) stamps and the consumer reads. The retirement
+happened in the same commit as the replacement exactly-once pin
+(`report_health_warns_exactly_once`), so no revision of history left the
+surface unguarded in either direction.
+
+This is a generalisation of the fix shape above, not a recurrence of the
+anti-pattern: the advisory now has TWO legitimate seams —
+`profile_loader::load_resin` (a resin TOML entered the process) and
+`profile_loader::warn_if_envelope_ea_is_default` (a sim.json envelope
+arrived with the flag set) — because they take genuinely different
+inputs. What must not fork is the wording, and it doesn't:
+`cure_kinetics_ea_default_warning_text()` is the sole owner of the
+literal, and both seams render it. A third envelope-consuming subcommand
+now calls the shared seam rather than pasting a third copy.
+
 ## See also
 
 - `docs/patterns/anti/spec-edited-step-regex-not.md` — the drift class

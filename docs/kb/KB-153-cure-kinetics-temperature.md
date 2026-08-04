@@ -62,17 +62,34 @@ once per load, so the warning surfaces consistently across:
   carries `"cure_kinetics_ea_is_default": true`).
 - `resinsim inspect cure` / `inspect force` / `inspect zaxis` /
   `inspect calibrate` stderr, whenever a `--resin` profile is loaded.
+- `resinsim report health --in` stderr — see below.
 - This KB entry.
 - `ResinProfile::cure_kinetics_ea_kj_mol` doc comment.
 - `CureCalculator::cure_depth_at_temp` doc comment.
 
-`resinsim report health --in` is a deliberate exception: post-ADR-0015 it
-consumes a `sim.json` envelope and loads no resin TOML at all, so it
-cannot pass through the `load_resin` seam and stays silent. Surfacing the
-flag there would require a `cure_kinetics_ea_is_default` field on the
-sim.json v2 envelope schema — tracked as a follow-up,
-`sim-json-envelope-ea-default-flag`, pinned in code by
-`report_health_in_does_not_warn` (`crates/resinsim-inspect/tests/thermal_cli_warnings.rs`).
+`resinsim report health --in` consumes a `sim.json` envelope, not a resin
+TOML, so it cannot pass through the `load_resin` seam directly. Instead
+the envelope carries the fact on the wire: the top-level
+`cure_kinetics_ea_is_default` field (`Option<bool>`, additive per
+ADR-0015 — `schema_version` stays 2), stamped by the producer
+(`resinsim sim`) from `ResinProfile::cure_kinetics_ea_is_default()` — the
+same predicate `load_resin`'s warning uses. `report health --in` reads
+that flag and warns via `profile_loader::warn_if_envelope_ea_is_default`,
+which renders the identical shared literal
+(`profile_loader::cure_kinetics_ea_default_warning_text`). The flag is
+three-valued: `true` (default Ea used), `false` (measured value), or
+absent — meaning "the producer did not record it" (a pre-flag envelope,
+or one written via `save_to_path` / `save_with_provenance` rather than
+`resinsim sim`). Absent stays silent by design (the accepted false
+negative): every sim.json produced before this field existed — including
+the three shipped `lilith-torso*.sim.json` viz fixtures — will show no
+advisory even though the resins behind them omit a measured Ea. Absence
+is NOT read as `false`; see ADR-0002. The remedy is one line and
+self-documenting: re-run `resinsim sim` to refresh the envelope. The
+exactly-once guard for this surface is
+`report_health_warns_exactly_once`
+(`crates/resinsim-inspect/tests/thermal_cli_warnings.rs`), replacing the
+retired silence pin `report_health_in_does_not_warn`.
 
 If any surface drops the estimate-only framing, downstream users may treat
 30 kJ/mol as measured.

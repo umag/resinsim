@@ -184,6 +184,10 @@ invocations.
   fallback: **additive** for old loaders that have the fallback.
 - ❌ Adding a `Suction` variant without a fallback: **breaking**. Old
   loaders fail-stop on the unknown tag.
+- ✅ Adding `cure_kinetics_ea_is_default: Option<bool>` at the envelope
+  top level with `serde(default)` (2026-08, KB-153): **additive**. Old
+  envelopes parse as `None`; new envelopes carry `true`/`false`; absent
+  is NOT `false`.
 
 ## Consequences
 
