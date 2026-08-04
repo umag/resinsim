@@ -30,6 +30,7 @@ pub mod cli_inspect_field_slices_voxel_field;
 pub mod cli_profile_by_name_loading;
 pub mod cli_requires_resin_for_recipe_fields;
 pub mod cli_sim_producer_writes_sim_json;
+pub mod cli_sim_rejects_unknown_schema_version;
 pub mod cli_temperature_flag_validation;
 pub mod ctb_layer_height_authority;
 pub mod cumulative_times_sec_accessor;
