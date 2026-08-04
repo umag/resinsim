@@ -1097,7 +1097,7 @@ fn cmd_thermal(
         // emitted once by profile_loader::load_resin at load time — see
         // that function's doc comment for why this must not re-emit it.
         let ea_cure = resin_prof.effective_cure_kinetics_ea_kj_mol();
-        let ea_cure_is_default = resin_prof.cure_kinetics_ea_kj_mol().is_none();
+        let ea_cure_is_default = resin_prof.cure_kinetics_ea_is_default();
 
         let ec_ref = Energy::new(resin_prof.critical_energy_mj_cm2())
             .expect("validated ResinProfile has positive critical_energy_mj_cm2");

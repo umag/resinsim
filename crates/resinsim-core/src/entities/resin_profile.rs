@@ -341,6 +341,14 @@ impl ResinProfile {
         self.cure_kinetics_ea_kj_mol
             .unwrap_or(DEFAULT_CURE_KINETICS_EA_KJ_MOL)
     }
+    /// KB-153: does this profile fall back to
+    /// `DEFAULT_CURE_KINETICS_EA_KJ_MOL`? The single owner of the
+    /// "is it a default?" question — the CLI warning seam, the
+    /// `inspect thermal --json` flag, and the sim.json envelope stamp
+    /// all read THIS, so they cannot drift apart.
+    pub fn cure_kinetics_ea_is_default(&self) -> bool {
+        self.cure_kinetics_ea_kj_mol.is_none()
+    }
     /// Base-adhesion σ-elevation (kPa) if the TOML carries a value. KB-116.
     pub fn base_adhesion_elevation_kpa(&self) -> Option<f32> {
         self.base_adhesion_elevation_kpa
@@ -964,6 +972,40 @@ mod tests {
             p.effective_cure_kinetics_ea_kj_mol(),
             DEFAULT_CURE_KINETICS_EA_KJ_MOL
         );
+    }
+
+    #[test]
+    fn cure_kinetics_ea_is_default_true_when_field_absent() {
+        // Both factories leave cure_kinetics_ea_kj_mol as None.
+        assert!(ResinProfile::generic_standard().cure_kinetics_ea_is_default());
+        assert!(ResinProfile::elegoo_ceramic_grey_v2().cure_kinetics_ea_is_default());
+    }
+
+    #[test]
+    fn cure_kinetics_ea_is_default_false_when_measured() {
+        let mut p = ResinProfile::generic_standard();
+        p.cure_kinetics_ea_kj_mol = Some(42.0);
+        assert!(!p.cure_kinetics_ea_is_default());
+    }
+
+    #[test]
+    fn cure_kinetics_ea_is_default_agrees_with_effective_accessor() {
+        // Anti-drift tie: whenever the predicate says "default", the
+        // effective accessor must be reading exactly the DEFAULT constant.
+        // One-directional (is_default => effective == DEFAULT), not an iff:
+        // a resin that legitimately measures exactly 30.0 kJ/mol would have
+        // effective == DEFAULT while the predicate is correctly false, and
+        // that must not falsify this test.
+        let default_profile = ResinProfile::generic_standard();
+        assert!(default_profile.cure_kinetics_ea_is_default());
+        assert_eq!(
+            default_profile.effective_cure_kinetics_ea_kj_mol(),
+            DEFAULT_CURE_KINETICS_EA_KJ_MOL
+        );
+
+        let mut measured_profile = ResinProfile::generic_standard();
+        measured_profile.cure_kinetics_ea_kj_mol = Some(42.0);
+        assert!(!measured_profile.cure_kinetics_ea_is_default());
     }
 
     #[test]

@@ -127,7 +127,7 @@ pub fn load_resin(data_dir: &Path, name: &str) -> Result<ResinProfile, String> {
 /// site (main.rs, pre-KB-153-fix): em dash (U+2014), ASCII apostrophe in
 /// "resin's", single rendered line via `\`-continuations.
 pub fn cure_kinetics_ea_default_warning(resin: &ResinProfile) -> Option<String> {
-    if resin.cure_kinetics_ea_kj_mol().is_some() {
+    if !resin.cure_kinetics_ea_is_default() {
         return None;
     }
     Some(format!(
