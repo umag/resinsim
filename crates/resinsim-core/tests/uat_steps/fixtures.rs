@@ -201,11 +201,28 @@ pub fn mini_nanodlp_path() -> std::path::PathBuf {
 /// Monotonic counter for unique per-scenario temp-file names — cucumber runs
 /// scenarios within a feature concurrently (same rationale as
 /// `sim_json_roundtrips_zero_force_layer.rs::unique_sim_json_path`), so a
-/// fixed shared filename would race across scenarios.
-fn unique_tmp_path(tag: &str, ext: &str) -> std::path::PathBuf {
+/// fixed shared filename would race across scenarios. `pub` (uat-unskip-c1)
+/// so `cli_sim_producer_writes_sim_json.rs` and
+/// `cli_sim_rejects_unknown_schema_version.rs` share this single counter
+/// instead of forking a third copy of the idiom
+/// (docs/patterns/anti/fixture-copy-of-shared-builder.md).
+pub fn unique_tmp_path(tag: &str, ext: &str) -> std::path::PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("uat-{tag}-{n}.{ext}"))
+}
+
+/// A fresh, created, per-scenario directory under `CARGO_TARGET_TMPDIR` —
+/// shares `unique_tmp_path`'s counter, so a directory name can never
+/// collide with any temp-file path it produces either. Every fixture path
+/// in `cli_sim_producer_writes_sim_json.rs` and
+/// `cli_sim_rejects_unknown_schema_version.rs` (uat-unskip-c1) is derived
+/// from one of these per-scenario directories, so cucumber's concurrent
+/// scenario execution cannot race on a fixed filename.
+pub fn unique_tmp_dir(tag: &str) -> std::path::PathBuf {
+    let dir = unique_tmp_path(tag, "d");
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("create dir {}: {e}", dir.display()));
+    dir
 }
 
 /// Write a tall `ID,T,V` analytic CSV under `CARGO_TARGET_TMPDIR`, optionally

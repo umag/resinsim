@@ -225,6 +225,23 @@ pub struct UatWorld {
     /// rejected's 30s advisory bound (relative to the branch-message
     /// discrimination, not a strict timing assertion; see the module doc).
     pub cli_elapsed: Option<std::time::Duration>,
+
+    // ---- CLI sim-producer / schema-rejection band
+    // (cli-sim-producer-writes-sim-json, cli-sim-rejects-unknown-schema-
+    // version) — uat-unskip-c1. Grouped per the peel-physics / interlayer-
+    // crack / nanodlp bands' precedent above. Reuses `sim_json_path` /
+    // `cli_cmd` / `cli_exit_code` / `cli_stdout` / `cli_stderr` (CLI
+    // subprocess band, above) for every scenario in these two specs — the
+    // fields below are only the ones genuinely new to them. ----
+    /// The per-scenario unique directory (`fixtures::unique_tmp_dir`) every
+    /// path in these two specs is derived from — never a fixed filename,
+    /// since cucumber runs scenarios within a feature concurrently.
+    pub cli_tmp_dir: Option<std::path::PathBuf>,
+    /// The exact `--stl` argument string passed to `resinsim sim`, so
+    /// cli-sim-producer-writes-sim-json UAT-1's `provenance.input_path`
+    /// Then compares against the literal string passed rather than
+    /// re-deriving it.
+    pub sim_input_path: Option<std::path::PathBuf>,
 }
 
 /// Summary of a single `CavityDetector` event for step-def assertions.
