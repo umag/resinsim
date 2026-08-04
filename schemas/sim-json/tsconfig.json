@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true
+  },
+  // `archive/` holds the historical v1 schema (see v2.ts:17-18) — it is a
+  // preserved historical record, not maintained code, so it is deliberately
+  // excluded from typecheck rather than coupling this lifecycle to it.
+  "include": ["v2.ts", "scripts/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["archive/**", "node_modules"]
+}
