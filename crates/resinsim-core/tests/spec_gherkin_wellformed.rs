@@ -43,6 +43,11 @@ mod extract;
 /// ```gherkin fence was mistyped so everything vanished" are indistinguishable
 /// from the outside — and silent vanishing is the entire subject of the issue
 /// that added this file. Membership here is a written, reviewable claim.
+///
+/// Empty as of `uat-unskip-c2` (its sole prior member,
+/// `cli-report-health-layer-height-provenance.md`, was promoted to
+/// ```gherkin-tagged fences with an executable `Scenario:` keyword) — the
+/// mechanism stays for the next spec that lands proposed-only.
 const SPECS_WITH_NO_EXECUTABLE_SCENARIOS: &[(&str, &str)] = &[];
 
 /// Mirrors `uat_gherkin.rs::resolve_spec_uat_dir`. Duplicated deliberately:

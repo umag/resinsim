@@ -160,6 +160,22 @@ use uat_steps::{
 /// in-process, and the sole in-process exception inside a nanodlp spec is
 /// `nanodlp-import-simulates` UAT-2 ("the job is imported"), which calls
 /// `io::sliced::parse_sliced` directly.
+///
+/// INCREMENT C2 (`uat-unskip-c2`, 2026-08-05) closed Band C. It landed
+/// three modules covering nine scenarios
+/// (`cli-report-health-print-time` 3, `cli-report-health-layer-height-provenance`
+/// 3, `cli-report-health-surfaces-ea-default-advisory` 3 — new spec) and
+/// removed two register entries outright: print-time 3 -> 0 and provenance
+/// 0 -> 0 (its zero-scenario entry, not a scenario-debt paydown — see the
+/// C1 pointer above). Net scenario debt 75 -> 72, register 26 -> 24
+/// entries. All three specs were verified default-features BY SYMBOL at
+/// both the in-process seam (`cmd_report_health`, `PrintSimulation::summary`
+/// and its private `phase_times`, `values::layer_height_provenance`) and
+/// the binary-build seam (`ensure_resinsim_built` forwards no `--features`)
+/// before any step was written, following A2/A3+B's precedent. The
+/// provenance promotion was authoring-blocked (untagged fence, non-keyword
+/// `Scenario (proposed):`, a wrapped continuation line) rather than
+/// step-blocked — the first spec in this campaign to be so.
 const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): every one of this Scenario Outline's 5 runtime
@@ -386,11 +402,11 @@ fn assert_every_spec_has_a_module_or_is_registered(spec_uat: &std::path::Path) {
 ///  3. a REGISTERED spec's actual count differs from its expected count —
 ///     partial progress (or regression) not reflected in the register.
 ///
-/// `expected == 0` entries (currently only
-/// `cli-report-health-layer-height-provenance`, whose untagged fences
-/// produce zero executable scenarios today — see
-/// `spec_gherkin_wellformed.rs::SPECS_WITH_NO_EXECUTABLE_SCENARIOS`) are
-/// exempt from direction 2: their whole point is that actual == expected
+/// `expected == 0` entries — none registered today, but the shape stays
+/// live for the next spec that lands with untagged fences or another
+/// zero-executable-scenario defect (see
+/// `spec_gherkin_wellformed.rs::SPECS_WITH_NO_EXECUTABLE_SCENARIOS`) —
+/// are exempt from direction 2: their whole point is that actual == expected
 /// == 0 is the CORRECT steady state, not a stale entry.
 fn assert_runtime_attribution_matches_register(
     actual_skipped: &std::collections::BTreeMap<String, usize>,
@@ -544,9 +560,10 @@ async fn main() {
 
     // (spec stem, synthesised .feature path) — one entry per md file that
     // extracted at least one scenario. A file that extracts zero scenarios
-    // (untagged fences — `cli-report-health-layer-height-provenance` today)
-    // never gets an entry, so it never enters the per-feature loop below;
-    // its register entry stays `(spec, 0)` and both sides agree.
+    // (untagged fences, or a non-`Scenario:` keyword — no spec is in that
+    // state today) never gets an entry, so it never enters the per-feature
+    // loop below; such a spec's register entry would stay `(spec, 0)` and
+    // both sides would agree.
     let mut feature_files: Vec<(String, std::path::PathBuf)> = Vec::new();
     for md_path in &md_files {
         let md = std::fs::read_to_string(md_path)
@@ -623,7 +640,7 @@ async fn main() {
     }
 
     // Consolidated end table. Each `.run()` call above already printed its
-    // own `[Summary]` block (52 of them, one per feature, instead of the
+    // own `[Summary]` block (54 of them, one per feature, instead of the
     // single tree-wide summary the old one-shot run produced); this is the
     // single place a reader can see the whole suite's per-spec shape.
     println!("\n[Per-spec attribution]");
