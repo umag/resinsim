@@ -242,6 +242,19 @@ pub struct UatWorld {
     /// Then compares against the literal string passed rather than
     /// re-deriving it.
     pub sim_input_path: Option<std::path::PathBuf>,
+
+    // ---- cli-report-health-print-time — uat-unskip-c2. Reuses
+    // `sim_json_path` / `cli_tmp_dir` / `cli_cmd` / `cli_exit_code` /
+    // `cli_stdout` / `cli_stderr` (CLI subprocess band, above) for UAT-1 and
+    // UAT-2, which each carry a single envelope. UAT-3 is the one scenario
+    // genuinely new to this spec — it needs TWO envelopes (Tilt, Linear)
+    // and TWO `--json` stdouts, index-parallel, Tilt first. ----
+    /// UAT-3's Tilt (index 0) and Linear (index 1) envelope paths.
+    pub print_time_envelope_paths: Option<Vec<std::path::PathBuf>>,
+    /// UAT-3's two `report health --in <path> --json` stdouts, index-
+    /// parallel with `print_time_envelope_paths` — same shape precedent as
+    /// `athena_json_stdout` above.
+    pub print_time_json_stdouts: Option<Vec<String>>,
 }
 
 /// Summary of a single `CavityDetector` event for step-def assertions.
