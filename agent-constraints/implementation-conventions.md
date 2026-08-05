@@ -228,10 +228,11 @@ the four-config matrix; the same is true of
 directory's own path and symbol references.
 
 **Expected shape is IDENTICAL in both configs** (current as of
-`uat-unskip-campaign` increment C1 — `cli-sim-producer-writes-sim-json` and
-`cli-sim-rejects-unknown-schema-version`, 2026-08-04): 52 features, 160
-scenarios (85 passed, 75 skipped, 0 failed), 512 steps (427 passed, 75
-skipped, 0 failed), exit 0, register at 26 entries (sum 75). This shape
+`uat-unskip-campaign` increment C2 — `cli-report-health-print-time`,
+`cli-report-health-layer-height-provenance`, and
+`cli-report-health-surfaces-ea-default-advisory`, 2026-08-05): 54 features,
+166 scenarios (94 passed, 72 skipped, 0 failed), 560 steps (478 passed, 72
+skipped, 0 failed), exit 0, register at 24 entries (sum 72). This shape
 moves as the campaign lands more increments — trust
 `cargo uat`'s own `[Consolidated total]` line over this paragraph if they
 disagree, and update this paragraph when they do. A field-sim run reporting
@@ -296,7 +297,7 @@ demoted two specs to Band-D declared debt:
 to C2 on sizing (6+4+3 exceeds the increment cap, and print-time is an
 unrelated `ReportGenerator`-rendering surface with its own
 formula-mirroring / cross-comparison review hazards) — its register entry
-is untouched.
+was paid down in C2, not left untouched (see the C2 pointer below).
 
 The two demotions introduce a NEW Band-D sub-shape: **binary-build-seam
 asymmetry**, distinct from the in-process `#[cfg]` asymmetry the existing
@@ -324,6 +325,42 @@ in-process `sim_primary`/`last_sim_err` XOR CLI-subprocess
 `cli_exit_code`. See the generalised step's doc comment for the pattern
 if a future spec needs the same step against a different observation
 surface.
+
+Increment C2 (`uat-unskip-c2`, 2026-08-05) closes Band C. It landed three
+modules covering nine scenarios / 51 steps: `cli-report-health-print-time`
+(the module C1 deferred on sizing, 3 scenarios / 17 steps),
+`cli-report-health-layer-height-provenance` (3 scenarios / 17 steps), and
+the NEW spec `cli-report-health-surfaces-ea-default-advisory` (3
+scenarios / 17 steps). Two register entries were removed outright:
+print-time 3 -> 0, and provenance's zero-scenario entry 0 -> 0. Net
+scenario debt 75 -> 72, register 26 -> 24 entries. All three specs were
+verified default-features BY SYMBOL at both seams before any step was
+written, following A2/A3+B's precedent: the in-process `report health`
+call path (every symbol on it `#[cfg]`-free) and the binary-build seam,
+`ensure_resinsim_built` (`crates/resinsim-core/tests/uat_steps/cli_fixtures.rs`),
+which forwards no `--features`.
+
+The provenance promotion is the first spec in this campaign whose
+scenarios were AUTHORING-blocked rather than step-blocked: three untagged
+fences, the non-executable `Scenario (proposed):` keyword, and a wrapped
+continuation line, all fixed in the same change as the module landing.
+That promotion also retired the tree's only entry in
+`SPECS_WITH_NO_EXECUTABLE_SCENARIOS`
+(`crates/resinsim-core/tests/spec_gherkin_wellformed.rs`), leaving the
+const empty — the mechanism itself stays for the next spec that lands
+proposed-only.
+
+The ea-default-advisory spec is a harvest-to-UAT promotion: the KB-153
+consumer-path advisory (`warn_if_envelope_ea_is_default`,
+`crates/resinsim-inspect/src/profile_loader.rs`) previously had only
+nextest coverage (`crates/resinsim-inspect/tests/thermal_cli_warnings.rs`,
+`crates/resinsim-inspect/tests/report_health_time_cli.rs`); the new UAT
+asserts the user-visible CLI contract (which stream carries what, the
+exactly-once property, the three-way flag semantics) without duplicating
+that coverage's plumbing.
+
+**Band C is now CLOSED.** Remaining campaign work: Band D (field-sim-gated,
+`uat-unskip-band-d`) and Band E (viz, `viz-uat-cucumber-harness`).
 
 Hand-rolled resin/printer TOML fixtures under `tests/uat_steps/` MUST
 compose from the shared builders (`world.rs::ResinBuilder`,
