@@ -28,6 +28,7 @@ pub mod athena_analytic_log_ingest;
 pub mod base_adhesion_shifts_peel_peak;
 pub mod cli_inspect_field_slices_voxel_field;
 pub mod cli_profile_by_name_loading;
+pub mod cli_report_health_layer_height_provenance;
 pub mod cli_report_health_print_time;
 pub mod cli_requires_resin_for_recipe_fields;
 pub mod cli_sim_producer_writes_sim_json;

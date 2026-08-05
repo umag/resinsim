@@ -43,12 +43,7 @@ mod extract;
 /// ```gherkin fence was mistyped so everything vanished" are indistinguishable
 /// from the outside — and silent vanishing is the entire subject of the issue
 /// that added this file. Membership here is a written, reviewable claim.
-const SPECS_WITH_NO_EXECUTABLE_SCENARIOS: &[(&str, &str)] = &[(
-    "cli-report-health-layer-height-provenance.md",
-    "Scenarios are marked `Scenario (proposed):` and use untagged ``` fences \
-     rather than ```gherkin, so the extractor skips them by design. Promote to \
-     ```gherkin when the step definitions are written.",
-)];
+const SPECS_WITH_NO_EXECUTABLE_SCENARIOS: &[(&str, &str)] = &[];
 
 /// Mirrors `uat_gherkin.rs::resolve_spec_uat_dir`. Duplicated deliberately:
 /// importing it would mean pulling in the whole `uat_steps` tree (cucumber,

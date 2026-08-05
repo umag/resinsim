@@ -43,7 +43,8 @@ use uat_steps::world::UatWorld;
 use uat_steps::{
     athena_analytic_log_ingest, base_adhesion_shifts_peel_peak,
     cli_inspect_field_slices_voxel_field,
-    cli_profile_by_name_loading, cli_report_health_print_time, cli_requires_resin_for_recipe_fields,
+    cli_profile_by_name_loading, cli_report_health_layer_height_provenance,
+    cli_report_health_print_time, cli_requires_resin_for_recipe_fields,
     cli_sim_producer_writes_sim_json, cli_sim_rejects_unknown_schema_version,
     cli_temperature_flag_validation, ctb_layer_height_authority, cumulative_times_sec_accessor,
     cure_depth_nan_guard, interlayer_crack_knockdown_scales_with_perimeter, legacy_resin_toml_defaults,
@@ -172,7 +173,6 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     // once. See uat-unskip-band-d (NOT uat-fixtures-fieldsim-adr0020-gap,
     // which is the unrelated missing-TOML-fixture-fields constraint).
     ("calibration-disclosure-3of3-predicate", 5),
-    ("cli-report-health-layer-height-provenance", 0),
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): all three scenarios need a producer-written
     // sidecar — `--voxel-cure-mm` (main.rs:237-239, `#[cfg(feature =
