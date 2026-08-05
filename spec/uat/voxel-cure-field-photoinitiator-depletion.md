@@ -23,7 +23,7 @@ Scenario: --voxel-cure-mm populates voxel fields on the aggregate
   Given a CTB input with per-layer masks
   And a resin and printer profile validated against the recipe
   When the simulation runs with the --voxel-cure-mm flag set to a positive finite value
-  Then the produced sim.json's aggregate carries a populated cure_field
+  Then the simulation aggregate carries a populated cure_field
   And the aggregate carries a populated photoinitiator_field
   And both fields share identical (nx, ny, nz) dimensions
   And nz equals the layer count of the input
@@ -41,7 +41,7 @@ Scenario: Tier-1 mode does not install voxel fields
   Given a CTB input with per-layer masks
   And a resin and printer profile validated against the recipe
   When the simulation runs without the --voxel-cure-mm flag
-  Then the produced sim.json's aggregate cure_field is absent
+  Then the simulation aggregate's cure_field is absent
   And the aggregate photoinitiator_field is absent
   And each layer's cure_depth_um value matches the Tier-1 CureCalculator::cure_depth_at_temp scalar
 ```
