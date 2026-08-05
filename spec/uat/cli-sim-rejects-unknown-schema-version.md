@@ -9,7 +9,7 @@ date: 2026-04-28
 
 ADR-0015's schema_version discriminant lets old loaders refuse future
 envelopes rather than parsing them as if they were the current shape. The
-load-bearing acceptance: a v1 loader sees `schema_version: 999` and
+load-bearing acceptance: a v2 loader sees `schema_version: 999` and
 returns a typed error mentioning the rejected version. The user sees a
 non-zero exit and an actionable message, NOT a panic, NOT a confusing
 parse failure deep inside serde.
