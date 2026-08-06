@@ -58,7 +58,96 @@ use uat_steps::{
     thermal_degradation,
 };
 
-/// Debt register: `(spec stem, expected skipped SCENARIO count)`.
+/// Which of the two ADR-0017 feature configurations this harness binary
+/// was built with (uat-unskip-band-d step 2). Defined by a MUTUALLY-
+/// EXCLUSIVE `#[cfg(feature = "field-sim")]` / `#[cfg(not(feature =
+/// "field-sim"))]` attribute PAIR immediately below — never a bare
+/// `cfg!(feature = "field-sim")` boolean. The pair matters because a
+/// typo'd feature name in EITHER arm becomes a COMPILE error (duplicate
+/// `HARNESS_CONFIG` definition) in whichever of the two configs makes
+/// both arms true at once, rather than a silently wrong runtime value —
+/// `cargo build --workspace` (both configs) already builds both arms
+/// every time, so the typo cannot hide there either. A bare `cfg!` would
+/// just evaluate `false` on a typo and silently select the wrong column
+/// below. See docs/patterns/band-membership-by-symbol.md.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HarnessConfig {
+    Default,
+    FieldSim,
+}
+
+#[cfg(feature = "field-sim")]
+const HARNESS_CONFIG: HarnessConfig = HarnessConfig::FieldSim;
+#[cfg(not(feature = "field-sim"))]
+const HARNESS_CONFIG: HarnessConfig = HarnessConfig::Default;
+
+/// Human-readable tag for the `[Consolidated total]` line (uat-unskip-
+/// band-d step 3), so two `cargo uat` / `cargo uat-field-sim` runs against
+/// the same terminal are visibly distinguishable to a human.
+const fn harness_config_label(config: HarnessConfig) -> &'static str {
+    match config {
+        HarnessConfig::Default => "default",
+        HarnessConfig::FieldSim => "field-sim",
+    }
+}
+
+/// One register row: a spec's expected skipped-SCENARIO count in EACH of
+/// the two `HARNESS_CONFIG` configs (uat-unskip-band-d step 2). Two
+/// `const fn`s build rows so an asymmetric one is greppable at its own
+/// call site instead of requiring a second lookup table:
+///  - [`both_configs`] — the symmetric majority: `cargo uat` and `cargo
+///    uat-field-sim` skip exactly the same count. Used both for specs
+///    with no field-sim-gated step-def module at all (every scenario is
+///    equally unreachable, or equally covered, in both configs) and for
+///    specs uniformly unreachable at the binary-build seam today (see the
+///    `cli-sim-*` rows' comments below).
+///  - [`per_config`] — a declared CONFIG-ASYMMETRIC row: the two counts
+///    differ because a field-sim-gated step-def module makes the spec's
+///    scenarios reachable in exactly one config. Layer 1b (below)
+///    mechanically enforces the honesty rule this implies: an asymmetric
+///    row is only valid if that spec actually owns a field-sim-gated
+///    module — see `assert_asymmetric_rows_have_a_gated_module`.
+#[derive(Debug, Clone, Copy)]
+struct SpecDebt {
+    spec: &'static str,
+    default_features: usize,
+    field_sim: usize,
+}
+
+const fn both_configs(spec: &'static str, n: usize) -> SpecDebt {
+    SpecDebt {
+        spec,
+        default_features: n,
+        field_sim: n,
+    }
+}
+
+const fn per_config(spec: &'static str, default_features: usize, field_sim: usize) -> SpecDebt {
+    SpecDebt {
+        spec,
+        default_features,
+        field_sim,
+    }
+}
+
+impl SpecDebt {
+    /// The expected skipped-SCENARIO count for the config THIS BINARY was
+    /// built with (uat-unskip-band-d step 2) — the ONE site in this file
+    /// that reads `HARNESS_CONFIG` to pick between `default_features` and
+    /// `field_sim`. Every other place that needs a row's active-config
+    /// count calls this rather than re-matching `HARNESS_CONFIG` itself.
+    const fn expected_for_active_config(&self) -> usize {
+        match HARNESS_CONFIG {
+            HarnessConfig::Default => self.default_features,
+            HarnessConfig::FieldSim => self.field_sim,
+        }
+    }
+}
+
+/// Debt register: one [`SpecDebt`] row per spec, carrying its expected
+/// skipped-SCENARIO count in BOTH harness configs (uat-unskip-band-d step
+/// 2 widened this from a single shared `(spec stem, expected skipped
+/// SCENARIO count)` — see [`SpecDebt`], [`both_configs`], [`per_config`]).
 ///
 /// Two ways an entry gets its expected count:
 ///  - **No step-def module at all.** Expected count == the spec's total
@@ -176,7 +265,7 @@ use uat_steps::{
 /// provenance promotion was authoring-blocked (untagged fence, non-keyword
 /// `Scenario (proposed):`, a wrapped continuation line) rather than
 /// step-blocked — the first spec in this campaign to be so.
-const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
+const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): every one of this Scenario Outline's 5 runtime
     // scenarios needs `FailurePredictor::predict_strain_failures`
@@ -189,7 +278,7 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     // wants 0) — one shared `const` register cannot satisfy both configs at
     // once. See uat-unskip-band-d (NOT uat-fixtures-fieldsim-adr0020-gap,
     // which is the unrelated missing-TOML-fixture-fields constraint).
-    ("calibration-disclosure-3of3-predicate", 5),
+    both_configs("calibration-disclosure-3of3-predicate", 5),
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): all three scenarios need a producer-written
     // sidecar — `--voxel-cure-mm` (main.rs:237-239, `#[cfg(feature =
@@ -213,7 +302,7 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     // t2f3.5 v1 at all. See uat-unskip-band-d (NOT
     // uat-fixtures-fieldsim-adr0020-gap, which is the unrelated
     // missing-TOML-fixture-fields constraint).
-    ("cli-sim-budget-mismatch-on-load", 3),
+    both_configs("cli-sim-budget-mismatch-on-load", 3),
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): all four scenarios need a producer-written sidecar
     // (`--voxel-cure-mm` main.rs:237-239, `encode_paired_sidecar`
@@ -243,9 +332,9 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     // pointer is silently IGNORED and `report health --in` exits 0 rather
     // than rejecting it. See uat-unskip-band-d (NOT
     // uat-fixtures-fieldsim-adr0020-gap).
-    ("cli-sim-rejects-tampered-sidecar", 4),
-    ("cli-sim-voxel-cure-emits-tier2-thermal-log", 1),
-    ("cross-feature-toml-interchange", 2),
+    both_configs("cli-sim-rejects-tampered-sidecar", 4),
+    both_configs("cli-sim-voxel-cure-emits-tier2-thermal-log", 1),
+    both_configs("cross-feature-toml-interchange", 2),
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): both scenarios need voxel-mode
     // `LayerResult.voxel_yield_fraction` / `.strain_magnitude_max`,
@@ -256,25 +345,25 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     // `None`, so `Some(0.0)` is unrepresentable, not merely untested. Same
     // config-asymmetry constraint as calibration-disclosure-3of3-predicate
     // above — see uat-unskip-band-d.
-    ("honest-zero-yield-fraction-on-calibrated-solid", 2),
-    ("light-crosstalk-3d-gaussian-convolution", 9),
-    ("printer-envelope-min-extent-under-field-sim", 1),
-    ("sim-fields-sidecar-roundtrip", 4),
-    ("thermal-field-arrhenius-per-voxel", 2),
-    ("thermal-field-sidecar-roundtrip", 3),
-    ("viz-allow-mismatch-soft-fallback", 1),
-    ("viz-arrow-key-step-no-mesh-reupload", 1),
-    ("viz-arrow-keys-step-layer-with-saturation", 1),
-    ("viz-layer-count-mismatch-hard-error", 1),
-    ("viz-load-ctb-with-sim-renders-heatmap", 1),
-    ("viz-load-sim-missing-sidecar", 3),
-    ("viz-load-sim-without-ctb-bad-pairing", 1),
-    ("viz-screenshot-flag", 12),
-    ("viz-timeline-click-seeks-current-layer", 3),
-    ("viz-timeline-drag-pan-does-not-seek", 2),
-    ("viz-timeline-safety-log-toggle-handles-infinite-sf", 2),
-    ("viz-timeline-series-toggle-rescales-y", 2),
-    ("voxel-cure-field-photoinitiator-depletion", 6),
+    both_configs("honest-zero-yield-fraction-on-calibrated-solid", 2),
+    both_configs("light-crosstalk-3d-gaussian-convolution", 9),
+    both_configs("printer-envelope-min-extent-under-field-sim", 1),
+    both_configs("sim-fields-sidecar-roundtrip", 4),
+    both_configs("thermal-field-arrhenius-per-voxel", 2),
+    both_configs("thermal-field-sidecar-roundtrip", 3),
+    both_configs("viz-allow-mismatch-soft-fallback", 1),
+    both_configs("viz-arrow-key-step-no-mesh-reupload", 1),
+    both_configs("viz-arrow-keys-step-layer-with-saturation", 1),
+    both_configs("viz-layer-count-mismatch-hard-error", 1),
+    both_configs("viz-load-ctb-with-sim-renders-heatmap", 1),
+    both_configs("viz-load-sim-missing-sidecar", 3),
+    both_configs("viz-load-sim-without-ctb-bad-pairing", 1),
+    both_configs("viz-screenshot-flag", 12),
+    both_configs("viz-timeline-click-seeks-current-layer", 3),
+    both_configs("viz-timeline-drag-pan-does-not-seek", 2),
+    both_configs("viz-timeline-safety-log-toggle-handles-infinite-sf", 2),
+    both_configs("viz-timeline-series-toggle-rescales-y", 2),
+    both_configs("voxel-cure-field-photoinitiator-depletion", 6),
 ];
 
 /// Step-def modules whose file name does not match their spec's file name.
@@ -355,10 +444,8 @@ fn assert_every_spec_has_a_module_or_is_registered(spec_uat: &std::path::Path) {
         .map(String::as_str)
         .filter(|s| !stepped.contains(*s))
         .collect();
-    let registered: std::collections::BTreeSet<&str> = SPECS_WITHOUT_STEP_DEFS
-        .iter()
-        .map(|(name, _)| *name)
-        .collect();
+    let registered: std::collections::BTreeSet<&str> =
+        SPECS_WITHOUT_STEP_DEFS.iter().map(|d| d.spec).collect();
 
     let newly_unstepped: Vec<&&str> = unstepped.difference(&registered).collect();
     assert!(
@@ -411,8 +498,10 @@ fn assert_every_spec_has_a_module_or_is_registered(spec_uat: &std::path::Path) {
 fn assert_runtime_attribution_matches_register(
     actual_skipped: &std::collections::BTreeMap<String, usize>,
 ) {
-    let register: std::collections::BTreeMap<&str, usize> =
-        SPECS_WITHOUT_STEP_DEFS.iter().copied().collect();
+    let register: std::collections::BTreeMap<&str, usize> = SPECS_WITHOUT_STEP_DEFS
+        .iter()
+        .map(|d| (d.spec, d.expected_for_active_config()))
+        .collect();
 
     let unexpected_skips: Vec<(&str, usize)> = actual_skipped
         .iter()
@@ -436,7 +525,9 @@ fn assert_runtime_attribution_matches_register(
 
     let mut stale: Vec<(&str, usize)> = Vec::new();
     let mut mismatched: Vec<(&str, usize, usize)> = Vec::new();
-    for &(spec, expected) in SPECS_WITHOUT_STEP_DEFS {
+    for d in SPECS_WITHOUT_STEP_DEFS {
+        let spec = d.spec;
+        let expected = d.expected_for_active_config();
         let actual = actual_skipped.get(spec).copied().unwrap_or(0);
         if expected == 0 {
             if actual != 0 {
