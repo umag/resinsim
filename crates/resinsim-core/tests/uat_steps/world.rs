@@ -255,6 +255,33 @@ pub struct UatWorld {
     /// parallel with `print_time_envelope_paths` — same shape precedent as
     /// `athena_json_stdout` above.
     pub print_time_json_stdouts: Option<Vec<String>>,
+
+    // ---- calibration-disclosure-3of3-predicate — uat-unskip-band-d step
+    // 7. These three fields are read ONLY by that module, which is itself
+    // `#[cfg(feature = "field-sim")]`-gated, so the fields are gated the
+    // same way — under default features they simply do not exist, rather
+    // than existing-but-always-`None`-and-never-read (which would be a
+    // clippy dead_code error under default features specifically, since
+    // the only reader is compiled out). ----
+    /// The `ResinBuilder` under construction across this scenario's
+    /// several Given clauses (each setting/omitting one of the three
+    /// calibrated-moduli fields) — built into a `ResinProfile` by the
+    /// shared When step.
+    #[cfg(feature = "field-sim")]
+    pub resin_builder_pending: Option<ResinBuilder>,
+    /// UAT-3 Outline's `<field>` capture — which of the three
+    /// calibrated-moduli fields the "is unset" Given named, so the
+    /// following "the other two ... are explicit" Given knows which two
+    /// setters to call.
+    #[cfg(feature = "field-sim")]
+    pub calibration_disclosure_unset_field: Option<String>,
+    /// `FailurePredictor::predict_strain_failures` output — driven
+    /// DIRECTLY against a synthesised field pair (a simulation run cannot
+    /// reach this: yield fraction is honestly zero on the natural
+    /// fixture, so no WarpingRisk event is ever emitted — see the module
+    /// doc).
+    #[cfg(feature = "field-sim")]
+    pub calibration_disclosure_failures: Option<Vec<resinsim_core::entities::FailureEvent>>,
 }
 
 /// Summary of a single `CavityDetector` event for step-def assertions.
@@ -483,6 +510,18 @@ pub struct ResinBuilder {
     /// `None` ⇒ the TOML omits the key (peel-shape-factor-scales-with-
     /// aspect-ratio UAT-2).
     peel_shape_factor_strength: Option<f32>,
+    /// KB-163 Young's modulus. `None` ⇒ the TOML omits the key, the exact
+    /// "unset" branch `ResinProfile::has_calibrated_moduli()`'s 3-of-3
+    /// predicate reads as uncalibrated
+    /// (calibration-disclosure-3of3-predicate UAT-1/UAT-3).
+    youngs_modulus_mpa: Option<f32>,
+    /// KB-163 Poisson's ratio. `None` ⇒ the TOML omits the key, same
+    /// uncalibrated-predicate rationale as `youngs_modulus_mpa` above.
+    poissons_ratio: Option<f32>,
+    /// KB-164 Z/XY shrinkage anisotropy ratio. `None` ⇒ the TOML omits the
+    /// key, same uncalibrated-predicate rationale as `youngs_modulus_mpa`
+    /// above (calibration-disclosure-3of3-predicate UAT-1's own case).
+    shrinkage_anisotropy_z_ratio: Option<f32>,
     recipe: RecipeBuilder,
 }
 
@@ -505,6 +544,9 @@ impl ResinBuilder {
             min_safe_temp_c: None,
             base_adhesion_elevation_kpa: None,
             peel_shape_factor_strength: None,
+            youngs_modulus_mpa: None,
+            poissons_ratio: None,
+            shrinkage_anisotropy_z_ratio: None,
             recipe: RecipeBuilder::new(),
         }
     }
@@ -559,6 +601,28 @@ impl ResinBuilder {
         self
     }
 
+    /// KB-163 Young's modulus (MPa). One of the 3 fields
+    /// `ResinProfile::has_calibrated_moduli()` checks
+    /// (calibration-disclosure-3of3-predicate).
+    pub fn with_youngs_modulus_mpa(mut self, mpa: f32) -> Self {
+        self.youngs_modulus_mpa = Some(mpa);
+        self
+    }
+
+    /// KB-163 Poisson's ratio. Same 3-of-3 predicate as
+    /// `with_youngs_modulus_mpa` above.
+    pub fn with_poissons_ratio(mut self, ratio: f32) -> Self {
+        self.poissons_ratio = Some(ratio);
+        self
+    }
+
+    /// KB-164 Z/XY shrinkage anisotropy ratio. Same 3-of-3 predicate as
+    /// `with_youngs_modulus_mpa` above.
+    pub fn with_shrinkage_anisotropy_z_ratio(mut self, ratio: f32) -> Self {
+        self.shrinkage_anisotropy_z_ratio = Some(ratio);
+        self
+    }
+
     pub fn build(self) -> resinsim_core::entities::ResinProfile {
         let thermal_lines = match (self.degradation_temp_c, self.min_safe_temp_c) {
             (Some(d), Some(m)) => format!("degradation_temp_c = {d}\nmin_safe_temp_c = {m}\n"),
@@ -575,6 +639,21 @@ impl ResinBuilder {
             .peel_shape_factor_strength
             .map(|v| format!("peel_shape_factor_strength = {v}\n"))
             .unwrap_or_default();
+        // KB-163/KB-164 calibrated-moduli fields — omit-when-unset, same
+        // rationale as base_adhesion_line/peel_shape_line above (never emit
+        // a default that would silently satisfy the 3-of-3 predicate).
+        let youngs_modulus_line = self
+            .youngs_modulus_mpa
+            .map(|v| format!("youngs_modulus_mpa = {v}\n"))
+            .unwrap_or_default();
+        let poissons_ratio_line = self
+            .poissons_ratio
+            .map(|v| format!("poissons_ratio = {v}\n"))
+            .unwrap_or_default();
+        let shrinkage_anisotropy_z_ratio_line = self
+            .shrinkage_anisotropy_z_ratio
+            .map(|v| format!("shrinkage_anisotropy_z_ratio = {v}\n"))
+            .unwrap_or_default();
         let toml_str = format!(
             r#"name = "{name}"
 penetration_depth_um = {dp}
@@ -587,7 +666,7 @@ viscosity_mpa_s = {visc}
 reference_temp_c = {ref_t}
 activation_energy_kj_mol = {ea}
 density_g_cm3 = {dens}
-{base_adhesion_line}{peel_shape_line}{field_sim_thermal}{thermal_lines}
+{base_adhesion_line}{peel_shape_line}{youngs_modulus_line}{poissons_ratio_line}{shrinkage_anisotropy_z_ratio_line}{field_sim_thermal}{thermal_lines}
 {recipe}
 "#,
             name = self.name,

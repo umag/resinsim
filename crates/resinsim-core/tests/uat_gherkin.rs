@@ -70,7 +70,7 @@ use uat_steps::{
 #[cfg(feature = "field-sim")]
 #[allow(unused_imports, clippy::single_component_path_imports)]
 use uat_steps::{
-    honest_zero_yield_fraction_on_calibrated_solid,
+    calibration_disclosure_3of3_predicate, honest_zero_yield_fraction_on_calibrated_solid,
 };
 
 /// Which of the two ADR-0017 feature configurations this harness binary
@@ -306,7 +306,17 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // wants 0) — one shared `const` register cannot satisfy both configs at
     // once. See uat-unskip-band-d (NOT uat-fixtures-fieldsim-adr0020-gap,
     // which is the unrelated missing-TOML-fixture-fields constraint).
-    both_configs("calibration-disclosure-3of3-predicate", 5),
+    //
+    // PAID DOWN as the canonical asymmetric row (uat-unskip-band-d step 7,
+    // 2026-08-06): see `calibration_disclosure_3of3_predicate.rs`, which
+    // drives `FailurePredictor::predict_strain_failures` DIRECTLY against a
+    // synthesised all-zero StrainField + a one-voxel-yielded StressField
+    // (a simulation run cannot reach this — yield fraction is honestly
+    // zero on the natural fixture; see
+    // `honest_zero_yield_fraction_on_calibrated_solid.rs`, this same
+    // increment). Default features stay fully unreachable (5 skipped,
+    // unchanged); field-sim now steps all 5 runtime scenarios (0 skipped).
+    per_config("calibration-disclosure-3of3-predicate", 5, 0),
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): all three scenarios need a producer-written
     // sidecar — `--voxel-cure-mm` (main.rs:237-239, `#[cfg(feature =

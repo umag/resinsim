@@ -26,6 +26,12 @@ pub mod cli_fixtures;
 // (docs/patterns/extracting-gherkin-from-markdown.md).
 pub mod athena_analytic_log_ingest;
 pub mod base_adhesion_shifts_peel_peak;
+// FIELD-SIM-GATED (uat-unskip-band-d step 7): sole producer of
+// `FailureType::WarpingRisk`, `FailurePredictor::predict_strain_failures`,
+// is itself `#[cfg(feature = "field-sim")]`. See the module's own doc
+// comment for the full symbol derivation.
+#[cfg(feature = "field-sim")]
+pub mod calibration_disclosure_3of3_predicate;
 pub mod cli_inspect_field_slices_voxel_field;
 pub mod cli_profile_by_name_loading;
 pub mod cli_report_health_layer_height_provenance;
