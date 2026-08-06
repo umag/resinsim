@@ -25,6 +25,51 @@
 //    process, non-leaking, independent StatsWriter results each time).
 //    Silent-green guard (passed+skipped+failed > 0) and the parse-error
 //    guard are both preserved, PER FEATURE and in aggregate.
+//
+// Verified fault-injection matrix (uat-unskip-band-d steps 4 + 8,
+// 2026-08-06; precedent: the matrix in agent_constraints_links.rs). Every
+// row was applied to the live tree, run through `cargo uat` and/or `cargo
+// uat-field-sim`, its exact message captured, then reverted — never
+// committed. Rows 1-4 RE-PROVE the four directions ratified before this
+// issue's register/layer rewrite (step 4, against the rewritten guards,
+// before any new module landed); rows 5-10 are the six NEW directions this
+// issue's config-aware design introduces (step 8).
+//
+// | # | Injected defect | default (`cargo uat`) | field-sim (`cargo uat-field-sim`) |
+// |---|---|---|---|
+// | 1 | Undefined one step's regex in a fully-stepped, unregistered spec (row temporarily absent, so this exercises UNEXPECTED not MISMATCH) | RED — "1 spec(s) have skipped scenarios but are NOT on SPECS_WITHOUT_STEP_DEFS: [(\"safety-factor-zero-force\", 1)]" | not run (direction is config-independent by construction) |
+// | 2 | Added a stale `both_configs` entry for a spec with 0 actual skips | RED — "1 registered spec(s) now have ZERO actual skipped scenarios: [(\"safety-factor-zero-force\", 1)] (spec, expected)" | not run |
+// | 3 | Corrupted an existing count (9 → 8 on `light-crosstalk-3d-gaussian-convolution`) | RED — "1 registered spec(s) have an actual skipped-scenario count that differs from SPECS_WITHOUT_STEP_DEFS: [(\"light-crosstalk-3d-gaussian-convolution\", 8, 9)]" | not run |
+// | 4 | Dropped one entry (`thermal_degradation`) from the UNGATED `use uat_steps::{...}` block, `pub mod` line kept | RED — "1 ungated (Always) module(s) declared \`pub mod\` in uat_steps/mod.rs but MISSING from the matching-gate \`use uat_steps::{...}\` block ... [\"thermal_degradation\"]" | not run |
+// | 5 | Swapped an asymmetric row's two columns (`per_config(honest-zero, 2, 0)` → `(0, 2)`) | RED — layer 2 MISMATCH: "1 registered spec(s) have an actual skipped-scenario count that differs ... [(\"honest-zero-yield-fraction-on-calibrated-solid\", 0, 2)]" | RED — layer 2 STALE: "1 registered spec(s) now have ZERO actual skipped scenarios: [(\"honest-zero-yield-fraction-on-calibrated-solid\", 2)]" |
+// | 6 | Typo'd the feature name on a gated `pub mod` line (`"field-sim"` → `"feild-sim"`) | RED — layer-1/3 parser hard-fail (runtime panic): "uat_steps/mod.rs carries an attribute line the shared cfg-classifying parser does not recognise above a \`pub mod\` line: \"#[cfg(feature = \\\"feild-sim\\\")]\"" | RED — but as a COMPILE error, not the parser panic: `E0432 unresolved import` — the gated `use` block (correctly `#[cfg(feature = "field-sim")]`) tries to import a module whose `pub mod` line is now gated behind the never-true `"feild-sim"`, so it doesn't exist in EITHER real feature state |
+// | 7 | Removed the `#[cfg(feature = "field-sim")]` gate from a gated `pub mod` line (`honest_zero_yield_fraction_on_calibrated_solid`) | RED — COMPILE error: `E0599 no associated function or constant named 'run_from_layer_inputs_with_voxel' found for struct 'SimulationRunner'` (the gate was load-bearing, not decorative) | not run (default features is where removing the gate breaks; field-sim was unaffected by construction) |
+// | 8 | Deleted the entire SECOND (gated) `use uat_steps::{...}` block, both gated `pub mod` lines kept | RED — layer 3, identical message in both configs: "2 field-sim-gated module(s) declared \`pub mod\` in uat_steps/mod.rs but MISSING from the matching-gate \`use uat_steps::{...}\` block ... [\"calibration_disclosure_3of3_predicate\", \"honest_zero_yield_fraction_on_calibrated_solid\"]" — scenario counts still ran correctly underneath (520/62 field-sim), confirming this is a structural guard, not a functional break | same message (feature-independent static check) |
+// | 9 | Typo'd one arm of the `HARNESS_CONFIG` pair (`#[cfg(not(feature = "field-sim"))]` → `#[cfg(not(feature = "field-sam"))]`) | GREEN, unaffected (487/69) — `not("field-sam")` is always true regardless of build, so the typo'd arm alone still defines `HARNESS_CONFIG` correctly by coincidence | RED — COMPILE error: `E0428 the name 'HARNESS_CONFIG' is defined multiple times` (both arms are simultaneously true: real `"field-sim"` on, and `not("field-sam")` always true) |
+// | 10 | Gave a SYMMETRIC row (`cross-feature-toml-interchange`, no gated module) unequal columns (`per_config(2, 1)`) | RED — layer 1b: "1 SPECS_WITHOUT_STEP_DEFS row(s) declare DIFFERENT default_features / field_sim counts but own NO field-sim-gated ... step-def module ... [\"cross-feature-toml-interchange\"]" | same message (feature-independent static check) |
+//
+// Residual mode NOT covered by any single injection above (review finding,
+// step 8): an IDENTICAL coordinated typo in BOTH `HARNESS_CONFIG` cfg arms
+// (e.g. both say `"feild-sim"`) compiles cleanly in BOTH configs — neither
+// arm's condition is ever true, so `HARNESS_CONFIG` is undefined... except
+// it isn't a compile error either, because nothing in this file requires
+// at least one arm to match; the const would fail to resolve only if
+// something actually references it, which it does, so this specific
+// double-typo IS still a compile error (`cannot find value HARNESS_CONFIG`)
+// in both configs. The genuinely silent residual mode is narrower: a
+// coordinated typo that happens to leave EXACTLY ONE arm's condition true
+// in each config (mirroring row 9's "wrong but coincidentally consistent"
+// shape on BOTH arms at once, e.g. both conditions negated) would compile
+// in both configs and silently select the DEFAULT column in both — runtime
+// direction 2 (a registered spec's actual count drops to 0 where the
+// register still expects a nonzero default-column count while the row is
+// gated and actually runs in field-sim) is the detector: gated modules
+// still run under real field-sim regardless of what `HARNESS_CONFIG`
+// reports, so an asymmetric row's field-sim actual (0) diverges from
+// whatever stale column the miscomputed `HARNESS_CONFIG` selected,
+// surfacing as a MISMATCH or STALE message shaped like row 5 above — the
+// column selector being wrong is still visible through the runtime
+// attribution layer even when the marker itself compiles.
 
 use cucumber::{StatsWriter as _, World};
 
