@@ -166,10 +166,10 @@ pub fn draw_v2_dashboard(
             .resizable(false)
             .default_height(summary::SUMMARY_HEIGHT_PX)
             .show(ctx, |ui| {
-                if let Some(new_layer) = summary::render(ui, sim_ref, source_path) {
-                    if new_layer != cursor.index {
-                        cursor.index = new_layer.min(cursor_max);
-                    }
+                if let Some(new_layer) = summary::render(ui, sim_ref, source_path)
+                    && new_layer != cursor.index
+                {
+                    cursor.index = new_layer.min(cursor_max);
                 }
             });
 
@@ -177,10 +177,10 @@ pub fn draw_v2_dashboard(
             .resizable(false)
             .default_height(scrubber::SCRUBBER_HEIGHT_PX)
             .show(ctx, |ui| {
-                if let Some(new_layer) = scrubber::render(ui, cursor_layer, cursor_max, failures) {
-                    if new_layer != cursor.index {
-                        cursor.index = new_layer;
-                    }
+                if let Some(new_layer) = scrubber::render(ui, cursor_layer, cursor_max, failures)
+                    && new_layer != cursor.index
+                {
+                    cursor.index = new_layer;
                 }
             });
 
@@ -189,10 +189,10 @@ pub fn draw_v2_dashboard(
             .default_width(failures_rail::FAILURES_WIDTH_DEFAULT)
             .min_width(failures_rail::FAILURES_WIDTH_MIN)
             .show(ctx, |ui| {
-                if let Some(new_layer) = failures_rail::render(ui, sim_ref, cursor.index) {
-                    if new_layer != cursor.index {
-                        cursor.index = new_layer.min(cursor_max);
-                    }
+                if let Some(new_layer) = failures_rail::render(ui, sim_ref, cursor.index)
+                    && new_layer != cursor.index
+                {
+                    cursor.index = new_layer.min(cursor_max);
                 }
             });
 
@@ -226,11 +226,10 @@ pub fn draw_v2_dashboard(
     // Layout persistence: debounced write after the user stops
     // mutating the layout. The grid tracks its own dirty timestamp;
     // we only do the IO work here.
-    if let Some(path) = dashboard.layout_path.clone() {
-        if let Some(layout) = dashboard.grid.take_save_if_due(LAYOUT_SAVE_DEBOUNCE) {
-            if let Err(e) = layout_persist::save(&path, &layout) {
-                warn!("failed to persist v2 layout to {}: {e}", path.display());
-            }
-        }
+    if let Some(path) = dashboard.layout_path.clone()
+        && let Some(layout) = dashboard.grid.take_save_if_due(LAYOUT_SAVE_DEBOUNCE)
+        && let Err(e) = layout_persist::save(&path, &layout)
+    {
+        warn!("failed to persist v2 layout to {}: {e}", path.display());
     }
 }
