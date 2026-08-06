@@ -128,7 +128,7 @@ pub fn validate_screenshot_path(input: &Path) -> Result<PathBuf, PathError> {
     // Extension check first — cheap, no syscalls, catches the common
     // typo (".pgn") before we touch the filesystem.
     match input.extension().and_then(|e| e.to_str()) {
-        Some(ext) if matches!(ext, "png" | "jpg" | "jpeg") => {}
+        Some("png" | "jpg" | "jpeg") => {}
         Some(other) => {
             return Err(PathError::BadExtension {
                 actual: other.to_string(),
@@ -184,11 +184,10 @@ pub fn validate_screenshot_path(input: &Path) -> Result<PathBuf, PathError> {
 /// answer WHAT/WHY/WHAT-TO-DO.
 pub fn format_path_error(input: &Path, err: &PathError) -> String {
     match err {
-        PathError::Empty => format!(
-            "--screenshot path is empty\n  \
+        PathError::Empty => "--screenshot path is empty\n  \
              what: passed an empty string\n  \
              fix: pass a path like `--screenshot /tmp/shot.png`"
-        ),
+            .to_string(),
         PathError::IsDirectory => format!(
             "--screenshot path '{}' is a directory\n  \
              what: cannot write a PNG over an existing directory\n  \
@@ -419,7 +418,7 @@ pub fn loads_settled(
 pub fn spawn_button_screenshot(commands: &mut Commands, path: &Path) {
     commands
         .spawn(Screenshot::primary_window())
-        .observe(save_to_disk(path.to_path_buf()));
+        .observe(save_to_disk(PathBuf::from(path)));
 }
 
 /// Spawn a `Screenshot` entity for the auto-capture (CLI) path.
@@ -429,7 +428,7 @@ pub fn spawn_button_screenshot(commands: &mut Commands, path: &Path) {
 pub fn spawn_auto_screenshot(commands: &mut Commands, path: &Path) {
     commands
         .spawn((Screenshot::primary_window(), AutoCaptureMarker))
-        .observe(save_to_disk(path.to_path_buf()));
+        .observe(save_to_disk(PathBuf::from(path)));
 }
 
 /// Generate a default path for the button-click capture, of the form
@@ -527,14 +526,14 @@ pub fn capture_screenshot_and_exit(
         ctb_pending,
         stl_pending,
         sim_pending,
-        &mut *frame_count,
-        &mut *frames_since_ready,
-        &mut *frames_since_spawn,
-        &mut *frames_since_captured,
-        &mut *spawn_fired,
-        &mut *previously_ready,
-        &mut *captured_observed,
-        &mut *has_exited,
+        &mut frame_count,
+        &mut frames_since_ready,
+        &mut frames_since_spawn,
+        &mut frames_since_captured,
+        &mut spawn_fired,
+        &mut previously_ready,
+        &mut captured_observed,
+        &mut has_exited,
     );
 
     match decision {
