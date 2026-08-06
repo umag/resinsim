@@ -20,6 +20,16 @@
  *     `cure_kinetics_ea_is_default` at the envelope top level. Additive —
  *     schema_version stays 2. See the field's own doc comment for the
  *     three-valued (true / false / absent) wire contract.
+ *   - 2026-08 (schemas-v2-missing-optional-fields): added optional
+ *     `peel_shape_factor` plus five Tier-2 voxel-cure Option fields
+ *     (`strain_magnitude_max`, `stress_von_mises_max_mpa`,
+ *     `strain_gradient_max_frac`, `voxel_yield_fraction`,
+ *     `crack_front_fraction`) to `LayerResultV2`, and `layer_height_provenance`
+ *     — a two-branch `LayerHeightProvenanceV2` union (uniform `ctb_um` vs
+ *     variable `ctb_layer_heights_um`, mirroring the Rust hand-written
+ *     bimodal Serialize) with a `MismatchDetailV2` discriminated-union
+ *     `mismatch` field — to `PrintSimulationV2`. All additive — schema_version
+ *     stays 2.
  *
  * Versioning rules (per ADR-0015):
  *   - Adding an optional field is additive — do NOT bump schema_version.
@@ -100,6 +110,12 @@ export const LayerResultV2 = z
     // sim.json files (no base_force_n) still parse; mirrors the Rust
     // `#[serde(default)]` on LayerResult.base_force_n.
     base_force_n: z.number().default(0),
+    // ADR-0022 Stage 3 (KB-185). Applied A/L peel shape factor, dimensionless
+    // in (0, 1]. Absent when the resin's `peel_shape_factor_strength` is
+    // unset (no correction — the factor is identically 1.0); absent is NOT
+    // 1.0-by-default for consumers. Mirrors the Rust `#[serde(default,
+    // skip_serializing_if = "Option::is_none")]` on LayerResult.peel_shape_factor.
+    peel_shape_factor: z.number().optional(),
     total_force_n: z.number(),
     support_capacity_n: z.number(),
     safety_factor: z.number().nullable(),
@@ -110,6 +126,16 @@ export const LayerResultV2 = z
     z_deflection_um: z.number(),
     effective_layer_height_um: z.number(),
     worst_cure_depth_um: z.number(),
+    /** Per-layer max Frobenius-norm strain (ADR-0018 / t2f3); Tier-2 voxel-cure only, absent on Tier-1 runs. */
+    strain_magnitude_max: z.number().optional(),
+    /** Per-layer max von Mises stress in MPa (ADR-0018 / t2f3); Tier-2 voxel-cure only. */
+    stress_von_mises_max_mpa: z.number().optional(),
+    /** Per-layer max strain gradient |∇ε| between adjacent voxels (ADR-0018 / t2f3); Tier-2 voxel-cure only. */
+    strain_gradient_max_frac: z.number().optional(),
+    /** Per-layer voxel yield fraction in [0, 1] (ADR-0018 / t2f3); Tier-2 voxel-cure only. */
+    voxel_yield_fraction: z.number().optional(),
+    /** Kendall interlayer crack-front fraction (peel-crack-propagation-tier1, KB-188/KB-116); `Some` only when > 0. */
+    crack_front_fraction: z.number().optional(),
   })
   .meta({ id: "LayerResultV2" });
 
@@ -136,6 +162,63 @@ export const FailureEventV2 = z
   })
   .meta({ id: "FailureEventV2" });
 
+/**
+ * Structured detail describing why the CTB's layer-height and the resin
+ * recipe's authored `layer_height_um` disagree. Discriminated on `kind`
+ * (Rust: `MismatchKind`, `#[serde(tag = "kind", rename_all = "snake_case")]`
+ * flattened via `#[serde(flatten)]` onto `MismatchDetail`).
+ * `recipe_layers_for_same_z` is the layer count the recipe's authored value
+ * would imply for the print's total Z-extent — present in both branches.
+ */
+export const MismatchDetailV2 = z
+  .discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("uniform"),
+      ctb_um: z.number(),
+      recipe_layers_for_same_z: z.number().int(),
+    }),
+    z.object({
+      kind: z.literal("variable"),
+      recipe_layers_for_same_z: z.number().int(),
+    }),
+  ])
+  .meta({ id: "MismatchDetailV2" });
+
+/**
+ * Reconciliation between the CTB file-axis layer-height authority and the
+ * resin recipe's authored `layer_height_um` (ADR-0005 "Policy: CTB as
+ * file-axis authority"). Rust:
+ * `values::layer_height_provenance::LayerHeightProvenance`
+ * (crates/resinsim-core/src/values/layer_height_provenance.rs), a
+ * hand-written bimodal Serialize/Deserialize for schema efficiency — uniform
+ * CTBs serialise a flat `ctb_um` scalar + `layer_count`; variable /
+ * adaptive-sliced CTBs serialise the full `ctb_layer_heights_um` Vec instead.
+ * `recipe_um` and the optional `mismatch` are common to both branches;
+ * `mismatch` is absent on agreement. `layer_count` is optional in the
+ * uniform branch — the legacy `{ctb_um, recipe_um}` shape (no
+ * `layer_count`) is accepted by the Rust reader's fall-through
+ * (reconstructed as a single-layer series,
+ * `LayerHeightProvenanceWire`/layer_height_provenance.rs:406-410).
+ * `mismatch` is NOT branch-locked to its matching `kind` — the Rust
+ * `Deserialize` enforces no such cross-constraint even though `reconcile`
+ * only ever pairs uniform-with-uniform and variable-with-variable.
+ */
+export const LayerHeightProvenanceV2 = z
+  .union([
+    z.object({
+      ctb_um: z.number(),
+      layer_count: z.number().int().optional(),
+      recipe_um: z.number(),
+      mismatch: MismatchDetailV2.optional(),
+    }),
+    z.object({
+      ctb_layer_heights_um: z.array(z.number()),
+      recipe_um: z.number(),
+      mismatch: MismatchDetailV2.optional(),
+    }),
+  ])
+  .meta({ id: "LayerHeightProvenanceV2" });
+
 /** PrintSimulation aggregate — the canonical simulation payload. */
 export const PrintSimulationV2 = z
   .object({
@@ -143,6 +226,15 @@ export const PrintSimulationV2 = z
     printer: PrinterProfileV2,
     layers: z.array(LayerResultV2),
     failures: z.array(FailureEventV2),
+    /**
+     * Optional CTB-vs-recipe layer-height reconciliation (ADR-0005). Present
+     * on runs that entered via `run_from_layer_inputs*` (CTB / sliced-file
+     * paths); absent on STL / area-only paths where no CTB-derived value
+     * exists. Mirrors Rust's `#[serde(default, skip_serializing_if =
+     * "Option::is_none")]` on `PrintSimulation.layer_height_provenance`. See
+     * `LayerHeightProvenanceV2`'s doc comment for the two-branch wire shape.
+     */
+    layer_height_provenance: LayerHeightProvenanceV2.optional(),
   })
   .meta({ id: "PrintSimulationV2" });
 
@@ -204,7 +296,7 @@ export const SimulationEnvelopeV2 = z
   .meta({
     title: "SimulationEnvelopeV2",
     description:
-      "Canonical sim.json envelope (schema_version=2). Source: schemas/sim-json/v2.ts (zod 4). v1 envelopes are no longer supported (clean break per ADR-0019 / t2f3.5); historical reference under schemas/sim-json/archive/. Adds optional fields_sidecar pointer to paired binary sidecar carrying voxel fields. 2026-08 (KB-153): adds optional top-level cure_kinetics_ea_is_default (additive, schema_version stays 2).",
+      "Canonical sim.json envelope (schema_version=2). Source: schemas/sim-json/v2.ts (zod 4). v1 envelopes are no longer supported (clean break per ADR-0019 / t2f3.5); historical reference under schemas/sim-json/archive/. Adds optional fields_sidecar pointer to paired binary sidecar carrying voxel fields. 2026-08 (KB-153): adds optional top-level cure_kinetics_ea_is_default (additive, schema_version stays 2). 2026-08 (schemas-v2-missing-optional-fields): declares LayerResultV2.peel_shape_factor plus five Tier-2 Option fields, and PrintSimulationV2.layer_height_provenance (a two-branch LayerHeightProvenanceV2 union with a MismatchDetailV2 discriminated-union mismatch field) — additive, schema_version stays 2.",
   });
 
 export type SimulationEnvelopeV2Type = z.infer<typeof SimulationEnvelopeV2>;
