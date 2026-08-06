@@ -117,6 +117,16 @@ impl VizWorld {
 /// mechanism the plan itself prescribes for an unfaithful scenario
 /// (see UAT-3's resolution below) to a scenario the plan did not
 /// anticipate would be unreachable.
+///
+/// Step 5 pilots UAT-1/3/4/9 (tier B, renderer-dependent) — 9 - 4 = 5.
+/// The 5 remaining actual skips are UAT-2, UAT-5, UAT-6, UAT-7d, UAT-8 —
+/// all declared debt: UAT-2/5/8 need `$RESINSIM_SLICED_FIXTURE` /
+/// `$RESINSIM_SIM_FIXTURE` and this repo has zero committed `.ctb`
+/// fixtures (env-conditional step behaviour would make the register
+/// non-constant, the exact Band-D defect `uat_gherkin.rs` documents at
+/// length — resolved once at plan time, not at harness run time); UAT-6
+/// needs a synthetic egui pointer click bevy_egui 0.39 cannot produce;
+/// UAT-7d per above.
 const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("viz-allow-mismatch-soft-fallback", 1),
     ("viz-arrow-key-step-no-mesh-reupload", 1),
@@ -125,7 +135,7 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("viz-load-ctb-with-sim-renders-heatmap", 1),
     ("viz-load-sim-missing-sidecar", 3),
     ("viz-load-sim-without-ctb-bad-pairing", 1),
-    ("viz-screenshot-flag", 9),
+    ("viz-screenshot-flag", 5),
     ("viz-timeline-click-seeks-current-layer", 3),
     ("viz-timeline-drag-pan-does-not-seek", 2),
     ("viz-timeline-safety-log-toggle-handles-infinite-sf", 2),
@@ -227,6 +237,13 @@ fn assert_spec_set_matches_viz_prefix_on_disk(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    // Renderer preflight — tier B (UAT-1/3/4/9) needs a live GPU/window.
+    // Runs ONCE, before cucumber, and PANICS (never skips) if the
+    // environment cannot render. See
+    // `uat_viz_steps::viz_screenshot_flag::assert_renderer_available`'s
+    // doc comment for why a panic, not a skip.
+    uat_viz_steps::viz_screenshot_flag::assert_renderer_available();
+
     let spec_uat = resolve_spec_uat_dir();
 
     // Loud-fail when the resolved path is the wrong directory (same
