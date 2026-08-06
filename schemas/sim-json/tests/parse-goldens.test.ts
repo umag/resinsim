@@ -10,7 +10,7 @@
  * (`v2.ts`, not `v2.schema.json`). See the schemas/sim-json README and
  * ADR-0015's "Drift posture" section.
  *
- * Four assertions only the TS side can make (neither JSON Schema nor the
+ * Nine assertions only the TS side can make (neither JSON Schema nor the
  * Rust parity suite can express these):
  *   1. Tri-state `cure_kinetics_ea_is_default` — JSON Schema's
  *      `{"type":"boolean"}` cannot express "absent must not be read as
@@ -22,6 +22,23 @@
  *      `additionalProperties: true`.
  *   4. A type-tamper negative on a field the Rust suite does not tamper
  *      (`retract_speed_mm_min`), exercising the nullable+optional branch.
+ *   5. (2026-08, schemas-v2-missing-optional-fields) An injected uniform
+ *      `layer_height_provenance` (`ctb_um` + `layer_count` + `recipe_um`)
+ *      parses against `v2.ts` SOURCE — catches a `v2.ts`-vs-`v2.schema.json`
+ *      divergence the Rust suite (which only exercises the compiled
+ *      `v2.schema.json`) cannot.
+ *   6. An injected variable `layer_height_provenance` with a
+ *      `mismatch: {kind: "variable", ...}` parses against `v2.ts` SOURCE —
+ *      same rationale as (5), other branch.
+ *   7. A wrong-typed `layer_height_provenance.ctb_um` fails against `v2.ts`
+ *      SOURCE.
+ *   8. A wrong-typed `peel_shape_factor` fails against `v2.ts` SOURCE.
+ *   9. An object carrying NEITHER `ctb_um` nor `ctb_layer_heights_um` fails
+ *      — the union has no matching branch (empirically also caught by
+ *      `v2.schema.json`'s `anyOf` + per-branch `required`, so this is not
+ *      uniquely a zod-vs-JSON-Schema expressiveness gap; it is still
+ *      uniquely a `v2.ts`-SOURCE assertion because the Rust parity suite
+ *      only ever exercises the compiled schema).
  *
  * Fixture coupling: this test reaches from `schemas/` into
  * `crates/resinsim-inspect/tests/fixtures/sim_golden/` because those
@@ -160,5 +177,101 @@ test("a wrong-typed retract_speed_mm_min fails validation", () => {
     result.success,
     false,
     "a string retract_speed_mm_min must fail (schema is nullable number, not string)",
+  );
+});
+
+// ---- schemas-v2-missing-optional-fields (2026-08): layer_height_provenance
+// + peel_shape_factor, against v2.ts SOURCE. Literals for the provenance
+// shapes are copied from
+// crates/resinsim-core/tests/uat_steps/cli_report_health_layer_height_provenance.rs
+// (UAT-1 / UAT-2), not invented. None of the three committed goldens carry
+// either field, so every case here clone-and-injects — same technique as
+// the base_force_n test above.
+
+test("an injected uniform layer_height_provenance parses against v2.ts source", () => {
+  const raw = structuredClone(goldens.get("baseline.sim.json")) as {
+    simulation: Record<string, unknown>;
+  };
+  raw.simulation.layer_height_provenance = {
+    ctb_um: 40.0,
+    layer_count: 4492,
+    recipe_um: 40.0,
+  };
+
+  const result = SimulationEnvelopeV2.safeParse(raw);
+  assert.equal(
+    result.success,
+    true,
+    `uniform layer_height_provenance must parse against v2.ts source: ${
+      result.success ? "" : JSON.stringify(result.error.issues)
+    }`,
+  );
+});
+
+test("an injected variable layer_height_provenance with a variable mismatch parses against v2.ts source", () => {
+  const raw = structuredClone(goldens.get("baseline.sim.json")) as {
+    simulation: Record<string, unknown>;
+  };
+  raw.simulation.layer_height_provenance = {
+    ctb_layer_heights_um: [30.0, 40.0, 50.0, 40.0, 30.0],
+    recipe_um: 30.0,
+    mismatch: { kind: "variable", recipe_layers_for_same_z: 6 },
+  };
+
+  const result = SimulationEnvelopeV2.safeParse(raw);
+  assert.equal(
+    result.success,
+    true,
+    `variable layer_height_provenance with a variable mismatch must parse against v2.ts source: ${
+      result.success ? "" : JSON.stringify(result.error.issues)
+    }`,
+  );
+});
+
+test("a wrong-typed layer_height_provenance.ctb_um fails validation", () => {
+  const raw = structuredClone(goldens.get("baseline.sim.json")) as {
+    simulation: Record<string, unknown>;
+  };
+  raw.simulation.layer_height_provenance = {
+    ctb_um: "wide",
+    layer_count: 4492,
+    recipe_um: 40.0,
+  };
+
+  const result = SimulationEnvelopeV2.safeParse(raw);
+  assert.equal(
+    result.success,
+    false,
+    "a string ctb_um must fail (schema declares ctb_um as a number)",
+  );
+});
+
+test("a wrong-typed peel_shape_factor fails validation", () => {
+  const raw = structuredClone(goldens.get("baseline.sim.json")) as {
+    simulation: { layers: Array<Record<string, unknown>> };
+  };
+  raw.simulation.layers[0].peel_shape_factor = "wide";
+
+  const result = SimulationEnvelopeV2.safeParse(raw);
+  assert.equal(
+    result.success,
+    false,
+    "a string peel_shape_factor must fail (schema declares peel_shape_factor as a number)",
+  );
+});
+
+test("a layer_height_provenance carrying neither ctb_um nor ctb_layer_heights_um fails validation", () => {
+  const raw = structuredClone(goldens.get("baseline.sim.json")) as {
+    simulation: Record<string, unknown>;
+  };
+  raw.simulation.layer_height_provenance = {
+    recipe_um: 40.0,
+  };
+
+  const result = SimulationEnvelopeV2.safeParse(raw);
+  assert.equal(
+    result.success,
+    false,
+    "an object with neither ctb_um nor ctb_layer_heights_um must fail (no union branch matches)",
   );
 });
