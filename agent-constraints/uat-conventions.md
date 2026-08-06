@@ -12,6 +12,28 @@ exist in this tree. Step definitions live at
 `crates/resinsim-core/tests/uat_steps/`; the cucumber harness binary is
 `crates/resinsim-core/tests/uat_gherkin.rs`.
 
+**A second, independent harness** exists for `spec/uat/viz-*.md` only:
+`crates/resinsim-viz/tests/uat_viz_gherkin.rs`, with step defs at
+`crates/resinsim-viz/tests/uat_viz_steps/`, run via `cargo uat-viz`. It
+is hosted inside `resinsim-viz`, not `resinsim-core`, because
+`env!("CARGO_BIN_EXE_resinsim-viz")` is only available inside that
+crate's own build graph, and a shared harness would impose a
+display/GPU requirement on `cargo uat`, which is display-free today.
+Both harnesses reuse the SAME extractor
+(`crates/resinsim-core/tests/uat_steps/extract.rs`, included into
+`crates/resinsim-viz/tests/uat_viz_gherkin.rs` via a cross-crate
+`#[path]`) and the same
+design — silent-green guard, parse-error guard, the three-direction
+debt-register check — but each keeps its OWN register: core's covers
+the whole `spec/uat/` directory (including all `viz-*` entries, still,
+today — see the transitional-double-count note below), the viz
+harness's covers `viz-*.md` only. See
+`docs/adr/0024-second-uat-harness-in-resinsim-viz.md` for the full
+rationale and
+`docs/patterns/second-cucumber-harness-for-a-presentation-crate.md` for
+the reusable shape. Everything else in this document describes core's
+harness unless a section says otherwise.
+
 No `.feature` file is checked in. The harness synthesises one per spec at
 run time into `$CARGO_TARGET_TMPDIR/spec-uat-features`, named
 `<spec-stem>.feature`. If you're expecting a checked-in `tests/uat/*.feature`
@@ -62,6 +84,23 @@ landing without a step-def module must arrive with a
 (see below).
 
 ## Step definitions
+
+This section describes core's `uat_steps/` tree. The viz harness's
+`crates/resinsim-viz/tests/uat_viz_steps/` follows the same module and
+regex conventions at smaller scale: currently one per-spec step-def
+module (`viz_screenshot_flag`) plus a shared support module,
+`crates/resinsim-viz/tests/uat_viz_steps/viz_cli.rs`, for subprocess
+invocation.
+
+It plays the same role as `cli_fixtures.rs` below but is not the same
+code: `env!("CARGO_BIN_EXE_resinsim-viz")` is available for free inside
+`resinsim-viz`'s own build graph, so the cross-package build-and-locate
+apparatus `cli_fixtures.rs` needs is unnecessary there.
+None of the core-only cross-module bookkeeping below applies to the viz
+harness yet — a single step-def module has no renames to record, no
+sibling modules to distinguish from support code, and nothing for a
+mod.rs/use-list cross-check to compare — add the equivalent viz-side
+machinery when a second viz step-def module lands.
 
 ### Module naming and wiring
 
@@ -136,6 +175,17 @@ verification battery and the current expected shape, see
 `implementation-conventions.md` — no counts are restated here because they
 move with every campaign increment.
 
+Also run `cargo uat-viz` whenever `spec/uat/viz-*.md` or
+`crates/resinsim-viz/tests/uat_viz_steps/` changes. It opens real windows
+on a machine with a GPU — a developer-machine gate (there is no CI in
+this repo today), visually disruptive but not something to run headless
+or skip. `viz-screenshot-flag`'s scenarios that `cargo uat-viz` now steps
+are STILL counted as skipped debt in core's `SPECS_WITHOUT_STEP_DEFS`
+too — a deliberate, temporary double count until the follow-up
+`viz-uat-register-migration` lifecycle removes core's entries one spec
+at a time. Do not "clean up" that double count outside that lifecycle;
+see the ADR's migration plan.
+
 ## Prior-art lookup at planning Step 6
 
 Grep `spec/uat/*.md` by `affectedAreas` and the issue title; also grep
@@ -159,3 +209,8 @@ to point at.
 - `docs/patterns/band-membership-by-symbol.md`
 - `docs/patterns/anti/markdown-bullets-in-gherkin-step.md`
 - `docs/patterns/anti/fixture-copy-of-shared-builder.md`
+- `docs/adr/0024-second-uat-harness-in-resinsim-viz.md` — the viz
+  harness's rationale, the extractor-reuse decision, and the migration
+  plan for the transitional double count
+- `docs/patterns/second-cucumber-harness-for-a-presentation-crate.md` —
+  the reusable shape a second harness follows

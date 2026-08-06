@@ -374,6 +374,64 @@ field required only under `field-sim` compiles, parses, and passes under
 the other three ADR-0017 configs, and fails only when `cargo uat-field-sim`
 runs.
 
+### Seventh command: the viz UAT suite (`cargo uat-viz`)
+
+`cargo uat-viz` (alias in `.cargo/config.toml` for
+`test --test uat_viz_gherkin -p resinsim-viz`). A SECOND, independent
+cucumber harness (`viz-uat-cucumber-harness`, 2026-08-06), hosted inside
+`resinsim-viz` rather than joining the fifth/sixth commands above,
+because `env!("CARGO_BIN_EXE_resinsim-viz")` is only available inside
+that crate's own build graph and because a shared harness would impose a
+display/GPU requirement on `cargo uat`, which is display-free today. See
+`docs/adr/0024-second-uat-harness-in-resinsim-viz.md` for the full
+rationale (including the honest three-leg case, not just "avoids a
+dependency cycle" — that claim alone does not survive scrutiny given
+`cli_fixtures.rs` already proves a cross-package subprocess needs no
+dev-dep).
+
+Like the fifth/sixth commands, it does not run under `cargo nextest
+run` — the SAME `.config/nextest.toml` `not binary(/^uat_/)` pattern
+excludes `uat_viz_gherkin` with zero configuration change, confirmed via
+`cargo nextest list -p resinsim-viz`. Reuses core's harness DESIGN
+(silent-green guard per-feature and in aggregate, parse-error guard, the
+three-direction register check) via the SAME extractor
+(`crates/resinsim-core/tests/uat_steps/extract.rs`, included by a
+cross-crate `#[path]`, matching the mechanism
+`tests/spec_gherkin_wellformed.rs` already uses), but keeps its OWN
+register scoped to `spec/uat/viz-*.md` only, plus a fourth guard core
+has no equivalent for: the harness's spec set must equal exactly the
+on-disk `viz-*.md` set.
+
+`cargo uat-viz` opens real windows for its tier-B scenarios (a live GPU
+is required) — a developer-machine gate, not a CI gate (there is no CI
+in this repo today). Run it whenever `spec/uat/viz-*.md` or
+`crates/resinsim-viz/tests/uat_viz_steps/` changes.
+
+**Expected shape** (as of the pilot, `viz-screenshot-flag` only, 7 of 12
+scenarios stepped): 12 features, 12 register entries summing 23, 35
+steps passed / 23 skipped / 0 failed, 0 parsing errors, exit 0.
+`viz-screenshot-flag` itself: 31 steps passed, 5 skipped (UAT-2/5/8
+env-conditional — this repo has zero committed `.ctb` fixtures; UAT-6
+not drivable, `bevy_egui` 0.39 has no synthetic pointer-click API;
+UAT-7d declared debt — `clap` 4.6.1 rejects an empty `--screenshot`
+value at the parser level before the app's own validation ever runs,
+covered instead by an existing unit test). Trust `cargo uat-viz`'s own
+`[Consolidated total]` line over this paragraph if they disagree, same
+rule as `cargo uat` above.
+
+**Transitional double count, deliberate:** the 7 scenarios `cargo
+uat-viz` now steps are STILL counted as skipped debt in core's
+`SPECS_WITHOUT_STEP_DEFS` (all 12 `viz-*` entries there are unchanged by
+this addition). Removing them is the follow-up lifecycle
+`viz-uat-register-migration`, one spec at a time, starting with
+`viz-screenshot-flag`'s entry — not a same-change cleanup. See the ADR's
+"Migration plan".
+
+`cargo nextest run -p resinsim-viz --all-targets` build time lengthens
+(cucumber, tokio, and pulldown-cmark now compile for `resinsim-viz`'s
+dev graph) — a build-time cost, not a test-count change; the four-config
+matrix's test counts are unaffected.
+
 ## PR convention
 
 Per project memory: PRs target `dev`, not `main`. `main` is reserved for
@@ -399,3 +457,5 @@ This file does not override the sacred rules:
 - `agent-constraints/iteration-limits.md` — autonomous loop caps
 - `using-jj-workspaces` skill — sibling-workspace mechanics
 - ADR-0015 (this issue) — example of a clean linear-history feature commit
+- `docs/adr/0024-second-uat-harness-in-resinsim-viz.md` — the seventh
+  command's full rationale

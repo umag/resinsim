@@ -182,6 +182,16 @@ echo $?  # 8 — retry on a different machine (or extend the timeout
 # "Test coverage notes" section for the rationale.
 ```
 
+### UAT (`cargo uat-viz`)
+
+`cargo uat-viz` runs the cucumber UAT suite for `spec/uat/viz-*.md`
+(currently piloting `viz-screenshot-flag`'s exit-code/stderr-substring
+contract — the CLI surface above). It opens real windows for a few
+seconds per scenario, so expect visible flicker; it needs a machine with
+a working GPU/display. See
+`docs/adr/0024-second-uat-harness-in-resinsim-viz.md` and
+`agent-constraints/uat-conventions.md`.
+
 ### See also
 
 - KB-3 anti-pattern motivation:
