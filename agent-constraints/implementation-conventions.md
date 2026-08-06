@@ -227,19 +227,67 @@ the four-config matrix; the same is true of
 `tests/agent_constraints_links.rs`, the authoring-time guard over this
 directory's own path and symbol references.
 
-**Expected shape is IDENTICAL in both configs** (current as of
-`uat-unskip-campaign` increment C2 — `cli-report-health-print-time`,
-`cli-report-health-layer-height-provenance`, and
-`cli-report-health-surfaces-ea-default-advisory`, 2026-08-05): 54 features,
-166 scenarios (94 passed, 72 skipped, 0 failed), 560 steps (478 passed, 72
-skipped, 0 failed), exit 0, register at 24 entries (sum 72). This shape
-moves as the campaign lands more increments — trust
-`cargo uat`'s own `[Consolidated total]` line over this paragraph if they
-disagree, and update this paragraph when they do. A field-sim run reporting
-FEWER total steps than the default run means a scenario is aborting early
-(a fixture regressed and is panicking before reaching every step) — treat
-that as a hard failure, not noise, even if the final failed-count still
-reads 0.
+**Expected shape is CONFIG-AWARE, not identical, as of `uat-unskip-band-d`.**
+The debt register widened to two columns — `SpecDebt { spec,
+default_features, field_sim }`, built via `both_configs(spec, n)` for the
+symmetric majority or `per_config(spec, d, f)` for a declared
+config-asymmetric row. `HARNESS_CONFIG` is the mutually-exclusive cfg
+marker that selects between the two columns. See
+`docs/patterns/band-membership-by-symbol.md` and
+`docs/patterns/per-spec-runtime-skip-attribution.md` for the row shape and
+the marker design in full. The invariant that replaces "identical shape in
+both configs" is now THREE-PART:
+
+1. The register's SPEC-NAME set is config-invariant — every spec appears
+   in the same 24-entry register regardless of which binary is running;
+   only its two columns may differ.
+2. The feature count and the synthesised SCENARIO set are config-invariant
+   — the staging path (extracting `spec/uat/*.md` into synthesised
+   `.feature` files) is entirely `#[cfg]`-free, so both aliases see the
+   same 54 features and the same 166 total scenarios every time.
+3. Only the passed/skipped SPLIT within that fixed scenario set may
+   differ, and each alias's split must match its OWN register column
+   exactly — never the other alias's.
+
+Current shapes (`uat-unskip-band-d`, landed 2026-08-06 — light-crosstalk-
+3d-gaussian-convolution UAT-5/6/7 ungated, honest-zero-yield-fraction-on-
+calibrated-solid and calibration-disclosure-3of3-predicate both
+field-sim-gated):
+
+- `cargo uat` (default features): 54 features, 166 scenarios (97 passed,
+  69 skipped, 0 failed), 560 steps (487 passed, 69 skipped, 0 failed),
+  exit 0.
+- `cargo uat-field-sim`: 54 features, 166 scenarios (104 passed, 62
+  skipped, 0 failed), 560 steps (520 passed, 62 skipped, 0 failed), exit 0.
+- Register: 24 entries, column sums 69 (default) / 62 (field-sim).
+
+Both shapes move as the campaign lands more increments — trust each
+alias's own `[Consolidated total]` line (which now also prints its active
+`HARNESS_CONFIG`, e.g. `(default)` / `(field-sim)`, so two runs pasted into
+the same terminal are visibly distinguishable) over this paragraph if they
+disagree, and update this paragraph when they do. A field-sim run
+reporting FEWER total steps than the default run means a scenario is
+aborting early (a fixture regressed and is panicking before reaching every
+step) — treat that as a hard failure, not noise, even if the final
+failed-count still reads 0. That check now also applies to the SCENARIO
+total specifically: since the scenario set is config-invariant by
+construction (point 2 above), the two aliases' `166 scenarios` figure must
+always match; a field-sim run showing fewer than 166 total scenarios is
+the same class of hard failure, one layer up from the step-count check.
+
+**Band-D increment pointer** (`uat-unskip-band-d`, this increment,
+2026-08-06): landed the two-column register, the gate-aware layers 1/1b/3,
+and three specs — one ungated (light-crosstalk-3d-gaussian-convolution
+UAT-5/6/7, symmetric row 9 → 6), two field-sim-gated (honest-zero-yield-
+fraction-on-calibrated-solid and calibration-disclosure-3of3-predicate,
+both new `per_config` rows). `cli-sim-budget-mismatch-on-load` and
+`cli-sim-rejects-tampered-sidecar` stay symmetric pending the binary-
+build-seam decision this issue owns but does not implement (see those two
+rows' comments in `uat_gherkin.rs`); six further rows remain undecided by
+symbol (see the grouped note over them in the same file). The register no
+longer has one "net debt" number — only two, by design, one per config —
+so track progress per column: 69 (default) / 62 (field-sim), both down
+from 72 before this increment.
 
 **Campaign pointer** (`uat-unskip-campaign`, ratified 2026-07-28): recommended
 bands, in order — Band A domain/default-features, Band B nanodlp, Band C
