@@ -50,6 +50,7 @@ use uat_steps::{
     cli_temperature_flag_validation, ctb_layer_height_authority, cumulative_times_sec_accessor,
     cure_depth_nan_guard, interlayer_crack_knockdown_scales_with_perimeter, legacy_resin_toml_defaults,
     legacy_resin_toml_without_recipe, legacy_resin_toml_without_ref_lift_speed,
+    light_crosstalk_3d_gaussian_convolution,
     nanodlp_archive_bomb_rejected, nanodlp_calibrate_compares_real_force,
     nanodlp_import_simulates, peel_shape_factor_scales_with_aspect_ratio,
     profile_vacuum_pressure_scales_suction, recipe_inside_printer_range, recipe_out_of_range,
@@ -346,7 +347,17 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // config-asymmetry constraint as calibration-disclosure-3of3-predicate
     // above — see uat-unskip-band-d.
     both_configs("honest-zero-yield-fraction-on-calibrated-solid", 2),
-    both_configs("light-crosstalk-3d-gaussian-convolution", 9),
+    // PAID DOWN (uat-unskip-band-d step 5, 2026-08-06): UAT-5/UAT-6/UAT-7
+    // (the σ = 0.0 / σ > MAX_SIGMA_UM validate-time rejections) landed as
+    // an UNGATED module — see `light_crosstalk_3d_gaussian_convolution.rs`'s
+    // module doc for the grep evidence that `PrinterProfile::validate`'s
+    // crosstalk block sits before the file's only field-sim `#[cfg]` block
+    // — dropping this row from 9 to 6 in BOTH columns. UAT-1..4 and
+    // UAT-8..9 (the runtime 3D convolution behaviour) stay declared debt:
+    // their entry point is the voxel cure path, itself gated, and already
+    // covered at the nextest layer by `voxel_cure_crosstalk_integration.rs`
+    // per the spec's own "See also" section.
+    both_configs("light-crosstalk-3d-gaussian-convolution", 6),
     both_configs("printer-envelope-min-extent-under-field-sim", 1),
     both_configs("sim-fields-sidecar-roundtrip", 4),
     both_configs("thermal-field-arrhenius-per-voxel", 2),

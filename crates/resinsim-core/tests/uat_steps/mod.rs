@@ -42,6 +42,7 @@ pub mod interlayer_crack_knockdown_scales_with_perimeter;
 pub mod legacy_resin_toml_defaults;
 pub mod legacy_resin_toml_without_recipe;
 pub mod legacy_resin_toml_without_ref_lift_speed;
+pub mod light_crosstalk_3d_gaussian_convolution;
 pub mod nanodlp_archive_bomb_rejected;
 pub mod nanodlp_calibrate_compares_real_force;
 pub mod nanodlp_import_simulates;

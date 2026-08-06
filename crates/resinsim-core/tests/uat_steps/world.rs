@@ -295,6 +295,12 @@ pub struct PrinterBuilder {
     /// entirely, matching the "unset" branch of `PrinterProfile`'s
     /// `Option<f32>` field (profile-vacuum-pressure-scales-suction UAT-2).
     vacuum_pressure_kpa: Option<f32>,
+    /// ADR-0018 / t2f2 lateral (XY) light crosstalk σ, µm. `None` ⇒ the
+    /// TOML omits the key (light-crosstalk-3d-gaussian-convolution UAT-5).
+    crosstalk_sigma_xy_um: Option<f32>,
+    /// ADR-0018 / t2f2 axial (Z) light crosstalk σ, µm. `None` ⇒ the TOML
+    /// omits the key (light-crosstalk-3d-gaussian-convolution UAT-6).
+    crosstalk_sigma_z_um: Option<f32>,
 }
 
 impl PrinterBuilder {
@@ -313,6 +319,8 @@ impl PrinterBuilder {
             z_stiffness_n_per_mm: 460.0, // KB-130 generic_msla_4k default
             led_power_mw_cm2: 4.0,
             vacuum_pressure_kpa: None,
+            crosstalk_sigma_xy_um: None,
+            crosstalk_sigma_z_um: None,
         }
     }
 
@@ -356,6 +364,25 @@ impl PrinterBuilder {
         self
     }
 
+    /// ADR-0018 / t2f2 lateral (XY) light crosstalk σ
+    /// (light-crosstalk-3d-gaussian-convolution UAT-5/UAT-7). Deliberately
+    /// accepts any `f32` including out-of-range values — validity is
+    /// `PrinterProfile::validate()`'s job, exercised via
+    /// [`Self::build_unvalidated`] for the rejection scenarios.
+    pub fn with_crosstalk_sigma_xy_um(mut self, um: f32) -> Self {
+        self.crosstalk_sigma_xy_um = Some(um);
+        self
+    }
+
+    /// ADR-0018 / t2f2 axial (Z) light crosstalk σ
+    /// (light-crosstalk-3d-gaussian-convolution UAT-6). Same
+    /// deliberately-unchecked rationale as
+    /// [`Self::with_crosstalk_sigma_xy_um`].
+    pub fn with_crosstalk_sigma_z_um(mut self, um: f32) -> Self {
+        self.crosstalk_sigma_z_um = Some(um);
+        self
+    }
+
     pub fn build(self) -> resinsim_core::entities::PrinterProfile {
         let p = self.build_unvalidated();
         p.validate()
@@ -377,6 +404,17 @@ impl PrinterBuilder {
             Some(v) if v.is_nan() => "vacuum_pressure_kpa = nan\n".to_string(),
             Some(v) => format!("vacuum_pressure_kpa = {v}\n"),
         };
+        // Same NaN-literal-lowercasing rationale as `vacuum_line` above.
+        let crosstalk_xy_line = match self.crosstalk_sigma_xy_um {
+            None => String::new(),
+            Some(v) if v.is_nan() => "crosstalk_sigma_xy_um = nan\n".to_string(),
+            Some(v) => format!("crosstalk_sigma_xy_um = {v}\n"),
+        };
+        let crosstalk_z_line = match self.crosstalk_sigma_z_um {
+            None => String::new(),
+            Some(v) if v.is_nan() => "crosstalk_sigma_z_um = nan\n".to_string(),
+            Some(v) => format!("crosstalk_sigma_z_um = {v}\n"),
+        };
         let toml_str = format!(
             r#"
 name = "{name}"
@@ -390,7 +428,7 @@ z_stiffness_n_per_mm = {stiff}
 delta_t_steady_c = 10.0
 thermal_tau_sec = 1200.0
 lcd_uniformity_variation = 0.22
-{vacuum_line}{field_sim_scalars}{envelope}"#,
+{vacuum_line}{crosstalk_xy_line}{crosstalk_z_line}{field_sim_scalars}{envelope}"#,
             name = self.name,
             led = self.led_power_mw_cm2,
             layer_min = self.layer_min,
