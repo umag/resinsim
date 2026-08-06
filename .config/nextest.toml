@@ -5,10 +5,16 @@
 # nextest uses to enumerate tests. Nextest aborts the entire suite if it
 # tries to probe such a binary. We exclude every `uat_*` binary from the
 # default profile so adding a sibling cucumber binary (or renaming the
-# existing one) can't silently re-break the suite.
+# existing one) can't silently re-break the suite. There are now TWO such
+# binaries covered by this one pattern — `uat_gherkin` (resinsim-core) and
+# `uat_viz_gherkin` (resinsim-viz, added by viz-uat-cucumber-harness, see
+# docs/adr/0024-second-uat-harness-in-resinsim-viz.md) — and both were
+# excluded with ZERO change to this file, which is the point of matching
+# on the `/^uat_/` prefix rather than a literal binary name.
 #
 # Run cucumber UAT scenarios with:
-#   cargo test --test uat_gherkin -p resinsim-core
+#   cargo test --test uat_gherkin -p resinsim-core        (or: cargo uat)
+#   cargo test --test uat_viz_gherkin -p resinsim-viz     (or: cargo uat-viz)
 #
 # The `uat_*` prefix excludes the `uat_extractor` test target too — that
 # binary uses the default libtest harness (so nextest COULD run it), but
