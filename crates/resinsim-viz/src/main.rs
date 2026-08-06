@@ -346,10 +346,10 @@ pub fn route_drop(path: &Path) -> DropAction {
         .file_name()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
-    if let Some(name) = name_lower.as_deref() {
-        if name.ends_with(".sim.json") {
-            return DropAction::Sim;
-        }
+    if let Some(name) = name_lower.as_deref()
+        && name.ends_with(".sim.json")
+    {
+        return DropAction::Sim;
     }
     let ext_lower: Option<String> = path
         .extension()

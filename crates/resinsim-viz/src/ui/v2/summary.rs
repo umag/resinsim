@@ -54,16 +54,16 @@ pub fn render(
             .color(theme::INK_MUTED),
         );
         separator(ui);
-        if let Some((layer, force)) = max_force_layer(sim) {
-            if chip(ui, &format!("max-force layer {layer:0>4} · {force:.1} N")) {
-                jump_to = Some(layer);
-            }
+        if let Some((layer, force)) = max_force_layer(sim)
+            && chip(ui, &format!("max-force layer {layer:0>4} · {force:.1} N"))
+        {
+            jump_to = Some(layer);
         }
         separator(ui);
-        if let Some((layer, sf)) = min_safety_layer(sim) {
-            if chip(ui, &format!("min-safety layer {layer:0>4} · {sf:.2}")) {
-                jump_to = Some(layer);
-            }
+        if let Some((layer, sf)) = min_safety_layer(sim)
+            && chip(ui, &format!("min-safety layer {layer:0>4} · {sf:.2}"))
+        {
+            jump_to = Some(layer);
         }
         // Right-aligned: total layer count.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

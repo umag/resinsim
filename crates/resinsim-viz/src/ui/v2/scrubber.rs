@@ -58,15 +58,15 @@ pub fn render(ui: &mut egui::Ui, current: u32, max: u32, failures: &[FailureEven
 
     // Click anywhere on the strip (including the label band) jumps
     // the cursor; drag follows. Pointer coords are screen-space.
-    if resp.clicked() || resp.dragged() {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            return Some(screen_x_to_layer(
-                pos.x,
-                axis_rect.min.x,
-                axis_rect.width(),
-                max,
-            ));
-        }
+    if (resp.clicked() || resp.dragged())
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        return Some(screen_x_to_layer(
+            pos.x,
+            axis_rect.min.x,
+            axis_rect.width(),
+            max,
+        ));
     }
 
     None

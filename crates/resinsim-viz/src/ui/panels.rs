@@ -169,14 +169,14 @@ pub fn left_panel(
                 last_screenshot.0 = Some((path, std::time::Instant::now()));
             }
             // Transient "Captured: <basename>" toast for CAPTURE_TOAST_DURATION.
-            if let Some((path, started)) = last_screenshot.0.as_ref() {
-                if started.elapsed() <= CAPTURE_TOAST_DURATION {
-                    let basename = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("(unknown)");
-                    ui.colored_label(egui::Color32::LIGHT_GREEN, format!("Captured: {basename}"));
-                }
+            if let Some((path, started)) = last_screenshot.0.as_ref()
+                && started.elapsed() <= CAPTURE_TOAST_DURATION
+            {
+                let basename = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("(unknown)");
+                ui.colored_label(egui::Color32::LIGHT_GREEN, format!("Captured: {basename}"));
             }
         });
 }
