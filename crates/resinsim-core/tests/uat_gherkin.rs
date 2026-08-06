@@ -59,6 +59,20 @@ use uat_steps::{
     thermal_degradation,
 };
 
+// SECOND, separately-gated use block (uat-unskip-band-d step 6) — rustc
+// rejects `#[cfg]` on an identifier inside a braced `use foo::{a, b}`
+// group (proven by this issue's step-1 scratch probe), so every
+// field-sim-gated step-def module needs its own `use` block carrying the
+// SAME `#[cfg(feature = "field-sim")]` attribute as its `pub mod` line in
+// `uat_steps/mod.rs`. `assert_mod_rs_and_use_list_agree`
+// (`find_use_uat_steps_blocks`) finds and checks this block by its own
+// preceding attributes, independently of the Always block above.
+#[cfg(feature = "field-sim")]
+#[allow(unused_imports, clippy::single_component_path_imports)]
+use uat_steps::{
+    honest_zero_yield_fraction_on_calibrated_solid,
+};
+
 /// Which of the two ADR-0017 feature configurations this harness binary
 /// was built with (uat-unskip-band-d step 2). Defined by a MUTUALLY-
 /// EXCLUSIVE `#[cfg(feature = "field-sim")]` / `#[cfg(not(feature =
@@ -71,7 +85,20 @@ use uat_steps::{
 /// every time, so the typo cannot hide there either. A bare `cfg!` would
 /// just evaluate `false` on a typo and silently select the wrong column
 /// below. See docs/patterns/band-membership-by-symbol.md.
+///
+/// One variant is constructed by only ONE of the two `#[cfg]` arms below;
+/// the OTHER variant is also compared against literally (e.g.
+/// `HARNESS_CONFIG == HarnessConfig::FieldSim` in layer 1) from code that
+/// is NOT itself cfg-gated, so which variant (if either) shows as
+/// "never constructed" under `-D warnings` is build-dependent rather than
+/// a stable per-config fact — `#[allow]`, not `#[expect]`, since `expect`
+/// requires the exact same lint to fire in every build and this one does
+/// not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "not every variant is constructed in every single build; this is by design for a #[cfg]-selected marker type, not a real defect"
+)]
 enum HarnessConfig {
     Default,
     FieldSim,
@@ -346,7 +373,12 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // `None`, so `Some(0.0)` is unrepresentable, not merely untested. Same
     // config-asymmetry constraint as calibration-disclosure-3of3-predicate
     // above — see uat-unskip-band-d.
-    both_configs("honest-zero-yield-fraction-on-calibrated-solid", 2),
+    //
+    // PAID DOWN as the first ASYMMETRIC row (uat-unskip-band-d step 6,
+    // 2026-08-06): see `honest_zero_yield_fraction_on_calibrated_solid.rs`.
+    // Default features stay fully unreachable (2 skipped, unchanged);
+    // field-sim now steps both scenarios (0 skipped).
+    per_config("honest-zero-yield-fraction-on-calibrated-solid", 2, 0),
     // PAID DOWN (uat-unskip-band-d step 5, 2026-08-06): UAT-5/UAT-6/UAT-7
     // (the σ = 0.0 / σ > MAX_SIGMA_UM validate-time rejections) landed as
     // an UNGATED module — see `light_crosstalk_3d_gaussian_convolution.rs`'s
@@ -562,14 +594,17 @@ fn assert_every_spec_has_a_module_or_is_registered(spec_uat: &std::path::Path) {
 /// process), so a false asymmetric row could persist for an entire config
 /// before the OTHER `cargo uat*` alias ever disagreed with it.
 fn assert_asymmetric_rows_have_a_gated_module(mod_src: &str) {
-    let field_sim_only: std::collections::BTreeSet<&str> = classify_step_def_modules(mod_src)
+    // Same module-name → spec-name normalisation as layer 1
+    // (underscore-to-hyphen, with STEP_DEF_MODULE_RENAMES overrides) — the
+    // register's spec names are always hyphenated.
+    let field_sim_only: std::collections::BTreeSet<String> = classify_step_def_modules(mod_src)
         .into_iter()
         .filter(|(_, gate)| *gate == ModuleGate::FieldSimOnly)
         .map(|(m, _)| {
             STEP_DEF_MODULE_RENAMES
                 .iter()
                 .find(|(module, _)| *module == m)
-                .map_or(m, |(_, spec)| spec)
+                .map_or_else(|| m.replace('_', "-"), |(_, spec)| (*spec).to_string())
         })
         .collect();
 
@@ -577,7 +612,7 @@ fn assert_asymmetric_rows_have_a_gated_module(mod_src: &str) {
         .iter()
         .filter(|d| d.default_features != d.field_sim)
         .map(|d| d.spec)
-        .filter(|spec| !field_sim_only.contains(spec))
+        .filter(|spec| !field_sim_only.contains(*spec))
         .collect();
     assert!(
         ungrounded_asymmetric.is_empty(),

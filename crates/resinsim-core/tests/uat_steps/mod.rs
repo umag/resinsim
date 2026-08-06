@@ -38,6 +38,12 @@ pub mod cli_temperature_flag_validation;
 pub mod ctb_layer_height_authority;
 pub mod cumulative_times_sec_accessor;
 pub mod cure_depth_nan_guard;
+// FIELD-SIM-GATED (uat-unskip-band-d step 6): sole entry point
+// `SimulationRunner::run_from_layer_inputs_with_voxel` is itself
+// `#[cfg(feature = "field-sim")]`. See the module's own doc comment for
+// the full symbol derivation.
+#[cfg(feature = "field-sim")]
+pub mod honest_zero_yield_fraction_on_calibrated_solid;
 pub mod interlayer_crack_knockdown_scales_with_perimeter;
 pub mod legacy_resin_toml_defaults;
 pub mod legacy_resin_toml_without_recipe;
