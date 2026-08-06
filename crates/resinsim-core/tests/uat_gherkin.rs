@@ -385,6 +385,27 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // t2f3.5 v1 at all. See uat-unskip-band-d (NOT
     // uat-fixtures-fieldsim-adr0020-gap, which is the unrelated
     // missing-TOML-fixture-fields constraint).
+    //
+    // STILL SYMMETRIC (uat-unskip-band-d step 9, 2026-08-06): every symbol
+    // this scenario needs is compiled out of the subprocessed `resinsim`
+    // binary in BOTH `cargo uat` and `cargo uat-field-sim` TODAY —
+    // `ensure_resinsim_built` forwards NO `--features` — so (3, 3) is the
+    // honest, uniformly-unreachable count in both columns right now, not
+    // yet the canonical asymmetric shape. DECISION this issue OWNS but
+    // does NOT implement: `ensure_resinsim_built`
+    // (`tests/uat_steps/cli_fixtures.rs`) will forward `--features
+    // resinsim-inspect/field-sim` under the SAME `HARNESS_CONFIG` marker
+    // AND build into a config-scoped `--target-dir` (so
+    // `resinsim_bin_path` resolves from that dir instead of walking up
+    // from `current_exe`) — the config-scoped target dir is what stops
+    // the two aliases from sharing one `target/<profile>/resinsim` and
+    // flip-flopping rebuilds (the half-written-binary SIGKILL hazard
+    // `docs/patterns/isolated-target-dir-for-concurrent-sessions.md`
+    // exists to avoid). Landing the `--features` forward WITHOUT the
+    // target-dir split would reintroduce exactly that flip-flop, so the
+    // two must land together. Once they do, this row
+    // converts to `per_config(spec, 3, 0)` in the follow-up increment that
+    // owns the binary-build-seam implementation.
     both_configs("cli-sim-budget-mismatch-on-load", 3),
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): all four scenarios need a producer-written sidecar
@@ -415,7 +436,32 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // pointer is silently IGNORED and `report health --in` exits 0 rather
     // than rejecting it. See uat-unskip-band-d (NOT
     // uat-fixtures-fieldsim-adr0020-gap).
+    //
+    // STILL SYMMETRIC (uat-unskip-band-d step 9, 2026-08-06): same
+    // uniform-unreachability reasoning and the same pending DECISION as
+    // `cli-sim-budget-mismatch-on-load` above (`ensure_resinsim_built`
+    // forwards NO `--features` today) — this row converts to
+    // `per_config(spec, 4, 0)` once `ensure_resinsim_built` forwards
+    // `--features` under `HARNESS_CONFIG` AND builds into a config-scoped
+    // `--target-dir`, in the same change.
     both_configs("cli-sim-rejects-tampered-sidecar", 4),
+    // BAND MEMBERSHIP NOT YET DERIVED BY SYMBOL (uat-unskip-band-d step 9,
+    // 2026-08-06, grouped note over this row and the five below down to
+    // `thermal-field-sidecar-roundtrip`): unlike the rows above (derived
+    // by A2/C1 per docs/patterns/band-membership-by-symbol.md) and the
+    // three specs this increment lands (light-crosstalk, honest-zero,
+    // calibration-disclosure), these six specs' entry-point symbols have
+    // never been walked and grepped one at a time. Their columns are
+    // equal BY CONSTRUCTION here, not by derivation: `both_configs` is
+    // correct for ANY spec with no field-sim-gated step-def module in
+    // EITHER config, because "no module in either config" means every
+    // scenario skips in both, regardless of what the eventual entry-point
+    // symbols turn out to be gated on. Symbol derivation — and a possible
+    // conversion to `per_config` for any row whose true entry point turns
+    // out to be an in-process `#[cfg(feature = "field-sim")]` boundary
+    // rather than a binary-build-seam one — is a precondition of the
+    // increment that scopes each of these rows individually, not assumed
+    // here.
     both_configs("cli-sim-voxel-cure-emits-tier2-thermal-log", 1),
     both_configs("cross-feature-toml-interchange", 2),
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
@@ -445,6 +491,14 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // covered at the nextest layer by `voxel_cure_crosstalk_integration.rs`
     // per the spec's own "See also" section.
     both_configs("light-crosstalk-3d-gaussian-convolution", 6),
+    // PRODUCTION-BLOCKED (uat-unskip-band-d step 9, 2026-08-06): the
+    // min-extent check this scenario needs does not exist yet in
+    // `PrinterProfile::validate`. The blocking production issue is
+    // ALREADY FILED as `printer-envelope-min-extent-validation` — this
+    // row stays symmetric at (1, 1) until that issue lands; stepping it
+    // now would require a production change outside this test-only
+    // lifecycle. Also covered by the six-row "not yet derived by symbol"
+    // note above.
     both_configs("printer-envelope-min-extent-under-field-sim", 1),
     both_configs("sim-fields-sidecar-roundtrip", 4),
     both_configs("thermal-field-arrhenius-per-voxel", 2),
