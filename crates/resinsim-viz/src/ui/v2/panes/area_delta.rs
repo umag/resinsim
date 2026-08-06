@@ -35,11 +35,13 @@ fn draw_loaded(ui: &mut egui::Ui, sim: &PrintSimulation, ctx: &PaneCtx<'_>) {
     let mut delta: Vec<[f64; 2]> = Vec::with_capacity(n);
     for (i, layer) in sim.layers().iter().enumerate() {
         let x = i as f64;
-        let a = f64::from(layer.cross_section_area_mm2);
+        // cross_section_area_mm2 is already f64 (LayerResult); no widening needed.
+        let a = layer.cross_section_area_mm2;
         if a.is_finite() {
             area.push([x, a]);
         }
-        let d = f64::from(layer.area_delta_mm2);
+        // area_delta_mm2 is already f64 (LayerResult); no widening needed.
+        let d = layer.area_delta_mm2;
         if d.is_finite() {
             delta.push([x, d]);
         }

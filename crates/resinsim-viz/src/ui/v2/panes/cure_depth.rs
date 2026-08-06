@@ -95,7 +95,7 @@ fn median_finite(values: &[f64]) -> Option<f64> {
     }
     s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mid = s.len() / 2;
-    if s.len() % 2 == 0 {
+    if s.len().is_multiple_of(2) {
         Some((s[mid - 1] + s[mid]) / 2.0)
     } else {
         Some(s[mid])

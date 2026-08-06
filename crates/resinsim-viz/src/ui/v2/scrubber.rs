@@ -412,7 +412,7 @@ mod tests {
         // Should produce ~4-5 ticks across the range, which we can
         // verify by checking the step is in the expected "nice"
         // multiple set and in the right order of magnitude.
-        assert!(step >= 500 && step <= 1000, "got {step}");
+        assert!((500..=1000).contains(&step), "got {step}");
     }
 
     #[test]
@@ -423,7 +423,7 @@ mod tests {
         for max in [1, 5, 10, 50, 100, 500, 1000, 5000, 10_000] {
             let step = tick_step_for(max);
             let mut s = step;
-            while s % 10 == 0 && s > 9 {
+            while s.is_multiple_of(10) && s > 9 {
                 s /= 10;
             }
             assert!(
