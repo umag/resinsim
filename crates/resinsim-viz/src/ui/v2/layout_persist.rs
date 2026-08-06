@@ -183,7 +183,8 @@ mod tests {
     fn load_missing_file_returns_io_error() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("does-not-exist.json");
-        let err = load(&path).unwrap_err();
+        let err = load(&path)
+            .expect_err("path was never created; load()'s own contract returns Err for a missing file");
         assert!(matches!(err, LoadError::Io(_)));
     }
 
@@ -194,7 +195,9 @@ mod tests {
         let mut layout = sample_layout();
         layout.schema_version = 999;
         save(&path, &layout).expect("save must succeed");
-        let err = load(&path).unwrap_err();
+        let err = load(&path).expect_err(
+            "layout.schema_version was set to 999 above; load()'s schema_version check guarantees Err(SchemaVersion)",
+        );
         assert!(matches!(err, LoadError::SchemaVersion { found: 999 }));
     }
 
@@ -203,7 +206,9 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("v2-layout.json");
         fs::write(&path, b"{ not even close to json }").expect("write");
-        let err = load(&path).unwrap_err();
+        let err = load(&path).expect_err(
+            "the fixture bytes above are not valid JSON syntax, so serde_json::from_slice returns Err",
+        );
         assert!(matches!(err, LoadError::Json(_)));
     }
 

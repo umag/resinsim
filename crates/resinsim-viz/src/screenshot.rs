@@ -1048,7 +1048,7 @@ mod tests {
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .expect("dev/CI clocks are set after the Unix epoch")
                 .as_nanos()
         ))
     }
@@ -1064,9 +1064,12 @@ mod tests {
     #[test]
     fn validate_rejects_existing_directory() {
         let dir = tmp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).expect(
+            "tmp_dir() returns a pid+nanos-unique path under the OS temp dir, so create_dir_all has no sibling fixture to collide with",
+        );
         let dir_with_png_ext = dir.join("inner.png");
-        std::fs::create_dir_all(&dir_with_png_ext).unwrap();
+        std::fs::create_dir_all(&dir_with_png_ext)
+            .expect("dir was just created above, so inner.png's parent exists and is writable");
         assert_eq!(
             validate_screenshot_path(&dir_with_png_ext),
             Err(PathError::IsDirectory)
@@ -1090,7 +1093,9 @@ mod tests {
         // Build path under an existing parent dir to isolate the
         // extension check from the parent-existence check.
         let dir = tmp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).expect(
+            "tmp_dir() returns a pid+nanos-unique path under the OS temp dir, so create_dir_all has no sibling fixture to collide with",
+        );
         let bad = dir.join("shot.txt");
         match validate_screenshot_path(&bad) {
             Err(PathError::BadExtension { actual }) => assert_eq!(actual, "txt"),
@@ -1102,7 +1107,9 @@ mod tests {
     #[test]
     fn validate_rejects_no_extension() {
         let dir = tmp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).expect(
+            "tmp_dir() returns a pid+nanos-unique path under the OS temp dir, so create_dir_all has no sibling fixture to collide with",
+        );
         let bad = dir.join("shot");
         match validate_screenshot_path(&bad) {
             Err(PathError::BadExtension { actual }) => assert!(actual.is_empty()),
@@ -1114,7 +1121,9 @@ mod tests {
     #[test]
     fn validate_accepts_absolute_png() {
         let dir = tmp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).expect(
+            "tmp_dir() returns a pid+nanos-unique path under the OS temp dir, so create_dir_all has no sibling fixture to collide with",
+        );
         let p = dir.join("shot.png");
         let resolved = validate_screenshot_path(&p).expect("absolute .png in existing dir");
         assert!(resolved.is_absolute());
@@ -1125,7 +1134,9 @@ mod tests {
     #[test]
     fn validate_accepts_jpg_and_jpeg() {
         let dir = tmp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).expect(
+            "tmp_dir() returns a pid+nanos-unique path under the OS temp dir, so create_dir_all has no sibling fixture to collide with",
+        );
         for ext in ["jpg", "jpeg"] {
             let p = dir.join(format!("shot.{ext}"));
             assert!(
