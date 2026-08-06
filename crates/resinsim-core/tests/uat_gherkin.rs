@@ -383,6 +383,79 @@ const NON_STEP_MODULES: [&str; 5] = [
     "cli_fixtures",
 ];
 
+/// Whether a step-def module compiles in both harness configs, or only
+/// under `field-sim` (uat-unskip-band-d step 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModuleGate {
+    /// No recognised cfg attribute above the `pub mod` line — compiles (and
+    /// is expected to be stepped) in both `cargo uat` and `cargo
+    /// uat-field-sim`.
+    Always,
+    /// `#[cfg(feature = "field-sim")]` above the `pub mod` line — compiled,
+    /// linked, and steppable ONLY under `cargo uat-field-sim`.
+    FieldSimOnly,
+}
+
+/// THE shared cfg-classifying parser (uat-unskip-band-d step 3), used by
+/// BOTH layer 1 (`assert_every_spec_has_a_module_or_is_registered`) and
+/// layer 3 (`assert_mod_rs_and_use_list_agree`) to read the `declared` side
+/// of their respective checks from `uat_steps/mod.rs`'s source text.
+///
+/// Classifies every `pub mod X;` line (in file order) by the attribute
+/// line(s) immediately above it. Only `#[cfg(feature = "field-sim")]` is
+/// recognised as a gate; anything else that looks like an attribute
+/// directly above a `pub mod` line is a HARD FAILURE (`panic!`) rather than
+/// a silent fallback to `Always` — an unrecognised gate read as "always
+/// steppable" would misclassify a module that is, in fact, conditionally
+/// compiled, recreating the guard-that-cannot-observe-its-own-failure-mode
+/// defect this parser exists to close
+/// (docs/patterns/anti/guard-that-cannot-observe-its-own-failure-mode.md).
+/// `NON_STEP_MODULES` entries are included in the walk (so a gate placed
+/// above one of them by mistake is still caught) but excluded from the
+/// returned list, same filter layer 1 already applied pre-step-3.
+fn classify_step_def_modules(mod_src: &str) -> Vec<(&str, ModuleGate)> {
+    let mut out = Vec::new();
+    let mut pending_gate: Option<ModuleGate> = None;
+    for raw_line in mod_src.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("pub mod ") {
+            let name = rest.strip_suffix(';').unwrap_or(rest);
+            if !NON_STEP_MODULES.contains(&name) {
+                out.push((name, pending_gate.take().unwrap_or(ModuleGate::Always)));
+            }
+            pending_gate = None;
+            continue;
+        }
+        if line == r#"#[cfg(feature = "field-sim")]"# {
+            pending_gate = Some(ModuleGate::FieldSimOnly);
+            continue;
+        }
+        if line.starts_with("//") {
+            continue;
+        }
+        if line.starts_with('#') {
+            panic!(
+                "uat_steps/mod.rs carries an attribute line the shared \
+                 cfg-classifying parser does not recognise above a `pub mod` \
+                 line: {line:?}\n\
+                 Only `#[cfg(feature = \"field-sim\")]` is understood here — an \
+                 unrecognised attribute must be a loud failure, not silently \
+                 treated as ModuleGate::Always, or a module's actual \
+                 reachability could disagree with what the register expects \
+                 in one of the two harness configs.",
+            );
+        }
+        // Any other line (a doc comment continuation, blank-adjacent code,
+        // etc.) between two `pub mod` declarations resets any pending gate
+        // — defensive; not expected to trigger against the current file.
+        pending_gate = None;
+    }
+    out
+}
+
 /// Layer 1 (static): every spec/uat/*.md file with NO step-def module at
 /// all must be named in `SPECS_WITHOUT_STEP_DEFS`.
 ///
@@ -409,12 +482,19 @@ fn assert_every_spec_has_a_module_or_is_registered(spec_uat: &std::path::Path) {
     // `mod` declarations it is next to.
     let mod_src: &str = include_str!("uat_steps/mod.rs");
 
-    let mut stepped: std::collections::BTreeSet<String> = mod_src
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("pub mod "))
-        .filter_map(|l| l.strip_suffix(';'))
-        .filter(|m| !NON_STEP_MODULES.contains(m))
-        .map(|m| {
+    // A FieldSimOnly module is only actually stepped when THIS binary was
+    // built with the field-sim feature — under default features its
+    // `pub mod` line is textually present (cfg doesn't strip source text,
+    // only compilation) but the module itself does not compile, so
+    // treating it as "stepped" unconditionally would be wrong in exactly
+    // the config where it is not (uat-unskip-band-d step 3).
+    let mut stepped: std::collections::BTreeSet<String> = classify_step_def_modules(mod_src)
+        .into_iter()
+        .filter(|(_, gate)| match gate {
+            ModuleGate::Always => true,
+            ModuleGate::FieldSimOnly => HARNESS_CONFIG == HarnessConfig::FieldSim,
+        })
+        .map(|(m, _)| {
             STEP_DEF_MODULE_RENAMES
                 .iter()
                 .find(|(module, _)| *module == m)
@@ -458,6 +538,47 @@ fn assert_every_spec_has_a_module_or_is_registered(spec_uat: &std::path::Path) {
          reason in the issue that defers it.",
         newly_unstepped.len(),
         newly_unstepped,
+    );
+}
+
+/// Layer 1b (static, uat-unskip-band-d step 3): the honesty rule behind
+/// [`per_config`] enforced mechanically — a register row may only carry
+/// TWO DIFFERENT counts if that spec actually owns a `FieldSimOnly`
+/// step-def module. Without this guard, nothing would stop a row from
+/// claiming asymmetry (e.g. `per_config(spec, 3, 0)`) for a spec whose
+/// module is `Always` (or has no module at all) — a claim layer 2 could
+/// never falsify from a SINGLE run (it only ever observes ONE column per
+/// process), so a false asymmetric row could persist for an entire config
+/// before the OTHER `cargo uat*` alias ever disagreed with it.
+fn assert_asymmetric_rows_have_a_gated_module(mod_src: &str) {
+    let field_sim_only: std::collections::BTreeSet<&str> = classify_step_def_modules(mod_src)
+        .into_iter()
+        .filter(|(_, gate)| *gate == ModuleGate::FieldSimOnly)
+        .map(|(m, _)| {
+            STEP_DEF_MODULE_RENAMES
+                .iter()
+                .find(|(module, _)| *module == m)
+                .map_or(m, |(_, spec)| spec)
+        })
+        .collect();
+
+    let ungrounded_asymmetric: Vec<&str> = SPECS_WITHOUT_STEP_DEFS
+        .iter()
+        .filter(|d| d.default_features != d.field_sim)
+        .map(|d| d.spec)
+        .filter(|spec| !field_sim_only.contains(spec))
+        .collect();
+    assert!(
+        ungrounded_asymmetric.is_empty(),
+        "{} SPECS_WITHOUT_STEP_DEFS row(s) declare DIFFERENT default_features \
+         / field_sim counts but own NO field-sim-gated (`#[cfg(feature = \
+         \"field-sim\")]`) step-def module in uat_steps/mod.rs: \
+         {ungrounded_asymmetric:?}\n\
+         A row may only be asymmetric (per_config) when a gated module backs \
+         the claim — either gate the spec's module, or make the row \
+         symmetric (both_configs) if the two configs are genuinely equally \
+         unreachable/reachable today.",
+        ungrounded_asymmetric.len(),
     );
 }
 
@@ -561,73 +682,195 @@ fn assert_runtime_attribution_matches_register(
     );
 }
 
-/// Layer 3 (MUST-DECIDE-2): the set of `pub mod X;` declarations in
-/// `uat_steps/mod.rs` (minus `NON_STEP_MODULES`) must exactly equal the
-/// identifier set inside the `use uat_steps::{...}` block above `main`.
+/// Finds EVERY `use uat_steps::{...};` block in `uat_gherkin.rs` (not just
+/// the first — uat-unskip-band-d step 3) by repeated anchor search, and
+/// classifies each block's gate from the attribute line(s) immediately
+/// preceding it. A gated step-def module's identifier CANNOT live in the
+/// same `use` block as an ungated one: rustc rejects `#[cfg]` on an
+/// identifier inside a braced `use` group (proven in this issue's step-1
+/// scratch probe — `error: expected identifier, found` `#`), so every
+/// `FieldSimOnly` module requires its OWN, separately-`#[cfg]`-gated
+/// `use uat_steps::{...}` block.
+///
+/// Recognises exactly two attribute lines immediately above an anchor:
+/// `#[cfg(feature = "field-sim")]` (marks the block `FieldSimOnly`) and
+/// `#[allow(unused_imports, clippy::single_component_path_imports)]`
+/// (neutral — decorates every block for the `-Aunused_imports`-environment
+/// reason the file-level doc comment explains). Any OTHER attribute line
+/// directly above a block is a hard failure, same rationale as
+/// `classify_step_def_modules`: a silently-Always misclassification here
+/// would let a gated `use` block's identifiers merge into the wrong gate's
+/// expected set.
+fn find_use_uat_steps_blocks(this_src: &str) -> Vec<(std::collections::BTreeSet<&str>, ModuleGate)> {
+    const ANCHOR_OPEN: &str = "use uat_steps::{";
+    const RECOGNISED_ALLOW: &str =
+        "#[allow(unused_imports, clippy::single_component_path_imports)]";
+
+    let mut blocks = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(rel_start) = this_src[search_from..].find(ANCHOR_OPEN) {
+        let start = search_from + rel_start;
+        let after_anchor = start + ANCHOR_OPEN.len();
+        search_from = after_anchor;
+        // A REAL `use uat_steps::{` opener is a whole top-level line: the
+        // anchor is preceded by nothing but a newline (never mid-line, so
+        // this can't hit a doc-comment/prose mention or the `ANCHOR_OPEN`
+        // string literal itself, which all have other characters sharing
+        // the line) and immediately followed by a newline (the identifiers
+        // start on the NEXT line, matching this file's own formatting).
+        let starts_a_line = start == 0 || this_src.as_bytes()[start - 1] == b'\n';
+        let anchor_ends_the_line = this_src[after_anchor..].starts_with('\n');
+        if !starts_a_line || !anchor_ends_the_line {
+            continue;
+        }
+        let body_start = after_anchor + 1;
+        let rel_end = this_src[body_start..].find("};").unwrap_or_else(|| {
+            panic!("`use uat_steps::{{...}}` block starting at byte {start} must close with `}};`")
+        });
+        let inner = &this_src[body_start..body_start + rel_end];
+        let used: std::collections::BTreeSet<&str> = inner
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(
+            !used.is_empty(),
+            "parsed zero identifiers from a `use uat_steps::{{...}}` block \
+             starting at byte {start} — the include_str! anchor \
+             (`use uat_steps::{{` ... `}};`) likely drifted from this file's \
+             actual formatting; fix the parser before trusting this guard.",
+        );
+
+        let mut gate = ModuleGate::Always;
+        for line in this_src[..start].lines().rev() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if line == r#"#[cfg(feature = "field-sim")]"# {
+                gate = ModuleGate::FieldSimOnly;
+                continue;
+            }
+            if line == RECOGNISED_ALLOW {
+                continue;
+            }
+            if line.starts_with('#') {
+                panic!(
+                    "an unrecognised attribute sits directly above the \
+                     `use uat_steps::{{...}}` block starting at byte {start}: \
+                     {line:?}\n\
+                     Only `#[cfg(feature = \"field-sim\")]` and \
+                     `{RECOGNISED_ALLOW}` are understood immediately above a \
+                     `use uat_steps::{{...}}` block.",
+                );
+            }
+            break;
+        }
+
+        blocks.push((used, gate));
+        search_from = body_start + rel_end + 2;
+    }
+    assert!(
+        !blocks.is_empty(),
+        "found zero `use uat_steps::{{...}}` blocks in uat_gherkin.rs — the \
+         include_str! anchor (`use uat_steps::{{` ... `}};`) likely drifted \
+         from this file's actual formatting; fix the parser before trusting \
+         this guard.",
+    );
+    blocks
+}
+
+/// Layer 3 (MUST-DECIDE-2, gate-aware since uat-unskip-band-d step 3): the
+/// `pub mod X;` declarations in `uat_steps/mod.rs` (minus
+/// `NON_STEP_MODULES`) must exactly equal the identifiers used across ALL
+/// `use uat_steps::{...}` blocks in `uat_gherkin.rs` — checked PER GATE
+/// (`Always` declared == `Always` used; `FieldSimOnly` declared ==
+/// `FieldSimOnly` used) plus disjointness (no identifier/module is claimed
+/// by both gates on either side). Checking per gate, not just as one
+/// merged set, is what makes the dropped-gated-`use`-block fault
+/// injection (this issue's step 8, F4) actually red: a merged-set
+/// comparison would let a `FieldSimOnly` module satisfy the equality via
+/// the `Always` block's surplus, silently widening layer 3 back to
+/// invisible exactly the way it was before the per-spec runtime
+/// attribution rework.
 ///
 /// `-Aunused_imports` is set globally in `.cargo/config.toml` and this
 /// file also carries a local `#[allow(unused_imports)]`, so a module
-/// declared in `mod.rs` but missing from the `use` list cannot warn — its
-/// `#[given]/#[when]/#[then]` registrations are not PROVEN to link. With
-/// `[profile.dev] opt-level = 0` today nothing is dead-code-stripped, so it
-/// silently doesn't matter — until a release-profile or LTO run makes it
-/// matter, silently.
+/// declared in `mod.rs` but missing from every `use` list cannot warn —
+/// its `#[given]/#[when]/#[then]` registrations are not PROVEN to link.
+/// With `[profile.dev] opt-level = 0` today nothing is dead-code-stripped,
+/// so it silently doesn't matter — until a release-profile or LTO run
+/// makes it matter, silently.
 ///
-/// Parses both sides via `include_str!` (same technique as layer 1) so this
-/// check cannot disagree with the source it guards. Anchors on the literal
-/// `use uat_steps::{` ... `};` span, strips whitespace, splits on commas.
+/// Parses both sides via `include_str!` (same technique as layer 1) so
+/// this check cannot disagree with the source it guards.
 fn assert_mod_rs_and_use_list_agree() {
     let mod_src: &str = include_str!("uat_steps/mod.rs");
     let this_src: &str = include_str!("uat_gherkin.rs");
 
-    let declared: std::collections::BTreeSet<&str> = mod_src
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("pub mod "))
-        .filter_map(|l| l.strip_suffix(';'))
-        .filter(|m| !NON_STEP_MODULES.contains(m))
+    let classified = classify_step_def_modules(mod_src);
+    let declared_always: std::collections::BTreeSet<&str> = classified
+        .iter()
+        .filter(|(_, g)| *g == ModuleGate::Always)
+        .map(|(m, _)| *m)
+        .collect();
+    let declared_field_sim: std::collections::BTreeSet<&str> = classified
+        .iter()
+        .filter(|(_, g)| *g == ModuleGate::FieldSimOnly)
+        .map(|(m, _)| *m)
         .collect();
 
-    const ANCHOR_OPEN: &str = "use uat_steps::{";
-    let start = this_src
-        .find(ANCHOR_OPEN)
-        .expect("uat_gherkin.rs must have a `use uat_steps::{...};` block");
-    let block = &this_src[start + ANCHOR_OPEN.len()..];
-    let end = block
-        .find("};")
-        .expect("`use uat_steps::{...}` block must close with `};`");
-    let inner = &block[..end];
-    let used: std::collections::BTreeSet<&str> = inner
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
+    let mut used_always: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut used_field_sim: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for (ids, gate) in find_use_uat_steps_blocks(this_src) {
+        match gate {
+            ModuleGate::Always => used_always.extend(ids),
+            ModuleGate::FieldSimOnly => used_field_sim.extend(ids),
+        }
+    }
 
+    let cross_declared: Vec<&&str> = declared_always.intersection(&declared_field_sim).collect();
     assert!(
-        !used.is_empty(),
-        "parsed zero identifiers from the `use uat_steps::{{...}}` block — \
-         the include_str! anchor (`use uat_steps::{{` ... `}};`) likely \
-         drifted from this file's actual formatting; fix the parser before \
-         trusting this guard.",
+        cross_declared.is_empty(),
+        "{} module(s) are classified BOTH Always and FieldSimOnly in \
+         uat_steps/mod.rs — the shared classifier should never produce this; \
+         module(s): {cross_declared:?}",
+        cross_declared.len(),
+    );
+    let cross_used: Vec<&&str> = used_always.intersection(&used_field_sim).collect();
+    assert!(
+        cross_used.is_empty(),
+        "{} identifier(s) appear in BOTH the ungated and the field-sim-gated \
+         `use uat_steps::{{...}}` blocks in uat_gherkin.rs: {cross_used:?}\n\
+         Each module belongs in exactly one block, matching its `pub mod` \
+         gate in uat_steps/mod.rs.",
+        cross_used.len(),
     );
 
-    let missing_from_use: Vec<&&str> = declared.difference(&used).collect();
-    let missing_from_mod: Vec<&&str> = used.difference(&declared).collect();
-    assert!(
-        missing_from_use.is_empty(),
-        "{} module(s) declared `pub mod` in uat_steps/mod.rs but MISSING \
-         from the `use uat_steps::{{...}}` list in uat_gherkin.rs: \
-         {missing_from_use:?}\n\
-         Their #[given]/#[when]/#[then] registrations are not proven to \
-         link — add them to the `use` list.",
-        missing_from_use.len(),
-    );
-    assert!(
-        missing_from_mod.is_empty(),
-        "{} identifier(s) in uat_gherkin.rs's `use uat_steps::{{...}}` list \
-         have NO matching `pub mod` in uat_steps/mod.rs: {missing_from_mod:?}\n\
-         Remove the stale entry or add the module declaration.",
-        missing_from_mod.len(),
-    );
+    for (label, declared, used) in [
+        ("ungated (Always)", &declared_always, &used_always),
+        ("field-sim-gated", &declared_field_sim, &used_field_sim),
+    ] {
+        let missing_from_use: Vec<&&str> = declared.difference(used).collect();
+        let missing_from_mod: Vec<&&str> = used.difference(declared).collect();
+        assert!(
+            missing_from_use.is_empty(),
+            "{} {label} module(s) declared `pub mod` in uat_steps/mod.rs but \
+             MISSING from the matching-gate `use uat_steps::{{...}}` block in \
+             uat_gherkin.rs: {missing_from_use:?}\n\
+             Their #[given]/#[when]/#[then] registrations are not proven to \
+             link — add them to the {label} `use` list.",
+            missing_from_use.len(),
+        );
+        assert!(
+            missing_from_mod.is_empty(),
+            "{} identifier(s) in uat_gherkin.rs's {label} `use \
+             uat_steps::{{...}}` list have NO matching `pub mod` (of that \
+             gate) in uat_steps/mod.rs: {missing_from_mod:?}\n\
+             Remove the stale entry or add/fix the module declaration.",
+            missing_from_mod.len(),
+        );
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -742,7 +985,8 @@ async fn main() {
         );
     }
     println!(
-        "[Consolidated total] {} features | {} passed / {} skipped / {} failed steps | {} parsing errors",
+        "[Consolidated total] ({}) {} features | {} passed / {} skipped / {} failed steps | {} parsing errors",
+        harness_config_label(HARNESS_CONFIG),
         feature_files.len(),
         total_passed,
         total_skipped,
@@ -774,6 +1018,10 @@ async fn main() {
 
     // Layer 1 (static): every spec either has a module or is registered.
     assert_every_spec_has_a_module_or_is_registered(&spec_uat);
+
+    // Layer 1b (static, uat-unskip-band-d step 3): every asymmetric row
+    // (default_features != field_sim) owns a field-sim-gated module.
+    assert_asymmetric_rows_have_a_gated_module(include_str!("uat_steps/mod.rs"));
 
     // Layer 2 (runtime, MUST-DECIDE-1): per-spec skipped-scenario
     // attribution matches the register in both directions and at the exact
