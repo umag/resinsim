@@ -95,7 +95,7 @@ For everything else: linear stack, advance main on completion.
 - `cargo build --workspace` — fast sanity-check
 - `cargo nextest run --workspace` — full test suite (pinned via memory: always `cargo nextest run`, never `cargo test`)
 - formatting — do NOT run `cargo fmt`; see ### Formatting below
-- `cargo clippy -p resinsim-core -p resinsim-inspect --all-targets -- -D warnings` — clippy clean on core + inspect (resinsim-viz has pre-existing warnings unrelated to issue 15; not blocking)
+- `cargo clippy -p resinsim-core -p resinsim-inspect -p resinsim-viz --all-targets -- -D warnings` — clippy clean on all three crates, in both feature configs; resinsim-viz joined this gate under issue resinsim-viz-clippy-baseline and must not drift back out
 
 ### Formatting
 
