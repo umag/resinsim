@@ -30,15 +30,22 @@ import { SimulationEnvelopeV2 } from "../v2.ts";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const out = join(__dirname, "..", "v2.schema.json");
 
-// The published contract for the eleven fields resinsim's Rust producer
-// serialises but v2.ts deliberately does not declare (six on LayerResult,
-// seven on PrinterProfile — see crates/resinsim-core/tests/
-// sim_json_schema_parity.rs and the sim_golden fixtures). zod's default
-// `io: "output"` emits `additionalProperties: false`, which would reject
-// every real Rust-produced envelope; `io: "input"` merely omits the
-// keyword. The `override` below is what actually restores the literal
-// `true` this contract requires, independent of which zod 4.x minor is
-// installed.
+// The published contract for the seven fields resinsim's Rust producer
+// serialises but v2.ts deliberately does not declare — all seven on
+// PrinterProfile (voxel_cure_resolution_mm, crosstalk_sigma_xy_um,
+// crosstalk_sigma_z_um, convective_wall_h_w_m2k, vat_wall_thickness_mm,
+// vat_wall_k_w_mk, vacuum_pressure_kpa — see crates/resinsim-core/tests/
+// sim_json_schema_parity.rs and the sim_golden fixtures). 2026-08
+// (schemas-v2-missing-optional-fields) declared the six previously-
+// undeclared LayerResult fields plus PrintSimulation.layer_height_provenance;
+// this comment's prior count ("eleven — six on LayerResult, seven on
+// PrinterProfile") was already arithmetically wrong (6+7=13, not 11) even
+// before that fix, so it is restated here rather than silently carried
+// forward. zod's default `io: "output"` emits `additionalProperties: false`,
+// which would reject every real Rust-produced envelope; `io: "input"`
+// merely omits the keyword. The `override` below is what actually restores
+// the literal `true` this contract requires, independent of which zod 4.x
+// minor is installed.
 const jsonSchema = z.toJSONSchema(SimulationEnvelopeV2, {
   target: "draft-2020-12",
   // "input" (not the default "output") does two things: (1) it stops

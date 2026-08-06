@@ -222,6 +222,16 @@ invocations.
   top level with `serde(default)` (2026-08, KB-153): **additive**. Old
   envelopes parse as `None`; new envelopes carry `true`/`false`; absent
   is NOT `false`.
+- ✅ Declaring `LayerResult.peel_shape_factor` plus five Tier-2 voxel-cure
+  `Option<f32>` fields (`strain_magnitude_max`, `stress_von_mises_max_mpa`,
+  `strain_gradient_max_frac`, `voxel_yield_fraction`,
+  `crack_front_fraction`), and `PrintSimulation.layer_height_provenance`
+  (`Option<LayerHeightProvenance>`) in `v2.ts` (2026-08,
+  schemas-v2-missing-optional-fields): **additive**. All were already
+  `#[serde(default, skip_serializing_if = "Option::is_none")]` on the Rust
+  side and already produced by the runner; only the published zod/JSON
+  Schema contract was missing them. Old envelopes parse unchanged; new
+  envelopes carry the fields when the run populated them.
 
 ## Consequences
 
