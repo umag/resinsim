@@ -44,33 +44,43 @@
 #[path = "../../resinsim-core/tests/uat_steps/extract.rs"]
 mod extract;
 
-// Per-spec step-def modules land under `tests/uat_viz_steps/` starting
-// with the pilot (viz-uat-cucumber-harness steps 4-5, `viz-screenshot-flag`
-// only); every other viz spec stays fully skipped, registered below. This
-// commit intentionally ships ZERO step definitions — `mod uat_viz_steps;`
-// and the `use` that links its `#[given]/#[when]/#[then]` registrations
-// are added in the same change as the first step-def module, not before.
+// Per-spec step-def modules, landing incrementally under
+// `tests/uat_viz_steps/`. Step 4 (viz-uat-cucumber-harness) pilots
+// `viz-screenshot-flag`'s tier-A scenarios (UAT-7a/7b/7c; UAT-7d is
+// declared debt, see that module's doc comment); step 5 adds tier B
+// (UAT-1/3/4/9) in the SAME module. Every other viz spec stays fully
+// skipped, registered below.
+mod uat_viz_steps;
 
 use cucumber::{StatsWriter as _, World};
 
-/// World for viz UAT scenarios. Carries a scenario-scoped
-/// [`tempfile::TempDir`] so parallel scenario runs cannot collide on file
-/// paths — created lazily via [`VizWorld::tempdir`] rather than in
-/// `Default::default()`, since `TempDir` construction is fallible and
-/// cucumber's `World` derive requires `Default`. Gains a `last:
-/// Option<CliOutcome>` field in the same change that adds the first step
-/// module (`uat_viz_steps::viz_cli::CliOutcome`).
+use uat_viz_steps::viz_cli::CliOutcome;
+
+// Force the step-def module to link so its `#[given]/#[when]/#[then]`
+// registrations reach cucumber-rs's global inventory (same reasoning as
+// core's `use uat_steps::{...}` block). Only one module today, so no
+// `assert_mod_rs_and_use_list_agree`-style cross-check is needed yet —
+// see `uat_viz_steps/mod.rs`'s doc comment for when to add it.
+#[allow(unused_imports)]
+use uat_viz_steps::viz_screenshot_flag;
+
+/// World for viz UAT scenarios. Carries the outcome of the last
+/// `resinsim-viz` CLI invocation, a path staged by a "When" step for a
+/// later setup step to act on before actually launching (see
+/// `viz_screenshot_flag`'s UAT-7a step defs for why), and a
+/// scenario-scoped [`tempfile::TempDir`] so parallel scenario runs
+/// cannot collide on file paths — created lazily via [`VizWorld::tempdir`]
+/// rather than in `Default::default()`, since `TempDir` construction is
+/// fallible and cucumber's `World` derive requires `Default`.
 #[derive(Debug, Default, World)]
 pub struct VizWorld {
+    pub last: Option<CliOutcome>,
+    pub pending_screenshot_path: Option<std::path::PathBuf>,
     tempdir: Option<tempfile::TempDir>,
 }
 
 impl VizWorld {
     /// Return this scenario's tempdir, creating it on first use.
-    // #[allow(dead_code)]: unused until the first step-def module (step 4)
-    // calls it. Left present (not deleted) so that step's diff is
-    // step-defs-only, not step-defs-plus-World-plumbing.
-    #[allow(dead_code)]
     pub fn tempdir(&mut self) -> &std::path::Path {
         self.tempdir
             .get_or_insert_with(|| tempfile::tempdir().expect("create scenario tempdir"))
@@ -85,13 +95,28 @@ impl VizWorld {
 /// prefix-filtered subset. See the ADR's ddd section for why that makes
 /// the `viz-` prefix load-bearing rather than cosmetic.
 ///
-/// Starts (this commit) at all twelve viz specs, FULL scenario count,
-/// zero step-def modules — this harness lands green with zero steps
-/// written, matching core's original rollout shape. `viz-screenshot-flag`
-/// is 12 because UAT-7 is ONE gherkin fence holding FOUR `Scenario:`
-/// blocks (7a/7b/7c/7d) — one `ExtractedScenario`, four runtime
-/// scenarios; the other eight `UAT-N` headings in that spec are one
-/// scenario each (8 + 4 = 12).
+/// `viz-screenshot-flag` started (step 2) at 12 — UAT-7 is ONE gherkin
+/// fence holding FOUR `Scenario:` blocks (7a/7b/7c/7d), one
+/// `ExtractedScenario` but four runtime scenarios; the other eight
+/// `UAT-N` headings in that spec are one scenario each (8 + 4 = 12).
+///
+/// Step 4 pilots UAT-7a/7b/7c (tier A, renderer-free `--screenshot` path
+/// validation) — 12 - 3 = 9. UAT-7d ("empty path → exit 5") stays
+/// declared debt: empirically probed at step 1 (three independent ways
+/// — direct subprocess argv, the unambiguous `--screenshot=` form, and
+/// an isolated clap 4.6.1 repro) to be UNREACHABLE via CLI. clap's own
+/// parser rejects an empty-string value for this `Option<PathBuf>` arg
+/// (exit 2, "a value is required... but none was supplied") BEFORE
+/// `main()`'s own `validate_screenshot_path` / `PathError::Empty`
+/// (screenshot.rs) ever runs. Covered instead by the pre-existing
+/// in-process unit test `validate_rejects_empty_path` (screenshot.rs) —
+/// see `uat_viz_steps::viz_screenshot_flag`'s module doc for the full
+/// evidence trail. This is a NEW finding, not anticipated by the
+/// campaign or the approved plan; it is NOT a design choice — it is what
+/// the probe evidence supports, applying the same declared-debt
+/// mechanism the plan itself prescribes for an unfaithful scenario
+/// (see UAT-3's resolution below) to a scenario the plan did not
+/// anticipate would be unreachable.
 const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("viz-allow-mismatch-soft-fallback", 1),
     ("viz-arrow-key-step-no-mesh-reupload", 1),
@@ -100,7 +125,7 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("viz-load-ctb-with-sim-renders-heatmap", 1),
     ("viz-load-sim-missing-sidecar", 3),
     ("viz-load-sim-without-ctb-bad-pairing", 1),
-    ("viz-screenshot-flag", 12),
+    ("viz-screenshot-flag", 9),
     ("viz-timeline-click-seeks-current-layer", 3),
     ("viz-timeline-drag-pan-does-not-seek", 2),
     ("viz-timeline-safety-log-toggle-handles-infinite-sf", 2),
