@@ -277,9 +277,9 @@ pub struct LoadedSimulation {
     /// - None      = not yet attempted (initial state)
     /// - Some(Ok)  = attempted and succeeded; `simulation` is populated
     /// - Some(Err) = attempted and failed (parse / IO error). `simulation`
-    ///               is None. The string holds the underlying error so the
-    ///               --screenshot capture system can use it as a "settled"
-    ///               signal for the loads_settled predicate (issue 12).
+    ///   is None. The string holds the underlying error so the
+    ///   --screenshot capture system can use it as a "settled"
+    ///   signal for the loads_settled predicate (issue 12).
     pub last_attempt: Option<Result<(), String>>,
     /// Source path of the most recent successful sim load. The v2
     /// summary strip derives its run-tag from this path's filename
@@ -661,6 +661,7 @@ fn despawn_geometry(
 ///   `--smoke-exit` is set. The sim is preserved (a future drop with the
 ///   correct layer count will recover). `--allow-mismatch` overrides
 ///   this and falls back to soft-warn + uncoloured mesh.
+///
 /// Returns `Some(layers)` when the CTB was parsed successfully, so
 /// the caller can stash the per-layer masks in `LoadedSliceMasks`
 /// for slice E's `LayerMask2dPane`. `None` on load failure (the
