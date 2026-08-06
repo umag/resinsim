@@ -184,11 +184,11 @@ impl PaneGrid {
     /// return None. Caller is responsible for the actual disk write
     /// (so test callers can stub it).
     pub fn take_save_if_due(&mut self, dwell: std::time::Duration) -> Option<PaneGridLayout> {
-        if let Some(t) = self.dirty_at {
-            if t.elapsed() >= dwell {
-                self.dirty_at = None;
-                return Some(self.to_layout());
-            }
+        if let Some(t) = self.dirty_at
+            && t.elapsed() >= dwell
+        {
+            self.dirty_at = None;
+            return Some(self.to_layout());
         }
         None
     }
@@ -348,19 +348,18 @@ impl PaneGrid {
                 total_h,
                 self.column_split,
                 &self.row_fracs,
-            ) {
-                if (target_row, target_col) != (source.source_row, source.source_col) {
-                    let target_min =
-                        grid_rect.min + egui::vec2(col_starts[target_col], row_starts[target_row]);
-                    let target_size = egui::vec2(col_widths[target_col], row_heights[target_row]);
-                    let target_rect = egui::Rect::from_min_size(target_min, target_size);
-                    ui.painter().rect_stroke(
-                        target_rect.shrink(1.0),
-                        egui::CornerRadius::ZERO,
-                        egui::Stroke::new(2.0_f32, theme::INK_MUTED),
-                        egui::StrokeKind::Inside,
-                    );
-                }
+            ) && (target_row, target_col) != (source.source_row, source.source_col)
+            {
+                let target_min =
+                    grid_rect.min + egui::vec2(col_starts[target_col], row_starts[target_row]);
+                let target_size = egui::vec2(col_widths[target_col], row_heights[target_row]);
+                let target_rect = egui::Rect::from_min_size(target_min, target_size);
+                ui.painter().rect_stroke(
+                    target_rect.shrink(1.0),
+                    egui::CornerRadius::ZERO,
+                    egui::Stroke::new(2.0_f32, theme::INK_MUTED),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
 
@@ -423,29 +422,27 @@ impl PaneGrid {
         // cell, the payload is dropped (released without consumption)
         // and the next frame sees no drag.
         let released = ui.ctx().input(|i| i.pointer.any_released());
-        if released {
-            if let Some(payload) = egui::DragAndDrop::take_payload::<DragPayload>(ui.ctx()) {
-                if let Some(pos) = pointer_pos {
-                    let local_x = pos.x - grid_rect.min.x;
-                    let local_y = pos.y - grid_rect.min.y;
-                    if let Some((target_row, target_col)) = cell_at_pos(
-                        local_x,
-                        local_y,
-                        total_w,
-                        total_h,
-                        self.column_split,
-                        &self.row_fracs,
-                    ) {
-                        if (target_row, target_col) != (payload.source_row, payload.source_col) {
-                            swap_cells(
-                                &mut self.cells,
-                                (payload.source_row, payload.source_col),
-                                (target_row, target_col),
-                            );
-                            self.dirty_at = Some(Instant::now());
-                        }
-                    }
-                }
+        if released
+            && let Some(payload) = egui::DragAndDrop::take_payload::<DragPayload>(ui.ctx())
+            && let Some(pos) = pointer_pos
+        {
+            let local_x = pos.x - grid_rect.min.x;
+            let local_y = pos.y - grid_rect.min.y;
+            if let Some((target_row, target_col)) = cell_at_pos(
+                local_x,
+                local_y,
+                total_w,
+                total_h,
+                self.column_split,
+                &self.row_fracs,
+            ) && (target_row, target_col) != (payload.source_row, payload.source_col)
+            {
+                swap_cells(
+                    &mut self.cells,
+                    (payload.source_row, payload.source_col),
+                    (target_row, target_col),
+                );
+                self.dirty_at = Some(Instant::now());
             }
         }
 
@@ -473,10 +470,10 @@ fn resolve_state_for(
     if matches!(pane, Pane::EmptySlot(_)) {
         return PaneState::Loaded;
     }
-    if let (PaneState::Loaded, Some(s)) = (base_state, sim) {
-        if let Some(field) = detect_field_missing(s, pane.required_fields()) {
-            return PaneState::FieldMissing(field);
-        }
+    if let (PaneState::Loaded, Some(s)) = (base_state, sim)
+        && let Some(field) = detect_field_missing(s, pane.required_fields())
+    {
+        return PaneState::FieldMissing(field);
     }
     base_state.clone()
 }
