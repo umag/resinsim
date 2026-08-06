@@ -112,19 +112,19 @@ impl PaneGrid {
         Self {
             cells: [
                 [
-                    Pane::Forces(ForcesPane::default()),
-                    Pane::Safety(SafetyPane::default()),
+                    Pane::Forces(ForcesPane),
+                    Pane::Safety(SafetyPane),
                 ],
                 [
-                    Pane::CureDepth(CureDepthPane::default()),
-                    Pane::VatTemp(VatTempPane::default()),
+                    Pane::CureDepth(CureDepthPane),
+                    Pane::VatTemp(VatTempPane),
                 ],
                 [
-                    Pane::AreaDelta(AreaDeltaPane::default()),
-                    Pane::Viscosity(ViscosityPane::default()),
+                    Pane::AreaDelta(AreaDeltaPane),
+                    Pane::Viscosity(ViscosityPane),
                 ],
                 [
-                    Pane::ZDeflection(ZDeflectionPane::default()),
+                    Pane::ZDeflection(ZDeflectionPane),
                     Pane::EmptySlot(EmptySlotPane {
                         slot: PaneId::EmptySlot1,
                     }),

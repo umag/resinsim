@@ -81,13 +81,13 @@ impl Pane {
     /// heavier reload story.
     pub fn from_id(id: PaneId) -> Self {
         match id {
-            PaneId::Forces => Pane::Forces(ForcesPane::default()),
-            PaneId::Safety => Pane::Safety(SafetyPane::default()),
-            PaneId::CureDepth => Pane::CureDepth(CureDepthPane::default()),
-            PaneId::VatTemp => Pane::VatTemp(VatTempPane::default()),
-            PaneId::AreaDelta => Pane::AreaDelta(AreaDeltaPane::default()),
-            PaneId::Viscosity => Pane::Viscosity(ViscosityPane::default()),
-            PaneId::ZDeflection => Pane::ZDeflection(ZDeflectionPane::default()),
+            PaneId::Forces => Pane::Forces(ForcesPane),
+            PaneId::Safety => Pane::Safety(SafetyPane),
+            PaneId::CureDepth => Pane::CureDepth(CureDepthPane),
+            PaneId::VatTemp => Pane::VatTemp(VatTempPane),
+            PaneId::AreaDelta => Pane::AreaDelta(AreaDeltaPane),
+            PaneId::Viscosity => Pane::Viscosity(ViscosityPane),
+            PaneId::ZDeflection => Pane::ZDeflection(ZDeflectionPane),
             PaneId::LayerMask2d => Pane::LayerMask2d(LayerMask2dPane::default()),
             PaneId::EmptySlot1 => Pane::EmptySlot(EmptySlotPane {
                 slot: PaneId::EmptySlot1,
