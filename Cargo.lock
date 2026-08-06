@@ -5377,12 +5377,15 @@ dependencies = [
  "bevy_egui",
  "bevy_panorbit_camera",
  "clap",
+ "cucumber",
  "directories",
  "egui_plot",
+ "pulldown-cmark",
  "resinsim-core",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

@@ -7,6 +7,14 @@ edition = "2024"
 name = "resinsim-viz"
 path = "src/main.rs"
 
+# Second cucumber harness (ADR-0024): a `harness = false` binary, same
+# shape as resinsim-core's `uat_gherkin`, so `.config/nextest.toml`'s
+# `not binary(/^uat_/)` excludes it identically. See `cargo uat-viz` in
+# .cargo/config.toml and docs/adr/0024-second-uat-harness-in-resinsim-viz.md.
+[[test]]
+name = "uat_viz_gherkin"
+harness = false
+
 [dependencies]
 resinsim-core = { path = "../resinsim-core" }
 bevy = { version = "0.18", default-features = true }
@@ -35,8 +43,17 @@ field-sim = ["resinsim-core/field-sim"]
 
 [dev-dependencies]
 # Tempdir TOML round-trips for issue 04's pairing-violation +
-# save/load-sim tests, and the Pass 5 v2 layout-persistence tests.
+# save/load-sim tests, and the Pass 5 v2 layout-persistence tests. Also
+# used by uat_viz_gherkin's VizWorld for scenario-scoped temp paths.
 tempfile = "3"
+# uat_viz_gherkin's cucumber harness (ADR-0024) — version-matched to
+# resinsim-core's tests/uat_gherkin.rs dev-deps.
+cucumber = "0.22.1"
+tokio = { version = "1", features = ["macros", "rt"] }
+# Only used via the cross-crate #[path] include of resinsim-core's
+# tests/uat_steps/extract.rs, which itself depends on pulldown-cmark and
+# nothing else. Version-matched to resinsim-core's Cargo.toml.
+pulldown-cmark = { version = "0.13.3", default-features = false }
 
 [lints]
 workspace = true

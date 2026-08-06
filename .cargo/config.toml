@@ -16,9 +16,21 @@ rustflags = ["-Z", "threads=8", "-Aunused_imports"]
 # field-sim`, so without this alias the field-sim UAT run is discoverable
 # only from agent-constraints/implementation-conventions.md too. Both
 # aliases must be run whenever spec/uat/*.md or tests/uat_steps/ changes.
+#
+# `uat-viz` is a SECOND, independent cucumber harness hosted inside
+# resinsim-viz (docs/adr/0024-second-uat-harness-in-resinsim-viz.md),
+# scoped to `spec/uat/viz-*.md` only. It exists as its own crate-hosted
+# binary (not a resinsim-core module) because `env!("CARGO_BIN_EXE_
+# resinsim-viz")` is only available inside resinsim-viz's own build
+# graph, and driving Bevy in-process from resinsim-core would invert
+# ADR-0001's layering. Run it whenever spec/uat/viz-*.md or
+# crates/resinsim-viz/tests/uat_viz_steps/ changes. It opens a real
+# window on a machine with a GPU (developer-machine gate; no CI in this
+# repo today) — expect visible flicker while it runs.
 [alias]
 uat = "test --test uat_gherkin -p resinsim-core"
 uat-field-sim = "test --test uat_gherkin -p resinsim-core --features field-sim"
+uat-viz = "test --test uat_viz_gherkin -p resinsim-viz"
 
 [profile.dev]
 opt-level = 0
