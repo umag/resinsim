@@ -53,6 +53,7 @@ pub mod cli_report_health_surfaces_ea_default_advisory;
 pub mod cli_requires_resin_for_recipe_fields;
 pub mod cli_sim_producer_writes_sim_json;
 pub mod cli_sim_rejects_unknown_schema_version;
+pub mod cli_sim_voxel_cure_emits_tier2_thermal_log;
 pub mod cli_temperature_flag_validation;
 pub mod ctb_layer_height_authority;
 pub mod cumulative_times_sec_accessor;

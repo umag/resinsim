@@ -130,6 +130,11 @@ impl PhotoinitiatorField {
         &self.data
     }
 
+    #[cfg(feature = "gpu")]
+    pub(crate) fn data_mut(&mut self) -> &mut Array3<f32> {
+        &mut self.data
+    }
+
     /// Reconstitute a `PhotoinitiatorField` from raw persistence inputs
     /// (ADR-0019 sidecar decoder). `initial_concentration` is captured
     /// at construction and validated via `new`-equivalent rules; the

@@ -92,6 +92,7 @@ use uat_steps::{
     cli_report_health_print_time, cli_report_health_surfaces_ea_default_advisory,
     cli_requires_resin_for_recipe_fields,
     cli_sim_producer_writes_sim_json, cli_sim_rejects_unknown_schema_version,
+    cli_sim_voxel_cure_emits_tier2_thermal_log,
     cli_temperature_flag_validation, ctb_layer_height_authority, cumulative_times_sec_accessor,
     cure_depth_nan_guard, interlayer_crack_knockdown_scales_with_perimeter, legacy_resin_toml_defaults,
     legacy_resin_toml_without_recipe, legacy_resin_toml_without_ref_lift_speed,

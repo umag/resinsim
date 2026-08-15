@@ -21,7 +21,7 @@ use crate::services::{
     BoundaryConditions, LayerTimingCalculator, ThermalCalculator, ThermalDiffusionSolver,
 };
 #[cfg(feature = "gpu")]
-use crate::services::{GpuContext, GpuThermalBuffers};
+use crate::services::{GpuContext, GpuCureBuffers, GpuThermalBuffers};
 #[cfg(feature = "field-sim")]
 use crate::values::ThermalTimeConstant;
 use crate::simulation::PrintSimulation;
@@ -150,6 +150,10 @@ struct VoxelState {
     /// `None` falls back to the CPU solver.
     #[cfg(feature = "gpu")]
     gpu_thermal: Option<(GpuContext, GpuThermalBuffers)>,
+    #[cfg(feature = "gpu")]
+    gpu_cure: Option<GpuCureBuffers>,
+    #[cfg(feature = "gpu")]
+    gpu_cure_pending: Vec<u32>,
 }
 
 /// Output of [`SimulationRunner::prepare_layer_inputs`]: everything the
@@ -818,6 +822,10 @@ impl SimulationRunner {
                         thermal_log_emitted: false,
                         #[cfg(feature = "gpu")]
                         gpu_thermal: None,
+                        #[cfg(feature = "gpu")]
+                        gpu_cure: None,
+                        #[cfg(feature = "gpu")]
+                        gpu_cure_pending: Vec::new(),
                     })
                 } else {
                     None
@@ -841,8 +849,46 @@ impl SimulationRunner {
                     (nx as u64) * (ny as u64) * (nz as u64)
                 }
             );
+            let cure_bufs = GpuCureBuffers::new(&ctx, &state.cure, &state.pi);
+            eprintln!(
+                "tier-2 cure GPU: adapter={}, voxels={}",
+                ctx.adapter_name(),
+                {
+                    let (nx, ny, nz) = state.cure.dimensions();
+                    (nx as u64) * (ny as u64) * (nz as u64)
+                }
+            );
+            state.gpu_cure = Some(cure_bufs);
             state.gpu_thermal = Some((ctx, bufs));
         }
+
+        // ADR-0025 Stage B: GPU cure batch size. Dispatches accumulate
+        // on the GPU; a single download covers the whole batch. Shrinkage,
+        // stress, and layer-result caches are deferred until the batch
+        // flushes. The batch size trades download-round-trip amortisation
+        // against deferred-work memory.
+        #[cfg(feature = "gpu")]
+        const GPU_CURE_BATCH_SIZE: usize = 32;
+        #[cfg(feature = "gpu")]
+        let gpu_cure_active = voxel_state
+            .as_ref()
+            .map(|s| s.gpu_cure.is_some())
+            .unwrap_or(false);
+
+        // Deferred per-layer work waiting for a GPU cure batch flush.
+        // Each entry carries the partially-populated LayerResult (Tier-1
+        // prediction done, voxel caches not yet filled) plus its failures
+        // and the snapshot of thermal volume_mean_c at cure-dispatch time.
+        #[cfg(feature = "gpu")]
+        struct DeferredLayer {
+            index: u32,
+            layer_height_um: f32,
+            mean_t_c: f32,
+            result: crate::entities::LayerResult,
+            failures: Vec<crate::entities::FailureEvent>,
+        }
+        #[cfg(feature = "gpu")]
+        let mut deferred_layers: Vec<DeferredLayer> = Vec::new();
 
         for (i, &area) in areas.iter().enumerate() {
             let (exposure_override, lift_speed_override) = per_layer_overrides
@@ -857,8 +903,6 @@ impl SimulationRunner {
                 perimeter_mm: perimeter_map.get(&(i as u32)).copied(),
                 is_raft: matches!(phases.get(i), Some(LayerPhase::Raft)),
             };
-            // Per-layer CTB-authoritative slab thickness — supports
-            // adaptive (variable-Z) slicing transparently.
             let layer_height_um_i = layer_heights_um[i];
             #[allow(unused_mut)]
             let (mut result, mut failures) = FailurePredictor::predict_layer(
@@ -875,11 +919,6 @@ impl SimulationRunner {
                 &thermal,
             );
 
-            // ADR-0017 / t2f1: voxel cure pass for this layer.
-            // ADR-0020 / t2f4: thermal diffusion pass follows cure
-            //   (cure first so its Δdose is available when the deferred
-            //   exothermic Q source term lands per ADR-0020 §Decision viii).
-            // ADR-0018 / t2f3: strain + stress passes follow thermal.
             #[cfg(feature = "field-sim")]
             if let Some(state) = voxel_state.as_mut() {
                 Self::apply_voxel_cure_for_layer(
@@ -896,9 +935,46 @@ impl SimulationRunner {
 
                 Self::apply_voxel_thermal_for_layer(state, i as u32, recipe, printer)?;
 
-                // t2f3 — per-voxel shrinkage strain from the cure field
-                // we just populated. Locks each voxel exactly once for
-                // the layer (cured-layer-locks-strain invariant).
+                // ADR-0025 Stage B: when GPU cure is active, defer
+                // shrinkage/stress/layer-caches until the batch flushes.
+                // Snapshot mean_t_c now since thermal evolves between layers.
+                #[cfg(feature = "gpu")]
+                if gpu_cure_active {
+                    let mean_t_c = state.thermal.volume_mean_c();
+                    deferred_layers.push(DeferredLayer {
+                        index: i as u32,
+                        layer_height_um: layer_height_um_i,
+                        mean_t_c,
+                        result,
+                        failures,
+                    });
+
+                    let is_batch_full = deferred_layers.len() >= GPU_CURE_BATCH_SIZE;
+                    let is_last_layer = i == areas.len() - 1;
+                    if is_batch_full || is_last_layer {
+                        Self::flush_gpu_cure_batch(state)?;
+                        let batch = std::mem::take(&mut deferred_layers);
+                        for mut def in batch {
+                            Self::finalize_voxel_layer(
+                                state,
+                                def.index,
+                                def.layer_height_um,
+                                def.mean_t_c,
+                                &mut def.result,
+                                &mut def.failures,
+                                resin,
+                                &thermal,
+                                recipe,
+                                printer,
+                            )?;
+                            sim.add_layer(def.result, def.failures)
+                                .map_err(|e| format!("simulation: {e}"))?;
+                        }
+                    }
+                    prev_area = area;
+                    continue;
+                }
+
                 Self::apply_voxel_shrinkage_for_layer(
                     state,
                     i as u32,
@@ -907,19 +983,8 @@ impl SimulationRunner {
                     recipe,
                     printer,
                 )?;
-
-                // t2f3 — per-voxel linear-elastic stress from the strain
-                // we just locked.
                 Self::accumulate_layer_stress(state, i as u32)?;
 
-                // t2f3 — populate the LayerResult per-layer aggregate
-                // caches BEFORE the failure detector runs (the detector
-                // reads from the live fields but consumers downstream
-                // of sim.json need the cached scalars since the heavy
-                // strain/stress fields are #[serde(skip)] per the
-                // t2f3.5 follow-up). The Options are populated even
-                // when zero — the presence of Some(_) is the signal
-                // that the run was field-sim-enabled.
                 result.strain_magnitude_max = state.strain.magnitude_layer_max(i as u32).ok();
                 result.stress_von_mises_max_mpa = state.stress.von_mises_layer_max(i as u32).ok();
                 result.strain_gradient_max_frac = state.strain.gradient_layer_max(i as u32).ok();
@@ -928,11 +993,6 @@ impl SimulationRunner {
                     .yield_fraction(i as u32, resin.tensile_strength_mpa())
                     .ok();
 
-                // t2f3 — strain/stress-driven failure detection. Appends
-                // any emitted WarpingRisk + CohesiveFailure events to
-                // the per-layer failures vector BEFORE `add_layer`, so
-                // they are persisted on the aggregate alongside the
-                // Tier-1 failures from `predict_layer`.
                 let strain_failures = FailurePredictor::predict_strain_failures(
                     i as u32,
                     &state.strain,
@@ -1049,25 +1109,61 @@ impl SimulationRunner {
         // — Z-voxel index represents one layer slab. ADR-0017 §6
         // "Coordinates" + voxel_cure_calculator doc comment.
         if sigma_xy_um.is_none() && sigma_z_um.is_none() {
-            // Regime AA: t2f1 path UNCHANGED for bit-exact equivalence.
-            for (ix, iy) in mask.iter_solid() {
-                let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
-                let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
-                let factor = UniformityCalculator::intensity_factor(x_mm, y_mm, &state.uniformity);
-                let pixel_intensity = state.led_power_mw_cm2 * factor;
-                VoxelCureCalculator::apply_column_exposure(
-                    &mut state.cure,
-                    &mut state.pi,
-                    ix,
-                    iy,
+            // ADR-0025 Stage B: GPU dispatch when available, else CPU.
+            #[cfg(feature = "gpu")]
+            let used_gpu = if let Some(ref gpu_cure) = state.gpu_cure {
+                let (nx, ny, _nz) = state.cure.dimensions();
+                let mut intensity_grid = vec![0.0_f32; (nx as usize) * (ny as usize)];
+                for (ix, iy) in mask.iter_solid() {
+                    let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
+                    let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
+                    let factor =
+                        UniformityCalculator::intensity_factor(x_mm, y_mm, &state.uniformity);
+                    intensity_grid[(iy as usize) * (nx as usize) + (ix as usize)] =
+                        state.led_power_mw_cm2 * factor;
+                }
+                let (_nx, _ny, nz) = state.cure.dimensions();
+                gpu_cure.dispatch(
+                    state.gpu_thermal.as_ref().map(|(ctx, _)| ctx).expect(
+                        "gpu_cure requires gpu_thermal to hold the GpuContext",
+                    ),
+                    &intensity_grid,
                     layer,
-                    pixel_intensity,
+                    nz,
                     exposure_sec,
-                    dp,
+                    dp.value(),
                     state.k_d,
                     layer_height_um,
-                )
-                .map_err(|e| format!("voxel cure layer {layer}: {e}"))?;
+                );
+                state.gpu_cure_pending.push(layer);
+                true
+            } else {
+                false
+            };
+            #[cfg(not(feature = "gpu"))]
+            let used_gpu = false;
+            if !used_gpu {
+                // Regime AA CPU fallback: t2f1 path for bit-exact equivalence.
+                for (ix, iy) in mask.iter_solid() {
+                    let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
+                    let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
+                    let factor =
+                        UniformityCalculator::intensity_factor(x_mm, y_mm, &state.uniformity);
+                    let pixel_intensity = state.led_power_mw_cm2 * factor;
+                    VoxelCureCalculator::apply_column_exposure(
+                        &mut state.cure,
+                        &mut state.pi,
+                        ix,
+                        iy,
+                        layer,
+                        pixel_intensity,
+                        exposure_sec,
+                        dp,
+                        state.k_d,
+                        layer_height_um,
+                    )
+                    .map_err(|e| format!("voxel cure layer {layer}: {e}"))?;
+                }
             }
         } else {
             Self::apply_voxel_cure_for_layer_crosstalk(
@@ -1116,6 +1212,15 @@ impl SimulationRunner {
         // the Tier-1 dispatch case in default-feature builds — kept
         // unchanged so the legacy ec_at_temp signature stays alive.
         let _ = thermal; // suppress unused warning under field-sim
+
+        // ADR-0025 Stage B: when GPU cure has pending (not-yet-downloaded)
+        // layers, skip the layer_summary here — finalize_voxel_layer
+        // handles it after the batch download.
+        #[cfg(feature = "gpu")]
+        if !state.gpu_cure_pending.is_empty() {
+            return Ok(());
+        }
+
         let mean_t_c = state.thermal.volume_mean_c();
         let vat_temp = VatTemperature::new(mean_t_c)
             .map_err(|e| format!("voxel cure ADR-0020 vat_temp from thermal_field mean: {e}"))?;
@@ -1128,12 +1233,6 @@ impl SimulationRunner {
             state.ea_cure_kj_mol,
         );
 
-        // Replace the Tier-1 scalar cache with the voxel-derived summary.
-        // LayerResult's `cure_depth_um` and `worst_cure_depth_um` stay as
-        // `pub f32` caches; the dispatch methods on LayerResult fall back
-        // to these when no aggregate cure_field is consulted, but here we
-        // promote the voxel result into the cache so that direct field
-        // readers (legacy callers) see the voxel-corrected number.
         if let Ok(summary) = state.cure.layer_summary(layer, state.dp_um, ec_t.value()) {
             if summary.mean.is_finite() && summary.mean >= 0.0 {
                 result.cure_depth_um = summary.mean;
@@ -1303,6 +1402,104 @@ impl SimulationRunner {
                 format!("ADR-0020 / t2f4 thermal solver error at layer {layer}: {e}")
             })?;
         }
+        Ok(())
+    }
+
+    /// ADR-0025 Stage B: run the deferred shrinkage, stress, layer-summary,
+    /// and failure-detection passes for a single layer after a GPU cure
+    /// batch has been downloaded. Called once per deferred layer inside the
+    /// batch-flush loop.
+    #[cfg(feature = "gpu")]
+    #[allow(clippy::too_many_arguments)]
+    fn finalize_voxel_layer(
+        state: &mut VoxelState,
+        layer: u32,
+        layer_height_um: f32,
+        mean_t_c: f32,
+        result: &mut crate::entities::LayerResult,
+        failures: &mut Vec<crate::entities::FailureEvent>,
+        resin: &ResinProfile,
+        thermal: &ThermalContext,
+        recipe: &crate::entities::Recipe,
+        printer: &PrinterProfile,
+    ) -> Result<(), String> {
+        let _ = thermal;
+        let vat_temp = VatTemperature::new(mean_t_c)
+            .map_err(|e| format!("voxel cure batch finalize vat_temp: {e}"))?;
+        result.vat_temperature_c = mean_t_c;
+        let ec_ref =
+            Energy::new(state.ec_ref_mj_cm2).map_err(|e| format!("ec_ref: {e}"))?;
+        let ec_t = VoxelCureCalculator::ec_at_temp(
+            ec_ref,
+            state.ref_temp_c,
+            vat_temp,
+            state.ea_cure_kj_mol,
+        );
+        if let Ok(summary) =
+            state.cure.layer_summary(layer, state.dp_um, ec_t.value())
+        {
+            if summary.mean.is_finite() && summary.mean >= 0.0 {
+                result.cure_depth_um = summary.mean;
+            }
+            if summary.min.is_finite() && summary.min >= 0.0 {
+                result.worst_cure_depth_um = summary.min;
+            }
+        }
+
+        Self::apply_voxel_shrinkage_for_layer(
+            state, layer, layer_height_um, thermal, recipe, printer,
+        )?;
+        Self::accumulate_layer_stress(state, layer)?;
+
+        result.strain_magnitude_max = state.strain.magnitude_layer_max(layer).ok();
+        result.stress_von_mises_max_mpa =
+            state.stress.von_mises_layer_max(layer).ok();
+        result.strain_gradient_max_frac =
+            state.strain.gradient_layer_max(layer).ok();
+        result.voxel_yield_fraction = state
+            .stress
+            .yield_fraction(layer, resin.tensile_strength_mpa())
+            .ok();
+
+        let strain_failures = FailurePredictor::predict_strain_failures(
+            layer,
+            &state.strain,
+            &state.stress,
+            resin,
+        );
+        failures.extend(strain_failures);
+        Ok(())
+    }
+
+    /// ADR-0025 Stage B: download GPU cure+PI buffers when there are
+    /// pending dispatches. Single download covers all batched layers.
+    /// No-op when no GPU cure is active or nothing is pending.
+    #[cfg(feature = "gpu")]
+    fn flush_gpu_cure_batch(state: &mut VoxelState) -> Result<(), String> {
+        if state.gpu_cure_pending.is_empty() {
+            return Ok(());
+        }
+        if let Some(ref gpu_cure) = state.gpu_cure {
+            let ctx = state
+                .gpu_thermal
+                .as_ref()
+                .map(|(ctx, _)| ctx)
+                .expect("gpu_cure requires gpu_thermal to hold the GpuContext");
+            gpu_cure.download(ctx, &mut state.cure, &mut state.pi);
+            if !state.cure.max_dose().is_finite() {
+                return Err(
+                    "ADR-0025 / t2f5 GPU cure solver produced non-finite dose".to_string(),
+                );
+            }
+            if state.pi.min_concentration() < 0.0
+                || !state.pi.min_concentration().is_finite()
+            {
+                return Err(
+                    "ADR-0025 / t2f5 GPU cure solver produced invalid PI".to_string(),
+                );
+            }
+        }
+        state.gpu_cure_pending.clear();
         Ok(())
     }
 

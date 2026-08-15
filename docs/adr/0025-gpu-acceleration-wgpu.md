@@ -6,7 +6,8 @@ date: 2026-08-15
 # ADR-0025: GPU acceleration of the thermal FTCS solver via wgpu
 
 ## Status
-Accepted (Stage A of issue `t2f5-gpu-acceleration-wgpu`, 2026-08-15).
+Accepted (Stage A: thermal FTCS, 2026-08-15; Stage B: cure + PI column
+march, 2026-08-15).
 
 ## Context
 
@@ -105,3 +106,53 @@ points is minimal and sufficient.
 
 (c) **Per-substep GPU↔CPU transfer.** Defeats the point. Upload once,
 run N substeps, download once.
+
+## Stage B: GPU-accelerated cure + PI column march
+
+### (viii) WGSL cure column-march shader
+
+A single WGSL compute shader (`voxel_cure_gpu.rs`) implements the same
+Beer-Lambert column march as the CPU `VoxelCureCalculator` (ADR-0017).
+Each thread owns one (ix, iy) column and marches Z sequentially from
+`iz_top` to `nz`. No cross-thread data dependency — no ping-pong needed.
+Workgroup size is `@workgroup_size(8, 8)`, dispatched as
+`ceil(nx/8) × ceil(ny/8)` workgroups per layer. Regime AA only (no
+crosstalk); the crosstalk regimes (BA/BB/CB/DD) remain CPU-only.
+
+The shader replicates the CPU path's constants exactly:
+- `C_THRESHOLD = 0.01` (KB-160 numerical floor)
+- `DP_LOCAL_MAX_FACTOR = 10.0` (extrapolation cap)
+- `NEGLIGIBLE_DOSE_FLOOR = 1e-6` (early-exit threshold)
+- PI depletion: `clamp(exp(-k_d * dose), 0, 1)` then
+  `clamp(c_old * multiplier, 0, c_old)` (double-clamp from
+  `PhotoinitiatorField::deplete`)
+- Depth uses `layer_height_um` NOT `voxel_size_mm * 1000`
+
+### (ix) GpuCureBuffers
+
+`GpuCureBuffers` manages four GPU storage buffers (cure, PI, intensity,
+params) plus two staging buffers for download. Cure and PI are uploaded
+once at init and persist on GPU across layers. Per layer: the host
+builds a 2D intensity grid (mask × uniformity × LED power), uploads it,
+dispatches, then downloads cure + PI back to host (shrinkage pass reads
+`dose_at` per layer).
+
+Post-download sanity checks: `max_dose().is_finite()` and
+`min_concentration() >= 0`.
+
+### (x) GPU/CPU parity for cure + PI
+
+Same tolerance-based contract as Stage A (§v). Cure dose tolerance:
+max |dose_gpu − dose_cpu| < 1e-3 mJ/cm². PI concentration tolerance:
+max |pi_gpu − pi_cpu| < 1e-5. Four parity tests: basic 4×4×8 grid,
+zero-intensity noop, depleted column (C near C_THRESHOLD), single-voxel
+nz=1.
+
+### (xi) SimulationRunner dispatch
+
+`VoxelState` gains `gpu_cure: Option<GpuCureBuffers>`, initialized
+alongside `gpu_thermal` when `--gpu` is passed.
+`apply_voxel_cure_for_layer` checks `gpu_cure` first; when `Some`,
+builds the intensity grid on CPU, dispatches the shader, downloads,
+sanity-checks, and returns. When `None`, the existing CPU loop runs
+unchanged. Crosstalk regimes always take the CPU path.

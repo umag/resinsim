@@ -20,6 +20,7 @@ fn bcs() -> BoundaryConditions {
 
 const ALPHA: f32 = 1.07e-7;
 
+#[allow(clippy::too_many_arguments)]
 fn bench_one(
     ctx: &GpuContext,
     nx: u32, ny: u32, nz: u32,

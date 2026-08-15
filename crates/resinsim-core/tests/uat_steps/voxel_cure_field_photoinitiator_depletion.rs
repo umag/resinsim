@@ -105,7 +105,7 @@ fn run_tier1_sim(layers: &[LayerInput]) -> resinsim_core::simulation::PrintSimul
 // ---------------------------------------------------------------------------
 
 // spec/uat/voxel-cure-field-photoinitiator-depletion.md UAT-1
-#[given(regex = r"^a CTB input with per-layer masks$")]
+#[given(regex = r"^a CTB input with per-layer masks for voxel cure$")]
 fn given_ctb_input_with_masks(world: &mut UatWorld) {
     world.ctb_layer_inputs = Some(layer_inputs_with_mask(5));
 }
@@ -269,7 +269,7 @@ fn given_ctb_n_consecutive_layers_same_column(world: &mut UatWorld) {
 }
 
 // spec/uat/voxel-cure-field-photoinitiator-depletion.md UAT-3
-#[when(regex = r"^the simulation runs with --voxel-cure-mm set$")]
+#[when(regex = r"^the simulation runs with --voxel-cure-mm set for voxel cure$")]
 fn when_simulation_runs_with_voxel_cure_mm_set(world: &mut UatWorld) {
     let layers = world
         .ctb_layer_inputs

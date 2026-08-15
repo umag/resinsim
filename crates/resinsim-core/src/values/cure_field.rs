@@ -169,6 +169,11 @@ impl CureField {
         &self.data
     }
 
+    #[cfg(feature = "gpu")]
+    pub(crate) fn data_mut(&mut self) -> &mut Array3<f32> {
+        &mut self.data
+    }
+
     /// Reconstitute a `CureField` from raw persistence inputs (ADR-0019
     /// sidecar decoder). Re-runs the same dimension / voxel_size_mm /
     /// bbox_min_mm validations as `new()`, then takes ownership of the

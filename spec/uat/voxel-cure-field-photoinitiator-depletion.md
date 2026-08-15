@@ -20,7 +20,7 @@ inspectors, and report generators can read them.
 
 ```gherkin
 Scenario: --voxel-cure-mm populates voxel fields on the aggregate
-  Given a CTB input with per-layer masks
+  Given a CTB input with per-layer masks for voxel cure
   And a resin and printer profile validated against the recipe
   When the simulation runs with the --voxel-cure-mm flag set to a positive finite value
   Then the simulation aggregate carries a populated cure_field
@@ -38,7 +38,7 @@ absent when `None`).
 
 ```gherkin
 Scenario: Tier-1 mode does not install voxel fields
-  Given a CTB input with per-layer masks
+  Given a CTB input with per-layer masks for voxel cure
   And a resin and printer profile validated against the recipe
   When the simulation runs without the --voxel-cure-mm flag
   Then the simulation aggregate's cure_field is absent
@@ -56,7 +56,7 @@ layer print.
 ```gherkin
 Scenario: Repeated exposures of the same voxel column drive photoinitiator down monotonically
   Given a CTB with N consecutive layers each marking the same pixel column as solid
-  When the simulation runs with --voxel-cure-mm set
+  When the simulation runs with --voxel-cure-mm set for voxel cure
   Then the deepest voxel's photoinitiator concentration is less than or equal to the topmost voxel's
   And no voxel's concentration is below zero
   And no voxel's concentration is above the resin's photoinitiator_concentration_initial
