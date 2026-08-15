@@ -117,6 +117,7 @@ use uat_steps::{
 use uat_steps::{
     calibration_disclosure_3of3_predicate, cli_sim_rejects_tampered_sidecar,
     honest_zero_yield_fraction_on_calibrated_solid,
+    voxel_cure_field_photoinitiator_depletion,
 };
 
 /// Which of the two ADR-0017 feature configurations this harness binary
@@ -479,7 +480,17 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     both_configs("viz-timeline-drag-pan-does-not-seek", 2),
     both_configs("viz-timeline-safety-log-toggle-handles-infinite-sf", 2),
     both_configs("viz-timeline-series-toggle-rescales-y", 2),
-    both_configs("voxel-cure-field-photoinitiator-depletion", 6),
+    // PAID DOWN (uat-unskip-voxel-cure-field-photoinitiator-depletion,
+    // 2026-08-15): all 6 scenarios now have step definitions in the
+    // field-sim-gated module `voxel_cure_field_photoinitiator_depletion.rs`.
+    // Every entry point is #[cfg(feature = "field-sim")]: SimulationRunner::
+    // run_from_layer_inputs_with_voxel (simulation_runner.rs:446-448),
+    // CureField (cure_field.rs:32), PhotoinitiatorField
+    // (photoinitiator_field.rs:29), VoxelCureCalculator
+    // (voxel_cure_calculator.rs:45), CLI --voxel-cure-mm (main.rs:237).
+    // Default features: module doesn't compile, all 6 scenarios skip
+    // (register expects 6). Field-sim: all 6 stepped (register expects 0).
+    per_config("voxel-cure-field-photoinitiator-depletion", 6, 0),
 ];
 
 /// Step-def modules whose file name does not match their spec's file name.

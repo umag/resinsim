@@ -74,3 +74,13 @@ pub mod safety_factor_zero_force;
 pub mod sim_json_roundtrips_zero_force_layer;
 pub mod suction_detector_raft_false_positive;
 pub mod thermal_degradation;
+// FIELD-SIM-GATED (uat-unskip-voxel-cure-field-photoinitiator-depletion):
+// every scenario's entry points — SimulationRunner::
+// run_from_layer_inputs_with_voxel (simulation_runner.rs:446-448),
+// CureField (cure_field.rs:32), PhotoinitiatorField
+// (photoinitiator_field.rs:29), VoxelCureCalculator
+// (voxel_cure_calculator.rs:45), CLI --voxel-cure-mm (main.rs:237) — are
+// all #[cfg(feature = "field-sim")]. See the module's own doc comment for
+// the full symbol derivation.
+#[cfg(feature = "field-sim")]
+pub mod voxel_cure_field_photoinitiator_depletion;
