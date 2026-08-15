@@ -21,7 +21,7 @@ use crate::services::{
     BoundaryConditions, LayerTimingCalculator, ThermalCalculator, ThermalDiffusionSolver,
 };
 #[cfg(feature = "gpu")]
-use crate::services::{GpuContext, GpuCrosstalkBuffers, GpuCureBuffers, GpuThermalBuffers};
+use crate::services::{GpuContext, GpuCrosstalkBuffers, GpuCureBuffers, GpuStrainStressBuffers, GpuThermalBuffers};
 #[cfg(feature = "field-sim")]
 use crate::values::ThermalTimeConstant;
 use crate::simulation::PrintSimulation;
@@ -158,6 +158,8 @@ struct VoxelState {
     gpu_crosstalk: Option<GpuCrosstalkBuffers>,
     #[cfg(feature = "gpu")]
     gpu_crosstalk_log_emitted: bool,
+    #[cfg(feature = "gpu")]
+    gpu_strain_stress: Option<GpuStrainStressBuffers>,
 }
 
 /// Output of [`SimulationRunner::prepare_layer_inputs`]: everything the
@@ -834,6 +836,8 @@ impl SimulationRunner {
                         gpu_crosstalk: None,
                         #[cfg(feature = "gpu")]
                         gpu_crosstalk_log_emitted: false,
+                        #[cfg(feature = "gpu")]
+                        gpu_strain_stress: None,
                     })
                 } else {
                     None
@@ -875,6 +879,8 @@ impl SimulationRunner {
                     cure_ny,
                 ));
             }
+            let ss_bufs = GpuStrainStressBuffers::new(&ctx, &state.cure);
+            state.gpu_strain_stress = Some(ss_bufs);
             state.gpu_thermal = Some((ctx, thermal_bufs));
         }
 
@@ -991,15 +997,92 @@ impl SimulationRunner {
                     continue;
                 }
 
-                Self::apply_voxel_shrinkage_for_layer(
-                    state,
-                    i as u32,
-                    layer_height_um_i,
-                    &thermal,
-                    recipe,
-                    printer,
-                )?;
-                Self::accumulate_layer_stress(state, i as u32)?;
+                // t2f3 / ADR-0025 Stage D — per-voxel shrinkage strain
+                // + stress. GPU dispatch when available, CPU fallback.
+                #[cfg(feature = "gpu")]
+                let used_gpu_strain = if let Some(ref ss_bufs) = state.gpu_strain_stress {
+                    let (ctx, _) = state
+                        .gpu_thermal
+                        .as_ref()
+                        .expect("gpu_strain_stress implies gpu_thermal");
+                    let vat_temp = crate::services::ThermalCalculator::vat_temperature_at_layer_v2(
+                        recipe,
+                        printer,
+                        thermal.ambient.value(),
+                        thermal.initial_led_temp.map(|t| t.value()),
+                        i as u32,
+                    );
+                    let ec_t = crate::services::CureCalculator::ec_at_temp(
+                        Energy::new(state.ec_ref_mj_cm2)
+                            .expect("ec_ref validated > 0 at profile load"),
+                        state.ref_temp_c,
+                        vat_temp,
+                        state.ea_cure_kj_mol,
+                    );
+                    ss_bufs.upload_dose(ctx, &state.cure);
+                    ss_bufs.dispatch(
+                        ctx,
+                        i as u32,
+                        ec_t.value(),
+                        state.dp_um,
+                        layer_height_um_i,
+                        state.linear_shrinkage_frac,
+                        state.shrinkage_anisotropy_z_ratio,
+                        state.youngs_modulus_mpa,
+                        state.poissons_ratio,
+                        {
+                            let (_, _, nz) = state.cure.dimensions();
+                            nz
+                        },
+                    );
+                    let gpu_strain = ss_bufs.download_strain(ctx);
+                    let gpu_stress = ss_bufs.download_stress(ctx);
+                    let (nx, ny, _) = state.cure.dimensions();
+                    for ix in 0..nx {
+                        for iy in 0..ny {
+                            let idx = (ix * ny + iy) as usize;
+                            let tensor = gpu_strain[idx];
+                            if tensor == crate::values::StrainTensor::zero() {
+                                continue;
+                            }
+                            state
+                                .strain
+                                .lock_strain_at(ix, iy, i as u32, tensor)
+                                .map_err(|e| {
+                                    format!("gpu strain lock_strain_at({ix},{iy},{}): {e}", i)
+                                })?;
+                            let comps = gpu_stress[idx];
+                            let sigma = crate::values::StressTensor::new(
+                                comps[0], comps[1], comps[2], comps[3], comps[4], comps[5],
+                            )
+                            .map_err(|e| {
+                                format!("gpu stress at({ix},{iy},{}): {e}", i)
+                            })?;
+                            state
+                                .stress
+                                .accumulate_at(ix, iy, i as u32, sigma)
+                                .map_err(|e| {
+                                    format!("gpu stress accumulate_at({ix},{iy},{}): {e}", i)
+                                })?;
+                        }
+                    }
+                    true
+                } else {
+                    false
+                };
+                #[cfg(not(feature = "gpu"))]
+                let used_gpu_strain = false;
+                if !used_gpu_strain {
+                    Self::apply_voxel_shrinkage_for_layer(
+                        state,
+                        i as u32,
+                        layer_height_um_i,
+                        &thermal,
+                        recipe,
+                        printer,
+                    )?;
+                    Self::accumulate_layer_stress(state, i as u32)?;
+                }
 
                 result.strain_magnitude_max = state.strain.magnitude_layer_max(i as u32).ok();
                 result.stress_von_mises_max_mpa = state.stress.von_mises_layer_max(i as u32).ok();
