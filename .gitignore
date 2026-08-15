@@ -1,4 +1,5 @@
 /target/
+/target-uat-field-sim/
 # swamp datastore / audit dirs at any depth (e.g. docs/kb/.swamp/audit/)
 .swamp/
 rustc-ice-*.txt

@@ -34,11 +34,18 @@ pub fn workspace_data_dir() -> PathBuf {
     repo_root().join("data")
 }
 
-/// Resolve the path to the `resinsim` binary by walking up from the
-/// current test executable to `target/<profile>/resinsim`. Tests run
-/// via `cargo test` place the test binary at
-/// `target/<profile>/deps/uat_gherkin-<hash>`, so the binary is two
-/// parents up and named `resinsim`.
+/// Resolve the path to the default-features `resinsim` binary by
+/// walking up from the current test executable to
+/// `target/<profile>/resinsim`. Tests run via `cargo test` place the
+/// test binary at `target/<profile>/deps/uat_gherkin-<hash>`, so the
+/// binary is two parents up and named `resinsim`.
+///
+/// This ALWAYS returns the default-features binary, even under
+/// `cargo uat-field-sim`. Existing CLI step-def modules (e.g.
+/// `cli_inspect_field_slices_voxel_field.rs`) assert feature-off
+/// behavior — switching them to a field-sim binary would break those
+/// assertions. Only the sidecar step-def module uses the field-sim
+/// binary via [`resinsim_field_sim_bin_path`].
 pub fn resinsim_bin_path() -> PathBuf {
     let exe = std::env::current_exe().expect("current_exe");
     let target_dir = exe
@@ -48,10 +55,57 @@ pub fn resinsim_bin_path() -> PathBuf {
     target_dir.join("resinsim")
 }
 
-/// Build the `resinsim` binary once per test run. Called from
-/// `tests/uat_gherkin.rs::main()` so CLI step defs find the binary
-/// when they invoke it. cargo's build cache makes the warm-path nearly
-/// instant; the first run bears the full compile cost.
+/// The profile directory name (e.g. `debug`, `release`) derived from
+/// `current_exe()`. The test binary lives at
+/// `target/<profile>/deps/uat_gherkin-<hash>`, so the profile is two
+/// parents up.
+#[cfg(feature = "field-sim")]
+fn profile_name() -> &'static str {
+    static PROFILE: OnceLock<String> = OnceLock::new();
+    PROFILE.get_or_init(|| {
+        let exe = std::env::current_exe().expect("current_exe");
+        let profile_dir = exe
+            .parent()
+            .and_then(Path::parent)
+            .expect("test binary is under target/<profile>/deps/");
+        profile_dir
+            .file_name()
+            .expect("profile dir has a name")
+            .to_str()
+            .expect("profile name is UTF-8")
+            .to_string()
+    })
+}
+
+/// Resolve the path to the field-sim `resinsim` binary, built into the
+/// config-scoped `target-uat-field-sim/<profile>/` directory by
+/// [`ensure_resinsim_built`]. This binary includes the sidecar
+/// producer/consumer code paths (`--voxel-cure-mm`,
+/// `encode_paired_sidecar`, `load_and_install_sidecar_with_budget`).
+///
+/// Only available under `#[cfg(feature = "field-sim")]` — the
+/// config-scoped directory only exists after `ensure_resinsim_built`
+/// builds with `--features`.
+#[cfg(feature = "field-sim")]
+pub fn resinsim_field_sim_bin_path() -> PathBuf {
+    repo_root()
+        .join("target-uat-field-sim")
+        .join(profile_name())
+        .join("resinsim")
+}
+
+/// Build the default-features `resinsim` binary once per test run.
+/// Called from `tests/uat_gherkin.rs::main()` so CLI step defs find the
+/// binary when they invoke it. cargo's build cache makes the warm-path
+/// nearly instant; the first run bears the full compile cost.
+///
+/// Under `field-sim`: ALSO builds a second binary WITH `--features
+/// resinsim-inspect/field-sim` into a config-scoped `--target-dir`
+/// (`target-uat-field-sim/`). The default-features binary is built
+/// first (existing modules assert feature-off behavior); the field-sim
+/// binary is built second (sidecar module needs it). The config-scoped
+/// directory prevents flip-flopping rebuilds. See
+/// [`resinsim_field_sim_bin_path`] for the resolution counterpart.
 ///
 /// Toolchain robustness (folded LOW finding): the workspace pins
 /// nightly via `rust-toolchain.toml` and passes `-Z threads=8` via its
@@ -65,6 +119,8 @@ pub fn ensure_resinsim_built() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         let manifest = repo_root().join("Cargo.toml");
+
+        // 1. Default-features binary (all existing CLI modules use this).
         let status = Command::new(env!("CARGO"))
             .args([
                 "build",
@@ -86,7 +142,7 @@ pub fn ensure_resinsim_built() {
             });
         assert!(
             status.success(),
-            "`cargo build --bin resinsim` failed with exit {status:?}",
+            "`cargo build --bin resinsim` (default features) failed with exit {status:?}",
         );
         let bin = resinsim_bin_path();
         assert!(
@@ -94,6 +150,45 @@ pub fn ensure_resinsim_built() {
             "resinsim binary missing at {} after successful cargo build",
             bin.display(),
         );
+
+        // 2. Field-sim binary (sidecar module uses this).
+        #[cfg(feature = "field-sim")]
+        {
+            let target_dir = repo_root().join("target-uat-field-sim");
+            let status = Command::new(env!("CARGO"))
+                .args([
+                    "build",
+                    "--quiet",
+                    "--bin",
+                    "resinsim",
+                    "-p",
+                    "resinsim-inspect",
+                    "--features",
+                    "resinsim-inspect/field-sim",
+                    "--manifest-path",
+                ])
+                .arg(&manifest)
+                .arg("--target-dir")
+                .arg(&target_dir)
+                .env("RUSTC_BOOTSTRAP", "1")
+                .status()
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "failed to invoke `cargo build --bin resinsim --features field-sim` at {}: {e}",
+                        manifest.display()
+                    )
+                });
+            assert!(
+                status.success(),
+                "`cargo build --bin resinsim` (field-sim) failed with exit {status:?}",
+            );
+            let field_sim_bin = resinsim_field_sim_bin_path();
+            assert!(
+                field_sim_bin.exists(),
+                "resinsim field-sim binary missing at {} after successful cargo build",
+                field_sim_bin.display(),
+            );
+        }
     });
 }
 
@@ -184,6 +279,32 @@ pub fn invoke_resinsim_with_unset(
     }
     for key in env_unset {
         cmd.env_remove(key);
+    }
+    cmd.env_remove("RUST_BACKTRACE");
+    let out = cmd
+        .output()
+        .unwrap_or_else(|e| panic!("failed to spawn {}: {e}", bin.display()));
+    CliOutcome {
+        exit_code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// Like [`invoke_resinsim`] but uses the field-sim binary
+/// ([`resinsim_field_sim_bin_path`]) instead of the default-features
+/// binary. Only available under `#[cfg(feature = "field-sim")]`.
+///
+/// Used by `cli_sim_rejects_tampered_sidecar.rs` — all four sidecar
+/// scenarios need `--voxel-cure-mm` (producer) and
+/// `load_and_install_sidecar_with_budget` (consumer), both gated.
+#[cfg(feature = "field-sim")]
+pub fn invoke_resinsim_field_sim(args: &[&str], env_override: &[(&str, &str)]) -> CliOutcome {
+    let bin = resinsim_field_sim_bin_path();
+    let mut cmd = Command::new(&bin);
+    cmd.args(args);
+    for (key, value) in env_override {
+        cmd.env(key, value);
     }
     cmd.env_remove("RUST_BACKTRACE");
     let out = cmd

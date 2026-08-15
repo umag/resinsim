@@ -249,17 +249,16 @@ both configs" is now THREE-PART:
    differ, and each alias's split must match its OWN register column
    exactly — never the other alias's.
 
-Current shapes (`uat-unskip-band-d`, landed 2026-08-06 — light-crosstalk-
-3d-gaussian-convolution UAT-5/6/7 ungated, honest-zero-yield-fraction-on-
-calibrated-solid and calibration-disclosure-3of3-predicate both
-field-sim-gated):
+Current shapes (`uat-unskip-cli-sim-rejects-tampered-sidecar`, landed
+2026-08-15 — cli-sim-rejects-tampered-sidecar 4 scenarios field-sim-gated
+via binary-build-seam resolution):
 
 - `cargo uat` (default features): 54 features, 166 scenarios (97 passed,
   69 skipped, 0 failed), 560 steps (487 passed, 69 skipped, 0 failed),
   exit 0.
-- `cargo uat-field-sim`: 54 features, 166 scenarios (104 passed, 62
-  skipped, 0 failed), 560 steps (520 passed, 62 skipped, 0 failed), exit 0.
-- Register: 24 entries, column sums 69 (default) / 62 (field-sim).
+- `cargo uat-field-sim`: 54 features, 166 scenarios (108 passed, 58
+  skipped, 0 failed), 560 steps (540 passed, 58 skipped, 0 failed), exit 0.
+- Register: 24 entries, column sums 69 (default) / 58 (field-sim).
 
 Both shapes move as the campaign lands more increments — trust each
 alias's own `[Consolidated total]` line (which now also prints its active

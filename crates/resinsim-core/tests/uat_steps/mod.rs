@@ -33,6 +33,13 @@ pub mod base_adhesion_shifts_peel_peak;
 #[cfg(feature = "field-sim")]
 pub mod calibration_disclosure_3of3_predicate;
 pub mod cli_inspect_field_slices_voxel_field;
+// FIELD-SIM-GATED (uat-unskip-cli-sim-rejects-tampered-sidecar): all
+// four scenarios need the field-sim binary (producer --voxel-cure-mm +
+// consumer load_and_install_sidecar_with_budget, both #[cfg(feature =
+// "field-sim")]). See the module's own doc comment for the full symbol
+// derivation.
+#[cfg(feature = "field-sim")]
+pub mod cli_sim_rejects_tampered_sidecar;
 pub mod cli_profile_by_name_loading;
 pub mod cli_report_health_layer_height_provenance;
 pub mod cli_report_health_print_time;

@@ -30,7 +30,7 @@ See also: `crates/resinsim-core/tests/sidecar_security_integration.rs`.
 
 ```gherkin
 Scenario: UAT-1 tampering the sidecar bytes after save produces sha256 mismatch
-  Given a paired `model.sim.json` + `model.fields.bin` produced by a --voxel-cure-mm run
+  Given a paired `model.sim.json` + `model.fields.bin` produced by a `--voxel-cure-mm` run
   When the user flips a single byte in `model.fields.bin` outside of size
   And invokes `resinsim report health --in model.sim.json`
   Then the process exits with non-zero code
@@ -54,7 +54,7 @@ Scenario: UAT-2 truncating the sidecar produces sidecar size mismatch
 ```gherkin
 Scenario: UAT-3 sim.json with path-traversal sidecar pointer is rejected
   Given a sim.json envelope crafted with `fields_sidecar.path = "../escape.bin"`
-  When the user invokes `resinsim report health --in <PATH>`
+  When the user runs `resinsim report health --in <PATH>`
   Then the process exits with non-zero code
   And stderr mentions "sidecar path traversal rejected"
 ```

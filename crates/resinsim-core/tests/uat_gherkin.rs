@@ -115,7 +115,8 @@ use uat_steps::{
 #[cfg(feature = "field-sim")]
 #[allow(unused_imports, clippy::single_component_path_imports)]
 use uat_steps::{
-    calibration_disclosure_3of3_predicate, honest_zero_yield_fraction_on_calibrated_solid,
+    calibration_disclosure_3of3_predicate, cli_sim_rejects_tampered_sidecar,
+    honest_zero_yield_fraction_on_calibrated_solid,
 };
 
 /// Which of the two ADR-0017 feature configurations this harness binary
@@ -386,65 +387,28 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // uat-fixtures-fieldsim-adr0020-gap, which is the unrelated
     // missing-TOML-fixture-fields constraint).
     //
-    // STILL SYMMETRIC (uat-unskip-band-d step 9, 2026-08-06): every symbol
-    // this scenario needs is compiled out of the subprocessed `resinsim`
-    // binary in BOTH `cargo uat` and `cargo uat-field-sim` TODAY —
-    // `ensure_resinsim_built` forwards NO `--features` — so (3, 3) is the
-    // honest, uniformly-unreachable count in both columns right now, not
-    // yet the canonical asymmetric shape. DECISION this issue OWNS but
-    // does NOT implement: `ensure_resinsim_built`
-    // (`tests/uat_steps/cli_fixtures.rs`) will forward `--features
-    // resinsim-inspect/field-sim` under the SAME `HARNESS_CONFIG` marker
-    // AND build into a config-scoped `--target-dir` (so
-    // `resinsim_bin_path` resolves from that dir instead of walking up
-    // from `current_exe`) — the config-scoped target dir is what stops
-    // the two aliases from sharing one `target/<profile>/resinsim` and
-    // flip-flopping rebuilds (the half-written-binary SIGKILL hazard
-    // `docs/patterns/isolated-target-dir-for-concurrent-sessions.md`
-    // exists to avoid). Landing the `--features` forward WITHOUT the
-    // target-dir split would reintroduce exactly that flip-flop, so the
-    // two must land together. Once they do, this row
-    // converts to `per_config(spec, 3, 0)` in the follow-up increment that
-    // owns the binary-build-seam implementation.
+    // BINARY-BUILD-SEAM RESOLVED (uat-unskip-cli-sim-rejects-tampered-
+    // sidecar, 2026-08-15): `ensure_resinsim_built` now forwards
+    // `--features resinsim-inspect/field-sim` under `#[cfg(feature =
+    // "field-sim")]` and builds into `target-uat-field-sim/`. The
+    // sidecar symbols are no longer compiled out of the binary under
+    // `cargo uat-field-sim`. However, this spec still has NO step-def
+    // module — all 3 scenarios skip at their first undefined Given in
+    // BOTH configs, so `both_configs(3)` remains correct. This row
+    // converts to `per_config(3, 0)` when a step-def module lands in
+    // a follow-up lifecycle.
     both_configs("cli-sim-budget-mismatch-on-load", 3),
-    // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
-    // filed 2026-08-02): all four scenarios need a producer-written sidecar
-    // (`--voxel-cure-mm` main.rs:237-239, `encode_paired_sidecar`
-    // simulation_repo.rs:428, both `#[cfg(feature = "field-sim")]`) and the
-    // consumer `load_and_install_sidecar_with_budget`
-    // (simulation_repo.rs:718, called only from the `#[cfg(feature =
-    // "field-sim")]` branch at :677-680) — and `ensure_resinsim_built`
-    // (cli_fixtures.rs:64-98) forwards NO `--features` to the subprocessed
-    // `resinsim` binary, so every one of these symbols is compiled out of
-    // the binary under test TODAY, uniformly, in BOTH `cargo uat` and
-    // `cargo uat-field-sim`. Same NEW Band-D sub-shape as
-    // `cli-sim-budget-mismatch-on-load` above — asymmetric at the
-    // BINARY-BUILD SEAM, not at an in-process `#[cfg]` boundary;
-    // `ensure_resinsim_built` forwarding `--features field-sim` under
-    // `#[cfg(feature = "field-sim")]` is the design decision that converts
-    // these into the canonical config-asymmetric shape uat-unskip-band-d
-    // owns.
-    //
-    // UAT-3 (path traversal) was checked specifically as a possible
-    // ENVELOPE-LEVEL exception — a crafted `fields_sidecar.path =
-    // "../escape.bin"` pointer parses fine on default features
-    // (`#[serde(default)] fields_sidecar: Option<SidecarPointer>`,
-    // simulation_repo.rs:87, carries no `#[cfg]`) — and is NOT one: the
-    // only consumer of that pointer is the gated call site
-    // (simulation_repo.rs:677-680, reached only from
-    // `load_and_install_sidecar_with_budget` at :718), so a crafted
-    // pointer is silently IGNORED and `report health --in` exits 0 rather
-    // than rejecting it. See uat-unskip-band-d (NOT
-    // uat-fixtures-fieldsim-adr0020-gap).
-    //
-    // STILL SYMMETRIC (uat-unskip-band-d step 9, 2026-08-06): same
-    // uniform-unreachability reasoning and the same pending DECISION as
-    // `cli-sim-budget-mismatch-on-load` above (`ensure_resinsim_built`
-    // forwards NO `--features` today) — this row converts to
-    // `per_config(spec, 4, 0)` once `ensure_resinsim_built` forwards
-    // `--features` under `HARNESS_CONFIG` AND builds into a config-scoped
-    // `--target-dir`, in the same change.
-    both_configs("cli-sim-rejects-tampered-sidecar", 4),
+    // PAID DOWN (uat-unskip-cli-sim-rejects-tampered-sidecar, 2026-08-15):
+    // all four scenarios now have step definitions in the field-sim-gated
+    // module `cli_sim_rejects_tampered_sidecar.rs`. The binary-build-seam
+    // is resolved: `ensure_resinsim_built` (cli_fixtures.rs) now forwards
+    // `--features resinsim-inspect/field-sim` under `#[cfg(feature =
+    // "field-sim")]` and builds into a config-scoped `--target-dir`
+    // (`target-uat-field-sim/`), so `resinsim_bin_path` resolves to the
+    // field-sim binary. Default features: module doesn't compile, all 4
+    // scenarios skip (register expects 4). Field-sim: all 4 stepped
+    // (register expects 0).
+    per_config("cli-sim-rejects-tampered-sidecar", 4, 0),
     // BAND MEMBERSHIP NOT YET DERIVED BY SYMBOL (uat-unskip-band-d step 9,
     // 2026-08-06, grouped note over this row and the five below down to
     // `thermal-field-sidecar-roundtrip`): unlike the rows above (derived
