@@ -32,6 +32,13 @@ pub mod base_adhesion_shifts_peel_peak;
 // comment for the full symbol derivation.
 #[cfg(feature = "field-sim")]
 pub mod calibration_disclosure_3of3_predicate;
+// FIELD-SIM-GATED (uat-unskip-cli-sim-budget-mismatch-on-load): the
+// sidecar decode path `load_and_install_sidecar_with_budget`
+// (simulation_repo.rs:725) is #[cfg(feature = "field-sim")]. The
+// budget check fires inside `decoder.rs::read_descriptor` at
+// descriptor-parse time, before any allocation.
+#[cfg(feature = "field-sim")]
+pub mod cli_sim_budget_mismatch_on_load;
 pub mod cli_inspect_field_slices_voxel_field;
 // FIELD-SIM-GATED (uat-unskip-cross-feature-toml-interchange): UAT-2's
 // sole error producer, ResinProfile::validate()'s thermal_conductivity_w_mk

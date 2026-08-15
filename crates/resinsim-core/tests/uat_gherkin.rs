@@ -116,7 +116,8 @@ use uat_steps::{
 #[cfg(feature = "field-sim")]
 #[allow(unused_imports, clippy::single_component_path_imports)]
 use uat_steps::{
-    calibration_disclosure_3of3_predicate, cli_sim_rejects_tampered_sidecar,
+    calibration_disclosure_3of3_predicate, cli_sim_budget_mismatch_on_load,
+    cli_sim_rejects_tampered_sidecar,
     cross_feature_toml_interchange,
     honest_zero_yield_fraction_on_calibrated_solid,
     light_crosstalk_3d_gaussian_convolution_runtime,
@@ -392,17 +393,16 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // uat-fixtures-fieldsim-adr0020-gap, which is the unrelated
     // missing-TOML-fixture-fields constraint).
     //
-    // BINARY-BUILD-SEAM RESOLVED (uat-unskip-cli-sim-rejects-tampered-
-    // sidecar, 2026-08-15): `ensure_resinsim_built` now forwards
-    // `--features resinsim-inspect/field-sim` under `#[cfg(feature =
-    // "field-sim")]` and builds into `target-uat-field-sim/`. The
-    // sidecar symbols are no longer compiled out of the binary under
-    // `cargo uat-field-sim`. However, this spec still has NO step-def
-    // module — all 3 scenarios skip at their first undefined Given in
-    // BOTH configs, so `both_configs(3)` remains correct. This row
-    // converts to `per_config(3, 0)` when a step-def module lands in
-    // a follow-up lifecycle.
-    both_configs("cli-sim-budget-mismatch-on-load", 3),
+    // PAID DOWN (uat-unskip-cli-sim-budget-mismatch-on-load, 2026-08-16):
+    // UAT-1 and UAT-2 now have step definitions in the field-sim-gated
+    // module `cli_sim_budget_mismatch_on_load.rs`. UAT-3 is marked
+    // **future** in the spec (depends on stamping the producer's
+    // RESINSIM_MAX_FIELD_BYTES into the SidecarPointer envelope — a
+    // production feature that does not yet exist). Default features:
+    // module doesn't compile, all 3 scenarios skip (register expects 3).
+    // Field-sim: UAT-1 + UAT-2 stepped, UAT-3 skips at its first
+    // undefined Given (register expects 1).
+    per_config("cli-sim-budget-mismatch-on-load", 3, 1),
     // PAID DOWN (uat-unskip-cli-sim-rejects-tampered-sidecar, 2026-08-15):
     // all four scenarios now have step definitions in the field-sim-gated
     // module `cli_sim_rejects_tampered_sidecar.rs`. The binary-build-seam
