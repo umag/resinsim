@@ -93,6 +93,10 @@ pub mod nanodlp_archive_bomb_rejected;
 pub mod nanodlp_calibrate_compares_real_force;
 pub mod nanodlp_import_simulates;
 pub mod peel_shape_factor_scales_with_aspect_ratio;
+// FIELD-SIM-GATED (uat-unskip-thermal-fields): the validate() min-extent
+// check is `#[cfg(feature = "field-sim")]` (production-blocked — stub only).
+#[cfg(feature = "field-sim")]
+pub mod printer_envelope_min_extent_under_field_sim;
 pub mod profile_vacuum_pressure_scales_suction;
 pub mod recipe_inside_printer_range;
 pub mod recipe_out_of_range;
@@ -101,6 +105,18 @@ pub mod safety_factor_zero_force;
 pub mod sim_json_roundtrips_zero_force_layer;
 pub mod suction_detector_raft_false_positive;
 pub mod thermal_degradation;
+// FIELD-SIM-GATED (uat-unskip-thermal-fields): sole entry point
+// `SimulationRunner::run_from_layer_inputs_with_voxel` is itself
+// `#[cfg(feature = "field-sim")]`; `PrintSimulation::thermal_field()` is
+// also gated. See the module's own doc comment for the full derivation.
+#[cfg(feature = "field-sim")]
+pub mod thermal_field_arrhenius_per_voxel;
+// FIELD-SIM-GATED (uat-unskip-thermal-fields): entry points include
+// `save_with_provenance` → `encode_paired_sidecar`, `load_envelope` →
+// `load_and_install_sidecar_with_budget`, sidecar decoder — all
+// `#[cfg(feature = "field-sim")]`. See the module's own doc comment.
+#[cfg(feature = "field-sim")]
+pub mod thermal_field_sidecar_roundtrip;
 // FIELD-SIM-GATED (uat-unskip-sim-fields-sidecar-roundtrip): every
 // producer scenario's entry points — SimulationRunner::
 // run_from_layer_inputs_with_voxel (simulation_runner.rs:446-448),
@@ -109,7 +125,6 @@ pub mod thermal_degradation;
 // (simulation_repo.rs:685-687) — are all #[cfg(feature = "field-sim")].
 // UAT-4 (Tier-1 negative) is ungated but tested under field-sim for
 // semantic strength. See the module's own doc comment.
-#[cfg(feature = "field-sim")]
 pub mod sim_fields_sidecar_roundtrip;
 // FIELD-SIM-GATED (uat-unskip-voxel-cure-field-photoinitiator-depletion):
 // every scenario's entry points — SimulationRunner::

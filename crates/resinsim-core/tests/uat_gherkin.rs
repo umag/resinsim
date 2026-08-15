@@ -121,6 +121,9 @@ use uat_steps::{
     cross_feature_toml_interchange,
     honest_zero_yield_fraction_on_calibrated_solid,
     light_crosstalk_3d_gaussian_convolution_runtime,
+    printer_envelope_min_extent_under_field_sim,
+    thermal_field_arrhenius_per_voxel,
+    thermal_field_sidecar_roundtrip,
     sim_fields_sidecar_roundtrip,
     voxel_cure_field_photoinitiator_depletion,
 };
@@ -491,6 +494,27 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // lifecycle. Also covered by the six-row "not yet derived by symbol"
     // note above.
     both_configs("printer-envelope-min-extent-under-field-sim", 1),
+    both_configs("sim-fields-sidecar-roundtrip", 4),
+    // PAID DOWN (uat-unskip-thermal-fields, 2026-08-16): both scenarios now
+    // have step definitions in the field-sim-gated module
+    // `thermal_field_arrhenius_per_voxel.rs`. Band membership derived BY
+    // SYMBOL: sole entry point `SimulationRunner::
+    // run_from_layer_inputs_with_voxel` (simulation_runner.rs:446-448) is
+    // `#[cfg(feature = "field-sim")]`; `PrintSimulation::thermal_field()`
+    // (print_simulation.rs:321) is also gated. Default features: module
+    // doesn't compile, both scenarios skip (register expects 2). Field-sim:
+    // both scenarios stepped (register expects 0).
+    per_config("thermal-field-arrhenius-per-voxel", 2, 0),
+    // PAID DOWN (uat-unskip-thermal-fields, 2026-08-16): all 3 scenarios
+    // now have step definitions in the field-sim-gated module
+    // `thermal_field_sidecar_roundtrip.rs`. Band membership derived BY
+    // SYMBOL: entry points include `save_with_provenance` →
+    // `encode_paired_sidecar`, `load_envelope` →
+    // `load_and_install_sidecar_with_budget`, sidecar decoder — all
+    // `#[cfg(feature = "field-sim")]`. Default features: module doesn't
+    // compile, all 3 scenarios skip (register expects 3). Field-sim: all 3
+    // stepped (register expects 0).
+    per_config("thermal-field-sidecar-roundtrip", 3, 0),
     // PAID DOWN (uat-unskip-sim-fields-sidecar-roundtrip, 2026-08-16):
     // all 4 scenarios now have step definitions in the field-sim-gated
     // module `sim_fields_sidecar_roundtrip.rs`. Band membership derived
@@ -503,8 +527,6 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // scenarios skip (register expects 4). Field-sim: all 4 stepped
     // (register expects 0).
     per_config("sim-fields-sidecar-roundtrip", 4, 0),
-    both_configs("thermal-field-arrhenius-per-voxel", 2),
-    both_configs("thermal-field-sidecar-roundtrip", 3),
     both_configs("viz-allow-mismatch-soft-fallback", 1),
     both_configs("viz-arrow-key-step-no-mesh-reupload", 1),
     both_configs("viz-arrow-keys-step-layer-with-saturation", 1),

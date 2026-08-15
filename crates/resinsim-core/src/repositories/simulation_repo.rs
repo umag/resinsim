@@ -487,6 +487,9 @@ fn encode_paired_sidecar(
     if sim.stress_field().is_some() {
         fields_present.push(FieldKind::Stress.name().to_string());
     }
+    if sim.thermal_field().is_some() {
+        fields_present.push(FieldKind::Thermal.name().to_string());
+    }
     let pointer_path = bin_final
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
