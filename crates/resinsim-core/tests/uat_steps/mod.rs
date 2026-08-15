@@ -68,6 +68,13 @@ pub mod legacy_resin_toml_defaults;
 pub mod legacy_resin_toml_without_recipe;
 pub mod legacy_resin_toml_without_ref_lift_speed;
 pub mod light_crosstalk_3d_gaussian_convolution;
+// FIELD-SIM-GATED (uat-unskip-light-crosstalk-3d-gaussian-convolution): sole
+// entry point `SimulationRunner::run_from_layer_inputs_with_voxel` is itself
+// `#[cfg(feature = "field-sim")]`. SECOND module for this spec — the first
+// (ungated, above) covers UAT-5/6/7 validation scenarios. See the module's
+// own doc comment for the full derivation.
+#[cfg(feature = "field-sim")]
+pub mod light_crosstalk_3d_gaussian_convolution_runtime;
 pub mod nanodlp_archive_bomb_rejected;
 pub mod nanodlp_calibrate_compares_real_force;
 pub mod nanodlp_import_simulates;

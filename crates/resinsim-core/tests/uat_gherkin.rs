@@ -116,7 +116,9 @@ use uat_steps::{
 #[allow(unused_imports, clippy::single_component_path_imports)]
 use uat_steps::{
     calibration_disclosure_3of3_predicate, cli_sim_rejects_tampered_sidecar,
-    cross_feature_toml_interchange, honest_zero_yield_fraction_on_calibrated_solid,
+    cross_feature_toml_interchange,
+    honest_zero_yield_fraction_on_calibrated_solid,
+    light_crosstalk_3d_gaussian_convolution_runtime,
     voxel_cure_field_photoinitiator_depletion,
 };
 
@@ -459,17 +461,15 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // Default features stay fully unreachable (2 skipped, unchanged);
     // field-sim now steps both scenarios (0 skipped).
     per_config("honest-zero-yield-fraction-on-calibrated-solid", 2, 0),
-    // PAID DOWN (uat-unskip-band-d step 5, 2026-08-06): UAT-5/UAT-6/UAT-7
-    // (the σ = 0.0 / σ > MAX_SIGMA_UM validate-time rejections) landed as
-    // an UNGATED module — see `light_crosstalk_3d_gaussian_convolution.rs`'s
-    // module doc for the grep evidence that `PrinterProfile::validate`'s
-    // crosstalk block sits before the file's only field-sim `#[cfg]` block
-    // — dropping this row from 9 to 6 in BOTH columns. UAT-1..4 and
-    // UAT-8..9 (the runtime 3D convolution behaviour) stay declared debt:
-    // their entry point is the voxel cure path, itself gated, and already
-    // covered at the nextest layer by `voxel_cure_crosstalk_integration.rs`
-    // per the spec's own "See also" section.
-    both_configs("light-crosstalk-3d-gaussian-convolution", 6),
+    // PAID DOWN (uat-unskip-light-crosstalk-3d-gaussian-convolution,
+    // 2026-08-15): UAT-1/2/3/4/8/9 (the runtime 3D convolution behaviour)
+    // landed as a SECOND, field-sim-gated module
+    // (`light_crosstalk_3d_gaussian_convolution_runtime.rs`), mapped via
+    // `STEP_DEF_MODULE_RENAMES`. Under default features the 6 runtime
+    // scenarios are skipped (their step registrations don't compile);
+    // under field-sim all 6 pass. UAT-5/6/7 validation steps remain in the
+    // original ungated module. Previously both_configs(6).
+    per_config("light-crosstalk-3d-gaussian-convolution", 6, 0),
     // PRODUCTION-BLOCKED (uat-unskip-band-d step 9, 2026-08-06): the
     // min-extent check this scenario needs does not exist yet in
     // `PrinterProfile::validate`. The blocking production issue is
@@ -510,8 +510,15 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
 /// Step-def modules whose file name does not match their spec's file name.
 /// Kept explicit so the allowlist check does not silently treat a stepped
 /// spec as un-stepped.
-const STEP_DEF_MODULE_RENAMES: &[(&str, &str)] =
-    &[("recipe_out_of_range", "recipe-outside-printer-range")];
+const STEP_DEF_MODULE_RENAMES: &[(&str, &str)] = &[
+    ("recipe_out_of_range", "recipe-outside-printer-range"),
+    // Second module for this spec — the first (ungated) covers UAT-5/6/7
+    // validation; this one (field-sim-gated) covers UAT-1/2/3/4/8/9 runtime.
+    (
+        "light_crosstalk_3d_gaussian_convolution_runtime",
+        "light-crosstalk-3d-gaussian-convolution",
+    ),
+];
 
 /// Modules under `uat_steps/` that are shared support code, not per-spec
 /// step-def bindings. Single source for this list — both layer 1 (below)
