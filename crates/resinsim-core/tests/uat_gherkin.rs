@@ -92,7 +92,6 @@ use uat_steps::{
     cli_report_health_print_time, cli_report_health_surfaces_ea_default_advisory,
     cli_requires_resin_for_recipe_fields,
     cli_sim_producer_writes_sim_json, cli_sim_rejects_unknown_schema_version,
-    cli_sim_voxel_cure_emits_tier2_thermal_log,
     cli_temperature_flag_validation, ctb_layer_height_authority, cumulative_times_sec_accessor,
     cure_depth_nan_guard, interlayer_crack_knockdown_scales_with_perimeter, legacy_resin_toml_defaults,
     legacy_resin_toml_without_recipe, legacy_resin_toml_without_ref_lift_speed,
@@ -118,6 +117,7 @@ use uat_steps::{
 use uat_steps::{
     calibration_disclosure_3of3_predicate, cli_sim_budget_mismatch_on_load,
     cli_sim_rejects_tampered_sidecar,
+    cli_sim_voxel_cure_emits_tier2_thermal_log,
     cross_feature_toml_interchange,
     honest_zero_yield_fraction_on_calibrated_solid,
     light_crosstalk_3d_gaussian_convolution_runtime,
@@ -433,7 +433,17 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // rather than a binary-build-seam one — is a precondition of the
     // increment that scopes each of these rows individually, not assumed
     // here.
-    both_configs("cli-sim-voxel-cure-emits-tier2-thermal-log", 1),
+    // PAID DOWN (uat-unskip-cli-sim-voxel-cure-emits-tier2-thermal-log-impl,
+    // 2026-08-16): the single scenario now has step definitions in the
+    // field-sim-gated module `cli_sim_voxel_cure_emits_tier2_thermal_log.rs`.
+    // Band membership derived BY SYMBOL: CLI `--voxel-cure-mm` (main.rs:234)
+    // is `#[cfg(feature = "field-sim")]`; `apply_voxel_thermal_for_layer`
+    // (simulation_runner.rs:1520) and the tier-2 thermal log emission
+    // (simulation_runner.rs:1573-1586 info line, 1250-1261 complete line)
+    // are all inside `#[cfg(feature = "field-sim")]` blocks. Default
+    // features: module doesn't compile, scenario skips (register expects 1).
+    // Field-sim: scenario passes (register expects 0).
+    per_config("cli-sim-voxel-cure-emits-tier2-thermal-log", 1, 0),
     // PAID DOWN (uat-unskip-cross-feature-toml-interchange, 2026-08-15):
     // both scenarios now have step definitions in the field-sim-gated module
     // `cross_feature_toml_interchange.rs`. Band membership derived BY

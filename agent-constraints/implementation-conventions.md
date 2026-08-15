@@ -249,16 +249,15 @@ both configs" is now THREE-PART:
    differ, and each alias's split must match its OWN register column
    exactly — never the other alias's.
 
-Current shapes (`uat-unskip-light-crosstalk-3d-gaussian-convolution`,
-landed 2026-08-15 — light-crosstalk UAT-1/2/3/4/8/9 6 scenarios
-field-sim-gated via a second step-def module
-`light_crosstalk_3d_gaussian_convolution_runtime.rs`):
+Current shapes (`uat-unskip-cli-sim-voxel-cure-emits-tier2-thermal-log-impl`,
+landed 2026-08-16 — tier-2 thermal log UAT-1 1 scenario field-sim-gated
+via `cli_sim_voxel_cure_emits_tier2_thermal_log.rs`):
 
 - `cargo uat` (default features): 54 features, 487 passed / 69 skipped /
   0 failed steps, exit 0.
-- `cargo uat-field-sim`: 54 features, 576 passed / 52 skipped / 0 failed
+- `cargo uat-field-sim`: 54 features, 673 passed / 36 skipped / 0 failed
   steps, exit 0.
-- Register: 24 entries, column sums 69 (default) / 52 (field-sim).
+- Register: 24 entries, column sums 69 (default) / 36 (field-sim).
 
 Both shapes move as the campaign lands more increments — trust each
 alias's own `[Consolidated total]` line (which now also prints its active

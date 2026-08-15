@@ -60,6 +60,12 @@ pub mod cli_report_health_surfaces_ea_default_advisory;
 pub mod cli_requires_resin_for_recipe_fields;
 pub mod cli_sim_producer_writes_sim_json;
 pub mod cli_sim_rejects_unknown_schema_version;
+// FIELD-SIM-GATED (uat-unskip-cli-sim-voxel-cure-emits-tier2-thermal-log-impl):
+// every entry point is #[cfg(feature = "field-sim")] — CLI --voxel-cure-mm
+// (main.rs:234), apply_voxel_thermal_for_layer (simulation_runner.rs:1520),
+// tier-2 thermal log emission (simulation_runner.rs:1573-1586 + 1250-1261).
+// See the module's own doc comment for the full symbol derivation.
+#[cfg(feature = "field-sim")]
 pub mod cli_sim_voxel_cure_emits_tier2_thermal_log;
 pub mod cli_temperature_flag_validation;
 pub mod ctb_layer_height_authority;
