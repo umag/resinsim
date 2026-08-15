@@ -88,6 +88,16 @@ pub mod safety_factor_zero_force;
 pub mod sim_json_roundtrips_zero_force_layer;
 pub mod suction_detector_raft_false_positive;
 pub mod thermal_degradation;
+// FIELD-SIM-GATED (uat-unskip-sim-fields-sidecar-roundtrip): every
+// producer scenario's entry points — SimulationRunner::
+// run_from_layer_inputs_with_voxel (simulation_runner.rs:446-448),
+// encode_paired_sidecar (simulation_repo.rs:424-435), CLI --voxel-cure-mm
+// (main.rs:234-236), load_and_install_sidecar_with_budget
+// (simulation_repo.rs:685-687) — are all #[cfg(feature = "field-sim")].
+// UAT-4 (Tier-1 negative) is ungated but tested under field-sim for
+// semantic strength. See the module's own doc comment.
+#[cfg(feature = "field-sim")]
+pub mod sim_fields_sidecar_roundtrip;
 // FIELD-SIM-GATED (uat-unskip-voxel-cure-field-photoinitiator-depletion):
 // every scenario's entry points — SimulationRunner::
 // run_from_layer_inputs_with_voxel (simulation_runner.rs:446-448),

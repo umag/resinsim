@@ -120,6 +120,7 @@ use uat_steps::{
     cross_feature_toml_interchange,
     honest_zero_yield_fraction_on_calibrated_solid,
     light_crosstalk_3d_gaussian_convolution_runtime,
+    sim_fields_sidecar_roundtrip,
     voxel_cure_field_photoinitiator_depletion,
 };
 
@@ -480,7 +481,18 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // lifecycle. Also covered by the six-row "not yet derived by symbol"
     // note above.
     both_configs("printer-envelope-min-extent-under-field-sim", 1),
-    both_configs("sim-fields-sidecar-roundtrip", 4),
+    // PAID DOWN (uat-unskip-sim-fields-sidecar-roundtrip, 2026-08-16):
+    // all 4 scenarios now have step definitions in the field-sim-gated
+    // module `sim_fields_sidecar_roundtrip.rs`. Band membership derived
+    // BY SYMBOL: --voxel-cure-mm (main.rs:234-236), run_from_layer_inputs_
+    // with_voxel (simulation_runner.rs:446-448), encode_paired_sidecar
+    // (simulation_repo.rs:424-435), load_and_install_sidecar_with_budget
+    // (simulation_repo.rs:685-687) — all #[cfg(feature = "field-sim")].
+    // UAT-4 (Tier-1 negative) is ungated but tested under field-sim for
+    // semantic strength. Default features: module doesn't compile, all 4
+    // scenarios skip (register expects 4). Field-sim: all 4 stepped
+    // (register expects 0).
+    per_config("sim-fields-sidecar-roundtrip", 4, 0),
     both_configs("thermal-field-arrhenius-per-voxel", 2),
     both_configs("thermal-field-sidecar-roundtrip", 3),
     both_configs("viz-allow-mismatch-soft-fallback", 1),
