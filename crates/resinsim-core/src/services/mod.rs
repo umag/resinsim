@@ -22,6 +22,10 @@ pub mod support_analyzer;
 pub mod thermal_calculator;
 #[cfg(feature = "field-sim")]
 pub mod thermal_diffusion_solver;
+#[cfg(feature = "gpu")]
+pub mod gpu_context;
+#[cfg(feature = "gpu")]
+pub mod thermal_diffusion_gpu;
 pub mod uniformity_calculator;
 #[cfg(feature = "field-sim")]
 pub mod voxel_cure_calculator;
@@ -58,3 +62,7 @@ pub use uniformity_calculator::UniformityCalculator;
 #[cfg(feature = "field-sim")]
 pub use voxel_cure_calculator::{VoxelCureCalculator, VoxelCureError};
 pub use z_axis_compensator::ZAxisCompensator;
+#[cfg(feature = "gpu")]
+pub use gpu_context::GpuContext;
+#[cfg(feature = "gpu")]
+pub use thermal_diffusion_gpu::GpuThermalBuffers;

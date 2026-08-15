@@ -17,6 +17,8 @@ serde_json = "1"
 # field-sim feature, which gates the voxel cure path (ADR-0017, t2f1).
 # Default builds remain lean (no ndarray dep, no voxel modules compiled).
 field-sim = ["resinsim-core/field-sim"]
+# ADR-0025: GPU thermal solver forwarding. Implies field-sim.
+gpu = ["field-sim", "resinsim-core/gpu"]
 
 [dev-dependencies]
 proptest = "1.9.0"

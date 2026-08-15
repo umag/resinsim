@@ -85,6 +85,7 @@ fn provenance() -> Provenance {
         printer_name: "Linear Test Printer".into(),
         n_supports: 20,
         tip_radius_mm: 0.2,
+        compute_device: None,
     }
 }
 

@@ -32,6 +32,15 @@ ndarray = { version = "0.16", features = ["serde", "rayon"], optional = true }
 # ADR-0019 §Hash choice).
 zstd = { version = "=0.13.3", optional = true, default-features = false }
 sha2 = { version = "=0.10.9", optional = true }
+# t2f5 / ADR-0025: GPU-accelerated thermal FTCS solver.
+# wgpu: cross-platform compute shader API (Vulkan / Metal / DX12).
+# bytemuck: zero-copy Pod casting for GPU buffer upload/download.
+# pollster: minimal blocking executor to bridge wgpu's async API in
+# the synchronous simulation runner (request_adapter, request_device,
+# map_async).
+wgpu = { version = "24", optional = true }
+bytemuck = { version = "1.21", optional = true, features = ["derive"] }
+pollster = { version = "0.4", optional = true }
 
 [features]
 # Tier-2 voxel cure path (ADR-0017 / t2f1, extended by ADR-0019 / t2f3.5).
@@ -39,6 +48,9 @@ sha2 = { version = "=0.10.9", optional = true }
 # envelope) plus zstd + sha2 for the paired binary sidecar that carries
 # all four voxel fields (cure / photoinitiator / strain / stress) on disk.
 field-sim = ["dep:ndarray", "dep:zstd", "dep:sha2"]
+# t2f5 / ADR-0025: GPU thermal solver. Implies field-sim (ThermalField
+# needs ndarray). Pulls in wgpu + bytemuck + pollster.
+gpu = ["field-sim", "dep:wgpu", "dep:bytemuck", "dep:pollster"]
 
 [dev-dependencies]
 proptest = "1.9.0"

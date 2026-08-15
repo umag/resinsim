@@ -250,6 +250,10 @@ export const ProvenanceV2 = z
     printer_name: z.string(),
     n_supports: z.number().int(),
     tip_radius_mm: z.number(),
+    /** ADR-0025 / t2f5: compute device that ran the thermal solver.
+     * "cpu" for the default Rayon path; the wgpu adapter name for
+     * the GPU path. Additive — schema_version stays 2. */
+    compute_device: z.string().optional(),
   })
   .meta({ id: "ProvenanceV2" });
 

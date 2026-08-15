@@ -157,6 +157,13 @@ pub struct Provenance {
     pub n_supports: u32,
     /// Support tip radius (mm) used for the run.
     pub tip_radius_mm: f32,
+    /// ADR-0025 / t2f5: compute device that ran the thermal solver.
+    /// `"cpu"` for the default Rayon path; the wgpu adapter name
+    /// (e.g. `"Apple M1 Pro"`) for the GPU path. Additive —
+    /// `schema_version` stays 2; older consumers ignore it via
+    /// `serde(default)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_device: Option<String>,
 }
 
 impl SidecarPointer {
@@ -1391,6 +1398,7 @@ mod tests {
                 printer_name: "Test".into(),
                 n_supports: 20,
                 tip_radius_mm: 0.2,
+                compute_device: None,
             },
         )
         .expect("seed valid envelope");
@@ -1447,6 +1455,7 @@ mod tests {
             printer_name: "Test".into(),
             n_supports: 20,
             tip_radius_mm: 0.2,
+            compute_device: None,
         }
     }
 

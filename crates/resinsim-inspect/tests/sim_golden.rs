@@ -114,6 +114,7 @@ fn fixed_provenance() -> Provenance {
         printer_name: "Generic MSLA 4K".into(),
         n_supports: 20,
         tip_radius_mm: 0.2,
+        compute_device: None,
     }
 }
 

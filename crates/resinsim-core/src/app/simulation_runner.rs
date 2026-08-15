@@ -20,6 +20,8 @@ use crate::services::{
 use crate::services::{
     BoundaryConditions, LayerTimingCalculator, ThermalCalculator, ThermalDiffusionSolver,
 };
+#[cfg(feature = "gpu")]
+use crate::services::{GpuContext, GpuThermalBuffers};
 #[cfg(feature = "field-sim")]
 use crate::values::ThermalTimeConstant;
 use crate::simulation::PrintSimulation;
@@ -142,6 +144,12 @@ struct VoxelState {
     /// yet. Set false at construction, true after layer 0's
     /// `apply_voxel_thermal_for_layer`.
     thermal_log_emitted: bool,
+    // --- ADR-0025 / t2f5 GPU acceleration ---
+    /// GPU thermal buffers for the ping-pong double-buffer dispatch.
+    /// `Some` when `--gpu` was passed and a GPU adapter was available;
+    /// `None` falls back to the CPU solver.
+    #[cfg(feature = "gpu")]
+    gpu_thermal: Option<(GpuContext, GpuThermalBuffers)>,
 }
 
 /// Output of [`SimulationRunner::prepare_layer_inputs`]: everything the
@@ -465,6 +473,57 @@ impl SimulationRunner {
             &prepared.layer_height_provenance,
             resin.name(),
         );
+        let PreparedInputs {
+            areas,
+            masks,
+            per_layer_overrides,
+            layer_heights,
+            layer_height_provenance,
+        } = prepared;
+        Self::run_inner_full(
+            &areas,
+            &masks,
+            Some(&per_layer_overrides),
+            resin,
+            printer,
+            supports,
+            plate,
+            ambient,
+            initial_led_temp,
+            voxel_cure_mm,
+            layer_heights.as_slice(),
+            Some(layer_height_provenance),
+            #[cfg(feature = "gpu")]
+            None,
+        )
+    }
+
+    /// ADR-0025 / t2f5: voxel-mode entry point with optional GPU context.
+    /// When `gpu_context` is `Some`, the thermal solver dispatches to
+    /// the GPU; when `None`, the existing CPU path runs.
+    #[cfg(feature = "gpu")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_from_layer_inputs_with_voxel_gpu(
+        layers: &[LayerInput],
+        resin: &ResinProfile,
+        printer: &PrinterProfile,
+        supports: &SupportConfig,
+        plate: &PlateAdhesionProfile,
+        ambient: AmbientTemperature,
+        initial_led_temp: Option<InitialLedTemperature>,
+        voxel_cure_mm: Option<f32>,
+        gpu_context: Option<GpuContext>,
+    ) -> Result<PrintSimulation, String> {
+        resin.validate().map_err(|e| format!("resin: {e}"))?;
+        printer.validate().map_err(|e| format!("printer: {e}"))?;
+        pairing_validator::validate_pairing(printer, resin.recipe())
+            .map_err(|violations| format!("pairing: {}", violations.join("; ")))?;
+
+        let prepared = Self::prepare_layer_inputs(layers, resin, printer)?;
+        Self::emit_layer_height_warning_if_mismatch(
+            &prepared.layer_height_provenance,
+            resin.name(),
+        );
         // Destructure to move the Vec instead of cloning.
         let PreparedInputs {
             areas,
@@ -486,6 +545,8 @@ impl SimulationRunner {
             voxel_cure_mm,
             layer_heights.as_slice(),
             Some(layer_height_provenance),
+            #[cfg(feature = "gpu")]
+            gpu_context,
         )
     }
 
@@ -526,6 +587,8 @@ impl SimulationRunner {
             None,
             layer_heights_um,
             layer_height_provenance,
+            #[cfg(feature = "gpu")]
+            None,
         )
     }
 
@@ -557,6 +620,8 @@ impl SimulationRunner {
         #[cfg_attr(not(feature = "field-sim"), allow(unused_variables))] voxel_cure_mm: Option<f32>,
         layer_heights_um: &[f32],
         layer_height_provenance: Option<LayerHeightProvenance>,
+        #[cfg(feature = "gpu")]
+        gpu_context: Option<GpuContext>,
     ) -> Result<PrintSimulation, String> {
         // Caller-contract: `layer_heights_um` is indexed by layer index;
         // its length must equal `areas.len()` so per-layer dispatch can
@@ -751,6 +816,8 @@ impl SimulationRunner {
                         total_thermal_substeps: 0,
                         total_thermal_wallclock_sec: 0.0,
                         thermal_log_emitted: false,
+                        #[cfg(feature = "gpu")]
+                        gpu_thermal: None,
                     })
                 } else {
                     None
@@ -761,6 +828,21 @@ impl SimulationRunner {
         } else {
             None
         };
+
+        // ADR-0025 / t2f5: initialize GPU buffers when gpu_context is provided.
+        #[cfg(feature = "gpu")]
+        if let (Some(state), Some(ctx)) = (voxel_state.as_mut(), gpu_context) {
+            let bufs = GpuThermalBuffers::new(&ctx, &state.thermal);
+            eprintln!(
+                "tier-2 thermal GPU: adapter={}, voxels={}",
+                ctx.adapter_name(),
+                {
+                    let (nx, ny, nz) = state.thermal.dimensions();
+                    (nx as u64) * (ny as u64) * (nz as u64)
+                }
+            );
+            state.gpu_thermal = Some((ctx, bufs));
+        }
 
         for (i, &area) in areas.iter().enumerate() {
             let (exposure_override, lift_speed_override) = per_layer_overrides
@@ -1165,20 +1247,62 @@ impl SimulationRunner {
             state.thermal_log_emitted = true;
         }
         let start = std::time::Instant::now();
-        for _ in 0..substeps_per_layer {
+        // ADR-0025 / t2f5: GPU dispatch when available, else CPU fallback.
+        #[cfg(feature = "gpu")]
+        let used_gpu = if let Some((ref ctx, ref mut bufs)) = state.gpu_thermal {
+            let (nx, ny, nz) = state.thermal.dimensions();
+            bufs.upload(ctx, &state.thermal);
+            bufs.dispatch_substeps(
+                ctx,
+                substeps_per_layer,
+                dt_use,
+                state.alpha_m2_s,
+                state.thermal.voxel_size_mm(),
+                &bcs,
+                nx,
+                ny,
+                nz,
+            );
+            bufs.download(ctx, &mut state.thermal);
+            if !state.thermal.volume_max_c().is_finite() {
+                return Err(format!(
+                    "ADR-0025 / t2f5 GPU thermal solver produced non-finite field at layer {layer}"
+                ));
+            }
+            true
+        } else {
+            false
+        };
+        #[cfg(not(feature = "gpu"))]
+        let used_gpu = false;
+        if !used_gpu {
+            Self::run_cpu_thermal_substeps(state, substeps_per_layer, dt_use, &bcs, layer)?;
+        }
+        state.total_thermal_substeps += u64::from(substeps_per_layer);
+        state.total_thermal_wallclock_sec += start.elapsed().as_secs_f64();
+        Ok(())
+    }
+
+    #[cfg(feature = "field-sim")]
+    fn run_cpu_thermal_substeps(
+        state: &mut VoxelState,
+        substeps: u32,
+        dt_use: f32,
+        bcs: &BoundaryConditions,
+        layer: u32,
+    ) -> Result<(), String> {
+        for _ in 0..substeps {
             ThermalDiffusionSolver::step(
                 &mut state.thermal,
                 &mut state.thermal_scratch,
                 dt_use,
                 state.alpha_m2_s,
-                &bcs,
+                bcs,
             )
             .map_err(|e| {
                 format!("ADR-0020 / t2f4 thermal solver error at layer {layer}: {e}")
             })?;
         }
-        state.total_thermal_substeps += u64::from(substeps_per_layer);
-        state.total_thermal_wallclock_sec += start.elapsed().as_secs_f64();
         Ok(())
     }
 

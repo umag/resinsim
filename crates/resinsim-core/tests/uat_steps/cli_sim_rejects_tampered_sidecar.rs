@@ -135,6 +135,7 @@ fn provenance() -> resinsim_core::repositories::Provenance {
         printer_name: "Generic MSLA 4K".into(),
         n_supports: 10,
         tip_radius_mm: 0.2,
+        compute_device: None,
     }
 }
 

@@ -188,6 +188,7 @@ fn when_user_invokes_resinsim_sim(world: &mut UatWorld) {
                 printer_name: printer.name().to_string(),
                 n_supports: 10,
                 tip_radius_mm: 0.2,
+                compute_device: None,
             };
             match save_with_provenance(&out_path, &sim, &provenance) {
                 Ok(()) => {

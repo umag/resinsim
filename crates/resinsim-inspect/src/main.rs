@@ -237,6 +237,15 @@ enum Commands {
         #[cfg(feature = "field-sim")]
         #[arg(long, value_parser = parse_voxel_cure_mm)]
         voxel_cure_mm: Option<f32>,
+        /// **GPU thermal solver** (ADR-0025 / t2f5). When present,
+        /// dispatches the FTCS thermal diffusion substeps to a wgpu
+        /// compute shader instead of the CPU Rayon path. Falls back
+        /// to CPU silently when no GPU adapter is available. Requires
+        /// `--voxel-cure-mm` (the thermal field only exists in
+        /// voxel mode). Only available with the `gpu` Cargo feature.
+        #[cfg(feature = "gpu")]
+        #[arg(long)]
+        gpu: bool,
     },
 }
 
@@ -703,6 +712,8 @@ fn main() {
             out,
             #[cfg(feature = "field-sim")]
             voxel_cure_mm,
+            #[cfg(feature = "gpu")]
+            gpu,
         } => cmd_sim(
             stl.as_deref(),
             file.as_deref(),
@@ -718,6 +729,10 @@ fn main() {
             voxel_cure_mm,
             #[cfg(not(feature = "field-sim"))]
             None::<f32>,
+            #[cfg(feature = "gpu")]
+            gpu,
+            #[cfg(not(feature = "gpu"))]
+            false,
         ),
     }
 }
@@ -1518,6 +1533,8 @@ fn cmd_calibrate(
         ambient_typed,
         None,
         None,
+        #[cfg(feature = "gpu")]
+        None,
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -1756,6 +1773,8 @@ fn run_simulation_with_optional_voxel(
     ambient: resinsim_core::values::AmbientTemperature,
     initial_led_temp: Option<resinsim_core::values::InitialLedTemperature>,
     voxel_cure_mm: Option<f32>,
+    #[cfg(feature = "gpu")]
+    gpu_context: Option<resinsim_core::services::GpuContext>,
 ) -> Result<resinsim_core::simulation::PrintSimulation, String> {
     use resinsim_core::app::SimulationRunner;
 
@@ -1767,16 +1786,33 @@ fn run_simulation_with_optional_voxel(
             .ok_or_else(|| format!("unknown file format: {}", input_path.display()))?;
         if fmt == "CTB" || fmt == "NANODLP" {
             let (_info, layers) = resinsim_core::io::sliced::parse_sliced(input_path)?;
-            return SimulationRunner::run_from_layer_inputs_with_voxel(
-                &layers,
-                resin,
-                printer,
-                supports,
-                plate,
-                ambient,
-                initial_led_temp,
-                voxel_cure_mm,
-            );
+            #[cfg(feature = "gpu")]
+            {
+                return SimulationRunner::run_from_layer_inputs_with_voxel_gpu(
+                    &layers,
+                    resin,
+                    printer,
+                    supports,
+                    plate,
+                    ambient,
+                    initial_led_temp,
+                    voxel_cure_mm,
+                    gpu_context,
+                );
+            }
+            #[cfg(not(feature = "gpu"))]
+            {
+                return SimulationRunner::run_from_layer_inputs_with_voxel(
+                    &layers,
+                    resin,
+                    printer,
+                    supports,
+                    plate,
+                    ambient,
+                    initial_led_temp,
+                    voxel_cure_mm,
+                );
+            }
         }
         eprintln!(
             "note: --voxel-cure-mm is set but input is {fmt}, which has no per-layer masks; \
@@ -1834,6 +1870,8 @@ fn cmd_sim(
     // SimulationRunner voxel-aware entry point when the input is a CTB
     // (voxel mode requires per-layer masks).
     voxel_cure_mm: Option<f32>,
+    #[cfg_attr(not(feature = "gpu"), allow(unused_variables))]
+    gpu: bool,
 ) {
     use resinsim_core::app::SimulationRunner;
     use resinsim_core::repositories::{save_stamped, EnvelopeStamp, Provenance};
@@ -1915,6 +1953,25 @@ fn cmd_sim(
         resolved.printer.name()
     );
 
+    // ADR-0025 / t2f5: construct GpuContext when --gpu is passed.
+    // Capture adapter name before the context is moved into the runner.
+    #[cfg(feature = "gpu")]
+    let (gpu_context, gpu_adapter_name) = if gpu {
+        match resinsim_core::services::GpuContext::try_new() {
+            Some(ctx) => {
+                let name = ctx.adapter_name().to_string();
+                eprintln!("GPU adapter: {name}");
+                (Some(ctx), Some(name))
+            }
+            None => {
+                eprintln!("note: --gpu requested but no GPU adapter available; falling back to CPU");
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+
     let start = std::time::Instant::now();
     let sim_result = run_simulation_with_optional_voxel(
         input_path,
@@ -1925,6 +1982,8 @@ fn cmd_sim(
         ambient_typed,
         initial_led_temp_typed,
         voxel_cure_mm,
+        #[cfg(feature = "gpu")]
+        gpu_context,
     );
     let sim = match sim_result {
         Ok(s) => s,
@@ -1943,6 +2002,16 @@ fn cmd_sim(
         printer_name: resolved.printer.name().to_string(),
         n_supports,
         tip_radius_mm: tip_radius,
+        compute_device: {
+            #[cfg(feature = "gpu")]
+            {
+                gpu_adapter_name.clone().or_else(|| Some("cpu".to_string()))
+            }
+            #[cfg(not(feature = "gpu"))]
+            {
+                Some("cpu".to_string())
+            }
+        },
     };
     let stamp = EnvelopeStamp {
         provenance: Some(&provenance),
