@@ -949,6 +949,7 @@ impl SimulationRunner {
             mean_t_c: f32,
             result: crate::entities::LayerResult,
             failures: Vec<crate::entities::FailureEvent>,
+            strain_done: bool,
         }
         #[cfg(feature = "gpu")]
         let mut deferred_layers: Vec<DeferredLayer> = Vec::new();
@@ -998,11 +999,108 @@ impl SimulationRunner {
 
                 Self::apply_voxel_thermal_for_layer(state, i as u32, recipe, printer)?;
 
-                // ADR-0025 Stage B: when GPU cure is active, defer
-                // shrinkage/stress/layer-caches until the batch flushes.
-                // Snapshot mean_t_c now since thermal evolves between layers.
+                // ADR-0025 Stage E: when GPU cure is active, use the
+                // combined encoder path for strain/stress (on-GPU dose
+                // copy, no CPU upload_dose round-trip). Strain must be
+                // downloaded per-layer since the buffer is reused.
+                // Cure download remains deferred (batch amortisation).
                 #[cfg(feature = "gpu")]
                 if gpu_cure_active {
+                    let mut strain_done = false;
+                    if let Some(ref ss_bufs) = state.gpu_strain_stress {
+                        let (ctx, _) = state
+                            .gpu_thermal
+                            .as_ref()
+                            .expect("gpu_strain_stress implies gpu_thermal");
+                        let gpu_cure = state
+                            .gpu_cure
+                            .as_ref()
+                            .expect("gpu_cure_active implies gpu_cure");
+                        let vat_temp = crate::services::ThermalCalculator::vat_temperature_at_layer_v2(
+                            recipe,
+                            printer,
+                            thermal.ambient.value(),
+                            thermal.initial_led_temp.map(|t| t.value()),
+                            i as u32,
+                        );
+                        let ec_t = crate::services::CureCalculator::ec_at_temp(
+                            Energy::new(state.ec_ref_mj_cm2)
+                                .expect("ec_ref validated > 0 at profile load"),
+                            state.ref_temp_c,
+                            vat_temp,
+                            state.ea_cure_kj_mol,
+                        );
+                        let mut encoder = ctx
+                            .device()
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("combined_strain_encoder"),
+                            });
+                        ss_bufs.encode_copy_dose_from(&mut encoder, gpu_cure.cure_buf());
+                        ss_bufs.encode_strain_stress_pass(
+                            ctx,
+                            &mut encoder,
+                            i as u32,
+                            ec_t.value(),
+                            state.dp_um,
+                            layer_height_um_i,
+                            state.linear_shrinkage_frac,
+                            state.shrinkage_anisotropy_z_ratio,
+                            state.youngs_modulus_mpa,
+                            state.poissons_ratio,
+                            {
+                                let (_, _, nz) = state.cure.dimensions();
+                                nz
+                            },
+                        );
+                        ctx.queue().submit(Some(encoder.finish()));
+                        let gpu_strain = ss_bufs.download_strain(ctx);
+                        let gpu_stress = ss_bufs.download_stress(ctx);
+                        let (nx, ny, _) = state.cure.dimensions();
+                        for ix in 0..nx {
+                            for iy in 0..ny {
+                                let idx = (ix * ny + iy) as usize;
+                                let tensor = gpu_strain[idx];
+                                if tensor == crate::values::StrainTensor::zero() {
+                                    continue;
+                                }
+                                state
+                                    .strain
+                                    .lock_strain_at(ix, iy, i as u32, tensor)
+                                    .map_err(|e| {
+                                        format!("gpu strain lock_strain_at({ix},{iy},{}): {e}", i)
+                                    })?;
+                                let comps = gpu_stress[idx];
+                                let sigma = crate::values::StressTensor::new(
+                                    comps[0], comps[1], comps[2], comps[3], comps[4], comps[5],
+                                )
+                                .map_err(|e| {
+                                    format!("gpu stress at({ix},{iy},{}): {e}", i)
+                                })?;
+                                state
+                                    .stress
+                                    .accumulate_at(ix, iy, i as u32, sigma)
+                                    .map_err(|e| {
+                                        format!("gpu stress accumulate_at({ix},{iy},{}): {e}", i)
+                                    })?;
+                            }
+                        }
+                        result.strain_magnitude_max = state.strain.magnitude_layer_max(i as u32).ok();
+                        result.stress_von_mises_max_mpa = state.stress.von_mises_layer_max(i as u32).ok();
+                        result.strain_gradient_max_frac = state.strain.gradient_layer_max(i as u32).ok();
+                        result.voxel_yield_fraction = state
+                            .stress
+                            .yield_fraction(i as u32, resin.tensile_strength_mpa())
+                            .ok();
+                        let strain_failures = FailurePredictor::predict_strain_failures(
+                            i as u32,
+                            &state.strain,
+                            &state.stress,
+                            resin,
+                        );
+                        failures.extend(strain_failures);
+                        strain_done = true;
+                    }
+
                     let mean_t_c = state.thermal.volume_mean_c();
                     deferred_layers.push(DeferredLayer {
                         index: i as u32,
@@ -1010,6 +1108,7 @@ impl SimulationRunner {
                         mean_t_c,
                         result,
                         failures,
+                        strain_done,
                     });
 
                     let is_batch_full = deferred_layers.len() >= GPU_CURE_BATCH_SIZE;
@@ -1029,6 +1128,7 @@ impl SimulationRunner {
                                 &thermal,
                                 recipe,
                                 printer,
+                                def.strain_done,
                             )?;
                             sim.add_layer(def.result, def.failures)
                                 .map_err(|e| format!("simulation: {e}"))?;
@@ -1545,10 +1645,11 @@ impl SimulationRunner {
         Ok(())
     }
 
-    /// ADR-0025 Stage B: run the deferred shrinkage, stress, layer-summary,
-    /// and failure-detection passes for a single layer after a GPU cure
-    /// batch has been downloaded. Called once per deferred layer inside the
-    /// batch-flush loop.
+    /// ADR-0025 Stage B/E: run the deferred cure-caches and (optionally)
+    /// shrinkage/stress passes for a single layer after a GPU cure batch
+    /// download. When `strain_done` is true (Stage E combined pipeline),
+    /// strain was already processed via GPU encode path — skip the CPU
+    /// shrinkage/stress and related caches.
     #[cfg(feature = "gpu")]
     #[allow(clippy::too_many_arguments)]
     fn finalize_voxel_layer(
@@ -1562,6 +1663,7 @@ impl SimulationRunner {
         thermal: &ThermalContext,
         recipe: &crate::entities::Recipe,
         printer: &PrinterProfile,
+        strain_done: bool,
     ) -> Result<(), String> {
         let _ = thermal;
         let vat_temp = VatTemperature::new(mean_t_c)
@@ -1586,28 +1688,30 @@ impl SimulationRunner {
             }
         }
 
-        Self::apply_voxel_shrinkage_for_layer(
-            state, layer, layer_height_um, thermal, recipe, printer,
-        )?;
-        Self::accumulate_layer_stress(state, layer)?;
+        if !strain_done {
+            Self::apply_voxel_shrinkage_for_layer(
+                state, layer, layer_height_um, thermal, recipe, printer,
+            )?;
+            Self::accumulate_layer_stress(state, layer)?;
 
-        result.strain_magnitude_max = state.strain.magnitude_layer_max(layer).ok();
-        result.stress_von_mises_max_mpa =
-            state.stress.von_mises_layer_max(layer).ok();
-        result.strain_gradient_max_frac =
-            state.strain.gradient_layer_max(layer).ok();
-        result.voxel_yield_fraction = state
-            .stress
-            .yield_fraction(layer, resin.tensile_strength_mpa())
-            .ok();
+            result.strain_magnitude_max = state.strain.magnitude_layer_max(layer).ok();
+            result.stress_von_mises_max_mpa =
+                state.stress.von_mises_layer_max(layer).ok();
+            result.strain_gradient_max_frac =
+                state.strain.gradient_layer_max(layer).ok();
+            result.voxel_yield_fraction = state
+                .stress
+                .yield_fraction(layer, resin.tensile_strength_mpa())
+                .ok();
 
-        let strain_failures = FailurePredictor::predict_strain_failures(
-            layer,
-            &state.strain,
-            &state.stress,
-            resin,
-        );
-        failures.extend(strain_failures);
+            let strain_failures = FailurePredictor::predict_strain_failures(
+                layer,
+                &state.strain,
+                &state.stress,
+                resin,
+            );
+            failures.extend(strain_failures);
+        }
         Ok(())
     }
 

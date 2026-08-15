@@ -262,6 +262,44 @@ impl GpuCureBuffers {
         k_d: f32,
         layer_height_um: f32,
     ) {
+        self.write_intensity(ctx, intensity_grid);
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("cure_encoder"),
+            });
+        self.encode_cure_pass(
+            ctx, &mut encoder, iz_top, nz, exposure_sec, dp_base, k_d, layer_height_um,
+        );
+        ctx.queue().submit(Some(encoder.finish()));
+    }
+
+    /// Write per-pixel intensity grid to the GPU buffer without
+    /// creating or submitting a command encoder.
+    pub fn write_intensity(&self, ctx: &GpuContext, intensity_grid: &[f32]) {
+        ctx.queue().write_buffer(
+            &self.intensity_buf,
+            0,
+            bytemuck::cast_slice(intensity_grid),
+        );
+    }
+
+    /// Record the cure column-march compute pass onto an external
+    /// `CommandEncoder` without submitting. Call `write_intensity`
+    /// first to stage the intensity data. The caller submits the
+    /// encoder after recording all passes (e.g. cure + strain).
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_cure_pass(
+        &self,
+        ctx: &GpuContext,
+        encoder: &mut wgpu::CommandEncoder,
+        iz_top: u32,
+        nz: u32,
+        exposure_sec: f32,
+        dp_base: f32,
+        k_d: f32,
+        layer_height_um: f32,
+    ) {
         let params = GpuCureParams {
             nx: self.nx,
             ny: self.ny,
@@ -278,11 +316,6 @@ impl GpuCureBuffers {
         };
         ctx.queue()
             .write_buffer(&self.params_buf, 0, bytemuck::bytes_of(&params));
-        ctx.queue().write_buffer(
-            &self.intensity_buf,
-            0,
-            bytemuck::cast_slice(intensity_grid),
-        );
 
         let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cure_bind"),
@@ -309,12 +342,6 @@ impl GpuCureBuffers {
 
         let wg_x = self.nx.div_ceil(8);
         let wg_y = self.ny.div_ceil(8);
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("cure_encoder"),
-            });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("cure_pass"),
@@ -324,7 +351,12 @@ impl GpuCureBuffers {
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(wg_x, wg_y, 1);
         }
-        ctx.queue().submit(Some(encoder.finish()));
+    }
+
+    /// Expose the cure storage buffer for on-GPU copies (e.g.
+    /// `GpuStrainStressBuffers::encode_copy_dose_from`).
+    pub fn cure_buf(&self) -> &wgpu::Buffer {
+        &self.cure_buf
     }
 
     /// Download cure and PI fields from GPU back to host.

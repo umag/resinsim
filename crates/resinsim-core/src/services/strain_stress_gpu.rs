@@ -292,10 +292,31 @@ impl GpuStrainStressBuffers {
             .write_buffer(&self.dose_buf, 0, bytemuck::cast_slice(&dose_data));
     }
 
+    /// Record a GPU-side copy from an external cure buffer into this
+    /// struct's `dose_buf`. Replaces the CPU round-trip of
+    /// `upload_dose` when cure and strain run in the same encoder.
+    pub fn encode_copy_dose_from(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        cure_buf: &wgpu::Buffer,
+    ) {
+        debug_assert_eq!(
+            cure_buf.size(),
+            self.dose_buf.size(),
+            "cure_buf and dose_buf must have matching byte sizes"
+        );
+        let size = cure_buf.size().min(self.dose_buf.size());
+        encoder.copy_buffer_to_buffer(cure_buf, 0, &self.dose_buf, 0, size);
+    }
+
+    /// Record the strain/stress compute pass onto an external
+    /// `CommandEncoder` without submitting. The dose data must already
+    /// be in `dose_buf` (via `upload_dose` or `encode_copy_dose_from`).
     #[allow(clippy::too_many_arguments)]
-    pub fn dispatch(
+    pub fn encode_strain_stress_pass(
         &self,
         ctx: &GpuContext,
+        encoder: &mut wgpu::CommandEncoder,
         layer_z: u32,
         ec_at_temp: f32,
         dp_um: f32,
@@ -328,11 +349,6 @@ impl GpuStrainStressBuffers {
         let wg_x = total_workgroups.min(65535);
         let wg_y = total_workgroups.div_ceil(wg_x);
 
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("strain_stress_encoder"),
-            });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("strain_stress_pass"),
@@ -342,6 +358,32 @@ impl GpuStrainStressBuffers {
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.dispatch_workgroups(wg_x, wg_y, 1);
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn dispatch(
+        &self,
+        ctx: &GpuContext,
+        layer_z: u32,
+        ec_at_temp: f32,
+        dp_um: f32,
+        layer_height_um: f32,
+        linear_shrinkage_frac: f32,
+        z_anisotropy_ratio: f32,
+        youngs_modulus_mpa: f32,
+        poissons_ratio: f32,
+        nz: u32,
+    ) {
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("strain_stress_encoder"),
+            });
+        self.encode_strain_stress_pass(
+            ctx, &mut encoder, layer_z, ec_at_temp, dp_um, layer_height_um,
+            linear_shrinkage_frac, z_anisotropy_ratio, youngs_modulus_mpa,
+            poissons_ratio, nz,
+        );
         ctx.queue().submit(Some(encoder.finish()));
     }
 

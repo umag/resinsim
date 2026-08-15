@@ -235,3 +235,77 @@ post-Beer-Lambert; batching requires nx × ny × nz memory (prohibitive).
 (e) **Full 3D tensor convolution on GPU.** Rejected for v1 per ADR-0018
 §4(a): layers are exposed at different print steps, so no natural
 full-print intensity tensor exists.
+
+---
+
+## Stage E: Batched command encoder + async layer pipelining
+
+### Context
+
+Stages A–D introduced four GPU compute shaders (thermal, cure, crosstalk,
+strain/stress), each with its own `dispatch()` method that creates a
+`CommandEncoder`, records a compute pass, and calls `queue.submit()`
+independently. In the per-layer loop this produces up to 7 separate
+`submit()` calls per layer. The cure and strain/stress dispatches have a
+data dependency (strain reads cure dose) but no cross-dispatch GPU data
+transfer — the CPU round-trips through `upload_dose()`.
+
+### Decision
+
+#### (xiv) Combined cure+strain encoder (regime AA only)
+
+`GpuCureBuffers` and `GpuStrainStressBuffers` gain `encode_*_pass()`
+methods that record compute passes onto an external `CommandEncoder`
+without submitting. The runner creates one encoder per layer:
+
+1. `encode_cure_pass` — cure column march
+2. `encoder.copy_buffer_to_buffer(cure_buf, dose_buf)` — on-GPU dose copy
+3. `encode_strain_stress_pass` — strain/stress compute
+
+All three operations submit in a single `queue.submit()`. wgpu guarantees
+sequential execution of compute passes within a single command buffer,
+satisfying the cure→strain data dependency.
+
+This applies only to regime AA (no crosstalk). GPU crosstalk (regimes
+BA/BB/DD) and GPU cure are mutually exclusive code branches — the
+crosstalk path remains a separate submission.
+
+#### (xv) On-GPU dose buffer copy
+
+`GpuStrainStressBuffers::encode_copy_dose_from(encoder, cure_buf)`
+records a `copy_buffer_to_buffer` from the cure storage buffer to the
+strain/stress dose buffer. Both are `nx*ny*nz` f32 arrays with matching
+byte sizes. This eliminates the CPU round-trip through `upload_dose()`.
+
+#### (xvi) write_intensity + cure_buf accessor
+
+`GpuCureBuffers::write_intensity()` stages the per-pixel intensity grid
+via `queue.write_buffer()` without dispatching. `cure_buf()` exposes the
+cure storage buffer handle for the on-GPU dose copy.
+
+#### (xvii) wgpu re-export
+
+`lib.rs` re-exports `wgpu` under `#[cfg(feature = "gpu")]` so
+integration tests can construct `CommandEncoder` instances directly.
+
+### Consequences
+
+- Per-layer `submit()` calls reduced from ~7 to ~2 (combined cure+strain,
+  plus thermal which retains its own batched-substep encoder).
+- `upload_dose()` is superseded on the combined path but retained for
+  standalone use in tests and non-batched callers.
+- GPU/CPU parity tests extended: 4 new tests in
+  `gpu_combined_pipeline_parity.rs` (single-encoder, multi-layer 8,
+  1-layer boundary, double-buffer swap isolation).
+- GPU crosstalk path is unchanged — no new submission batching there.
+
+### Rejected alternatives
+
+(f) **Batch crosstalk+cure+strain in one encoder.** Rejected: GPU
+crosstalk and GPU cure are mutually exclusive code branches (crosstalk
+fires only when σ_xy is active, in which case cure uses the CPU path).
+No regime exists where both GPU crosstalk and GPU cure run in the same
+layer.
+
+(g) **Async compute queues / multi-queue.** Rejected: wgpu does not
+expose async compute queues or multi-queue dispatch.
