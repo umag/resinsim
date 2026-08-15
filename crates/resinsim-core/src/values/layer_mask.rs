@@ -242,6 +242,40 @@ impl LayerMask {
         false
     }
 
+    /// Resample this mask to a different voxel resolution via nearest-neighbor.
+    /// Physical extent (width_mm × height_mm) is preserved; cell counts adjust.
+    /// Returns `self.clone()` when `target_voxel_mm` equals `self.voxel_size_mm`
+    /// (no allocation, bit-exact). For binary masks, nearest-neighbor is the
+    /// correct interpolation — no anti-aliasing needed.
+    pub fn resample_nearest(&self, target_voxel_mm: f32) -> Result<Self, MaskError> {
+        if !target_voxel_mm.is_finite() || target_voxel_mm <= 0.0 {
+            return Err(MaskError::InvalidVoxelSize(target_voxel_mm));
+        }
+        if (target_voxel_mm - self.voxel_size_mm).abs() < f32::EPSILON * self.voxel_size_mm {
+            return Ok(self.clone());
+        }
+        let width_mm = self.width_mm();
+        let height_mm = self.height_mm();
+        let new_w = (width_mm / target_voxel_mm).ceil() as u32;
+        let new_h = (height_mm / target_voxel_mm).ceil() as u32;
+        let new_w = new_w.max(1);
+        let new_h = new_h.max(1);
+        let mut result = Self::new(new_w, new_h, target_voxel_mm)?;
+        for ny in 0..new_h {
+            let src_y_mm = (ny as f32 + 0.5) * target_voxel_mm;
+            let src_y = (src_y_mm / self.voxel_size_mm).floor() as u32;
+            for nx in 0..new_w {
+                let src_x_mm = (nx as f32 + 0.5) * target_voxel_mm;
+                let src_x = (src_x_mm / self.voxel_size_mm).floor() as u32;
+                if self.is_solid(src_x, src_y) {
+                    let idx = result.index(nx, ny);
+                    result.bits.set(idx, true);
+                }
+            }
+        }
+        Ok(result)
+    }
+
     fn check_bounds(&self, x: u32, y: u32) -> Result<(), MaskError> {
         if x >= self.width_cells || y >= self.height_cells {
             return Err(MaskError::OutOfBounds {
@@ -530,5 +564,102 @@ mod tests {
         let mut m = LayerMask::new_all_solid(3, 3, 0.5).expect("3×3 @ 0.5mm constructs");
         m.clear(1, 1).expect("clear in bounds");
         assert!(!m.is_fully_solid());
+    }
+
+    // --- resample_nearest (t2f5 resolution decoupling) ---
+
+    #[test]
+    fn resample_identity_returns_clone() {
+        let mut m = LayerMask::new(4, 4, 0.5).expect("4×4 @ 0.5mm constructs");
+        m.set(1, 1).expect("in bounds");
+        m.set(2, 3).expect("in bounds");
+        let r = m.resample_nearest(0.5).expect("identity resample succeeds");
+        assert_eq!(r, m);
+    }
+
+    #[test]
+    fn resample_upscale_preserves_solid_pattern() {
+        // 2×2 @ 1.0mm → 4×4 @ 0.5mm (2x finer)
+        let mut m = LayerMask::new(2, 2, 1.0).expect("2×2 @ 1mm constructs");
+        m.set(0, 0).expect("in bounds");
+        m.set(1, 1).expect("in bounds");
+        let r = m.resample_nearest(0.5).expect("upscale resample succeeds");
+        assert_eq!(r.width_cells(), 4);
+        assert_eq!(r.height_cells(), 4);
+        assert!((r.voxel_size_mm() - 0.5).abs() < 1e-6);
+        // Top-left quadrant (source 0,0 = solid) should be solid
+        assert!(r.is_solid(0, 0));
+        assert!(r.is_solid(1, 0));
+        assert!(r.is_solid(0, 1));
+        assert!(r.is_solid(1, 1));
+        // Top-right quadrant (source 1,0 = void) should be void
+        assert!(!r.is_solid(2, 0));
+        assert!(!r.is_solid(3, 0));
+        // Bottom-right quadrant (source 1,1 = solid) should be solid
+        assert!(r.is_solid(2, 2));
+        assert!(r.is_solid(3, 3));
+    }
+
+    #[test]
+    fn resample_downscale_preserves_solid_pattern() {
+        // 4×4 @ 0.5mm → 2×2 @ 1.0mm (2x coarser)
+        let mut m = LayerMask::new(4, 4, 0.5).expect("4×4 @ 0.5mm constructs");
+        // Fill top-left quadrant
+        m.set(0, 0).expect("in bounds");
+        m.set(1, 0).expect("in bounds");
+        m.set(0, 1).expect("in bounds");
+        m.set(1, 1).expect("in bounds");
+        let r = m.resample_nearest(1.0).expect("downscale resample succeeds");
+        assert_eq!(r.width_cells(), 2);
+        assert_eq!(r.height_cells(), 2);
+        assert!((r.voxel_size_mm() - 1.0).abs() < 1e-6);
+        // Top-left cell samples from centre of target cell → source (0,0) area → solid
+        assert!(r.is_solid(0, 0));
+        // Other cells should be void (source was void there)
+        assert!(!r.is_solid(1, 0));
+        assert!(!r.is_solid(0, 1));
+        assert!(!r.is_solid(1, 1));
+    }
+
+    #[test]
+    fn resample_preserves_physical_extent() {
+        let m = LayerMask::new_all_solid(10, 8, 0.5).expect("10×8 @ 0.5mm constructs");
+        let r = m.resample_nearest(0.2).expect("resample to 0.2mm succeeds");
+        // Physical extent: 5.0mm × 4.0mm
+        // At 0.2mm: ceil(5.0/0.2)=25, ceil(4.0/0.2)=20
+        assert_eq!(r.width_cells(), 25);
+        assert_eq!(r.height_cells(), 20);
+        assert!((r.voxel_size_mm() - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn resample_non_integer_ratio() {
+        // 3×3 @ 1.0mm (3mm × 3mm) → target 0.7mm: ceil(3.0/0.7)=5
+        let m = LayerMask::new_all_solid(3, 3, 1.0).expect("3×3 @ 1mm constructs");
+        let r = m.resample_nearest(0.7).expect("non-integer resample succeeds");
+        assert_eq!(r.width_cells(), 5);
+        assert_eq!(r.height_cells(), 5);
+        // Edge cells (index 4) have centre at 3.15mm which maps to source
+        // index 3 — out of bounds for the 3-wide source. These correctly
+        // map to void, so 4×4=16 cells are solid, not 5×5=25.
+        assert_eq!(r.solid_cell_count(), 16);
+    }
+
+    #[test]
+    fn resample_1x1_mask() {
+        let m = LayerMask::new_all_solid(1, 1, 1.0).expect("1×1 @ 1mm constructs");
+        let r = m.resample_nearest(0.5).expect("1×1 upscale succeeds");
+        assert_eq!(r.width_cells(), 2);
+        assert_eq!(r.height_cells(), 2);
+        assert_eq!(r.solid_cell_count(), 4);
+    }
+
+    #[test]
+    fn resample_rejects_invalid_target() {
+        let m = LayerMask::new(4, 4, 0.5).expect("4×4 @ 0.5mm constructs");
+        assert!(m.resample_nearest(0.0).is_err());
+        assert!(m.resample_nearest(-1.0).is_err());
+        assert!(m.resample_nearest(f32::NAN).is_err());
+        assert!(m.resample_nearest(f32::INFINITY).is_err());
     }
 }

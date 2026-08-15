@@ -101,17 +101,20 @@ case `t2f1` is meant to capture).
   CTB to consult, so they continue to source the Z-step from
   `recipe.layer_height_um` for every layer.
 
-**Why deferred.** Decoupling the X-Y resolution from the slicer mask
-requires a resampling pass (different bbox dimensions + a mapping
-function). The plumbing for this lives in `t2f5-gpu-acceleration-wgpu`
-since GPU dispatch tightly constrains the resolution-vs-memory trade.
-The flag value + profile field stay in the public API for forward-
-compat.
+**Activated by t2f5 (resolution decoupling, 2026-08-15).** The precedence
+chain is now live: CLI `--voxel-cure-mm` > `PrinterProfile.voxel_cure_resolution_mm`
+> mask `voxel_size_mm`. When the resolved resolution differs from the mask,
+each `LayerMask` is resampled to the target grid via nearest-neighbor
+(`LayerMask::resample_nearest`). Profile-only voxel mode activation is
+also supported — the CLI flag is not required when the printer profile
+sets `voxel_cure_resolution_mm`.
 
 **Workspace default `DEFAULT_VOXEL_CURE_RESOLUTION_MM = 0.2 mm`** is
-reserved for the same future activation. It is referenced by tests
-that pin the constant's value; it is not currently consulted at
-runtime.
+the value returned by `PrinterProfile::effective_voxel_cure_resolution_mm()`
+when the profile field is `None`. The runtime bottom fallback is the
+mask resolution (no resampling), not this constant — the constant
+participates only via `effective_voxel_cure_resolution_mm()`, which
+is not consulted by the runtime precedence chain.
 
 ### 3. Dense `ndarray::Array3<f32>` over part bbox; sparse deferred
 

@@ -48,8 +48,12 @@ Do NOT mark with:
   literature midpoint warn-when-None — KB-153 promised per-resin
   calibration; v1 doesn't measure per-resin so the field is reserved.
 - `PrinterProfile.voxel_cure_resolution_mm: Option<f32>` —
-  ADR-0017 promised CLI > profile > default precedence; v1 uses mask
-  resolution; t2f5 (GPU acceleration) activates the chain.
+  ADR-0017 promised CLI > profile > mask resolution precedence; v1
+  used mask resolution unconditionally. **Activated by t2f5
+  (resolution decoupling, 2026-08-15):** the field now participates
+  in the precedence chain and triggers nearest-neighbor mask
+  resampling when the resolved resolution differs from the slicer
+  mask. Profile-only voxel mode activation is also supported.
 
 ## When to NOT use this
 

@@ -221,18 +221,19 @@ pub struct PrinterProfile {
     pub(crate) build_envelope_mm: Option<BuildEnvelope>,
 
     /// Voxel cure resolution (mm) for the t2f1 voxel cure path (ADR-0017).
-    /// **Optional** + **forward-compat reservation only** in v1.
+    /// **Optional**. Activated by t2f5 (resolution decoupling).
     ///
-    /// The plan called for a CLI > profile > default 0.2 mm precedence
-    /// chain, but the v1 implementation uses the slicer mask's voxel size
-    /// for X/Y and `recipe.layer_height_um` for Z unconditionally. This
-    /// field is parsed and validated (finite > 0 when Some) so existing
-    /// profile TOMLs forward-compat; it is NOT read by `SimulationRunner`
-    /// at runtime. t2f5 (GPU acceleration + resolution decoupling) will
-    /// activate it.
+    /// When `Some(mm)`, this value is the second priority in the
+    /// precedence chain: CLI `--voxel-cure-mm` > this field > mask
+    /// resolution. When the resolved resolution differs from the slicer
+    /// mask's `voxel_size_mm`, each mask is resampled to the target grid
+    /// via nearest-neighbor before field allocation.
     ///
-    /// Profile authors can leave this `None` for v1; setting it documents
-    /// intent for future calibration but has no current effect.
+    /// When `Some`, also enables profile-only voxel mode activation —
+    /// the CLI flag is not required if this field is set.
+    ///
+    /// `None` inherits the mask resolution (no resampling, current
+    /// default behaviour).
     #[serde(default)]
     pub(crate) voxel_cure_resolution_mm: Option<f32>,
 

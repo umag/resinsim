@@ -602,20 +602,21 @@ impl SimulationRunner {
         )
     }
 
-    /// Internal: full run with optional voxel cure mode (ADR-0017 / t2f1).
-    /// `voxel_cure_mm: Some(_)` enables the Tier-2 path — a `CureField` and
-    /// `PhotoinitiatorField` are built sized to the layer masks + layer count
-    /// and installed on the returned aggregate. Each layer's predict_layer
-    /// result has its `cure_depth_um` and `worst_cure_depth_um` cache fields
-    /// overwritten with `LayerSummary.mean` / `LayerSummary.min` from the
-    /// voxel field after the per-pixel exposure pass.
+    /// Internal: full run with optional voxel cure mode (ADR-0017 / t2f1,
+    /// resolution decoupling activated by t2f5).
+    /// `voxel_cure_mm: Some(mm)` enables the Tier-2 path — a `CureField` and
+    /// `PhotoinitiatorField` are built sized to the resolved voxel resolution
+    /// and layer count, then installed on the returned aggregate. Each layer's
+    /// `predict_layer` result has its `cure_depth_um` and `worst_cure_depth_um`
+    /// cache fields overwritten with the voxel field's `LayerSummary.mean` /
+    /// `LayerSummary.min` after the per-pixel exposure pass.
     ///
-    /// V1 simplification: the cure field uses the LayerMask's `voxel_size_mm`
-    /// for X/Y/Z. The CLI `--voxel-cure-mm` value is preserved on the call
-    /// chain and serves as a request — when it disagrees with the mask
-    /// resolution, the simulation runs anyway (mask wins for v1; t2f5 GPU
-    /// work will introduce resolution decoupling). The Z-voxel index equals
-    /// the layer index — one voxel slab per layer.
+    /// When the resolved resolution (`voxel_cure_mm` value) differs from the
+    /// slicer mask's `voxel_size_mm`, each mask is resampled to the target
+    /// grid via nearest-neighbor. Cavity detection maps (suction, shape
+    /// factor, perimeter) are computed from the ORIGINAL masks before
+    /// resampling. The Z-voxel index equals the layer index — one voxel
+    /// slab per layer.
     #[allow(clippy::too_many_arguments)]
     fn run_inner_full(
         areas: &[CrossSectionArea],
@@ -671,13 +672,53 @@ impl SimulationRunner {
         let mut sim = PrintSimulation::new(recipe.clone(), printer.clone());
         let mut prev_area = CrossSectionArea::new(0.0).expect("zero is valid");
 
+        // t2f5: when voxel mode is active and the resolved resolution differs
+        // from the slicer mask's voxel_size_mm, resample each mask to the
+        // target grid. Cavity detection (suction_map, shape_factor_map,
+        // perimeter_map) already ran against the ORIGINAL masks above.
+        #[cfg(feature = "field-sim")]
+        let voxel_masks: Option<Vec<LayerMask>> = if let Some(resolved_mm) = voxel_cure_mm {
+            if let Some(first) = masks.first() {
+                let mask_mm = first.voxel_size_mm();
+                if (resolved_mm - mask_mm).abs() > f32::EPSILON * mask_mm {
+                    let resampled: Result<Vec<LayerMask>, _> = masks
+                        .iter()
+                        .map(|m| m.resample_nearest(resolved_mm))
+                        .collect();
+                    let resampled = resampled.map_err(|e| format!("mask resample: {e}"))?;
+                    if let Some(first_r) = resampled.first() {
+                        eprintln!(
+                            "resampling layer masks: {:.3}mm ({}x{}) → {:.3}mm ({}x{})",
+                            mask_mm,
+                            first.width_cells(),
+                            first.height_cells(),
+                            resolved_mm,
+                            first_r.width_cells(),
+                            first_r.height_cells(),
+                        );
+                    }
+                    Some(resampled)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        // The masks to use for voxel field allocation + per-layer dispatch:
+        // resampled if resolution differs, original otherwise.
+        #[cfg(feature = "field-sim")]
+        let voxel_field_masks: &[LayerMask] = voxel_masks.as_deref().unwrap_or(masks);
+
         // ADR-0017 / t2f1: build the voxel state up-front when voxel mode is on.
         // `voxel_state` is `Some` only when (a) the feature is compiled in AND
         // (b) the caller passed `voxel_cure_mm: Some(_)` AND (c) masks/layers
         // are non-empty (zero-layer prints have nothing to voxelize).
         #[cfg(feature = "field-sim")]
-        let mut voxel_state: Option<VoxelState> = if let Some(_requested_mm) = voxel_cure_mm {
-            if let Some(first) = masks.first() {
+        let mut voxel_state: Option<VoxelState> = if let Some(_resolved_mm) = voxel_cure_mm {
+            if let Some(first) = voxel_field_masks.first() {
                 let nx = first.width_cells();
                 let ny = first.height_cells();
                 let voxel_size_mm = first.voxel_size_mm();
@@ -946,7 +987,7 @@ impl SimulationRunner {
                 Self::apply_voxel_cure_for_layer(
                     state,
                     i as u32,
-                    &masks[i],
+                    &voxel_field_masks[i],
                     &thermal,
                     recipe,
                     layer_height_um_i,

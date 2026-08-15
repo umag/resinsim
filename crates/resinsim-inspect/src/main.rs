@@ -222,18 +222,15 @@ enum Commands {
         /// silently (POSIX default; ADR-0015).
         #[arg(long)]
         out: Option<std::path::PathBuf>,
-        /// **Tier-2 voxel cure mode** (ADR-0017 / t2f1). Presence enables
-        /// the voxel cure + photoinitiator depletion path; absence runs the
-        /// Tier-1 scalar path. The flag VALUE is parsed and validated at
-        /// parse time (finite > 0, typical 0.05–0.5 mm) but is currently
-        /// **informational only** — v1 uses the slicer mask's voxel size
-        /// for X/Y and the recipe's layer_height_um for Z. The CLI ⇒
-        /// profile ⇒ workspace-default precedence chain is reserved for
-        /// t2f5 (resolution decoupling); until then
-        /// `PrinterProfile.voxel_cure_resolution_mm` is parsed but not
-        /// consulted at runtime. Only available in builds with the
-        /// `field-sim` Cargo feature; default builds reject this flag
-        /// with the standard clap unknown-flag error.
+        /// **Tier-2 voxel cure mode** (ADR-0017 / t2f1, activated by t2f5).
+        /// Presence enables the voxel cure + photoinitiator depletion path;
+        /// absence falls through to `PrinterProfile.voxel_cure_resolution_mm`
+        /// (profile-only activation). The flag VALUE sets the XY voxel cure
+        /// resolution in mm (finite > 0, typical 0.05–0.5 mm). When the
+        /// resolved resolution differs from the slicer mask's voxel size,
+        /// each layer mask is resampled to the target grid via nearest-
+        /// neighbor. Precedence: CLI > profile > mask resolution (no
+        /// resampling). Only available with the `field-sim` Cargo feature.
         #[cfg(feature = "field-sim")]
         #[arg(long, value_parser = parse_voxel_cure_mm)]
         voxel_cure_mm: Option<f32>,
@@ -241,8 +238,9 @@ enum Commands {
         /// dispatches the FTCS thermal diffusion substeps to a wgpu
         /// compute shader instead of the CPU Rayon path. Falls back
         /// to CPU silently when no GPU adapter is available. Requires
-        /// `--voxel-cure-mm` (the thermal field only exists in
-        /// voxel mode). Only available with the `gpu` Cargo feature.
+        /// voxel cure mode (activated by `--voxel-cure-mm` or by the
+        /// printer profile's `voxel_cure_resolution_mm` field). Only
+        /// available with the `gpu` Cargo feature.
         #[cfg(feature = "gpu")]
         #[arg(long)]
         gpu: bool,
@@ -1815,7 +1813,7 @@ fn run_simulation_with_optional_voxel(
             }
         }
         eprintln!(
-            "note: --voxel-cure-mm is set but input is {fmt}, which has no per-layer masks; \
+            "note: voxel cure mode active but input is {fmt}, which has no per-layer masks; \
              falling back to Tier-1 scalar mode"
         );
     }
@@ -1864,11 +1862,10 @@ fn cmd_sim(
     ambient: f32,
     initial_led_temp: Option<f32>,
     out: Option<&std::path::Path>,
-    // ADR-0017 / t2f1: Some(mm) ⇒ voxel cure mode at that resolution;
-    // None ⇒ Tier-1 scalar mode. With feature off, this is always None
-    // because the CLI flag itself is gated. Routed through the
-    // SimulationRunner voxel-aware entry point when the input is a CTB
-    // (voxel mode requires per-layer masks).
+    // ADR-0017 / t2f1, activated by t2f5: Some(mm) ⇒ voxel cure mode at
+    // that resolution; None ⇒ Tier-1 scalar mode. Resolved inside this
+    // function via cli.or(printer.voxel_cure_resolution_mm()) before
+    // entering the runner — profile-only activation is supported.
     voxel_cure_mm: Option<f32>,
     #[cfg_attr(not(feature = "gpu"), allow(unused_variables))]
     gpu: bool,
@@ -1972,6 +1969,16 @@ fn cmd_sim(
         (None, None)
     };
 
+    // t2f5: resolve the effective voxel cure resolution from the
+    // precedence chain (CLI > profile) before entering the runner.
+    // Profile-only activation: when the CLI flag is absent but the
+    // printer profile has voxel_cure_resolution_mm set, voxel mode
+    // activates with the profile's resolution.
+    #[cfg(feature = "field-sim")]
+    let effective_voxel_cure_mm = voxel_cure_mm.or(resolved.printer.voxel_cure_resolution_mm());
+    #[cfg(not(feature = "field-sim"))]
+    let effective_voxel_cure_mm = voxel_cure_mm;
+
     let start = std::time::Instant::now();
     let sim_result = run_simulation_with_optional_voxel(
         input_path,
@@ -1981,7 +1988,7 @@ fn cmd_sim(
         &plate,
         ambient_typed,
         initial_led_temp_typed,
-        voxel_cure_mm,
+        effective_voxel_cure_mm,
         #[cfg(feature = "gpu")]
         gpu_context,
     );
