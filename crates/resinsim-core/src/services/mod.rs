@@ -25,6 +25,8 @@ pub mod thermal_diffusion_solver;
 #[cfg(feature = "gpu")]
 pub mod gpu_context;
 #[cfg(feature = "gpu")]
+pub mod light_crosstalk_gpu;
+#[cfg(feature = "gpu")]
 pub mod thermal_diffusion_gpu;
 #[cfg(feature = "gpu")]
 pub mod voxel_cure_gpu;
@@ -66,6 +68,8 @@ pub use voxel_cure_calculator::{VoxelCureCalculator, VoxelCureError};
 pub use z_axis_compensator::ZAxisCompensator;
 #[cfg(feature = "gpu")]
 pub use gpu_context::GpuContext;
+#[cfg(feature = "gpu")]
+pub use light_crosstalk_gpu::GpuCrosstalkBuffers;
 #[cfg(feature = "gpu")]
 pub use thermal_diffusion_gpu::GpuThermalBuffers;
 #[cfg(feature = "gpu")]

@@ -21,7 +21,7 @@ use crate::services::{
     BoundaryConditions, LayerTimingCalculator, ThermalCalculator, ThermalDiffusionSolver,
 };
 #[cfg(feature = "gpu")]
-use crate::services::{GpuContext, GpuCureBuffers, GpuThermalBuffers};
+use crate::services::{GpuContext, GpuCrosstalkBuffers, GpuCureBuffers, GpuThermalBuffers};
 #[cfg(feature = "field-sim")]
 use crate::values::ThermalTimeConstant;
 use crate::simulation::PrintSimulation;
@@ -154,6 +154,10 @@ struct VoxelState {
     gpu_cure: Option<GpuCureBuffers>,
     #[cfg(feature = "gpu")]
     gpu_cure_pending: Vec<u32>,
+    #[cfg(feature = "gpu")]
+    gpu_crosstalk: Option<GpuCrosstalkBuffers>,
+    #[cfg(feature = "gpu")]
+    gpu_crosstalk_log_emitted: bool,
 }
 
 /// Output of [`SimulationRunner::prepare_layer_inputs`]: everything the
@@ -826,6 +830,10 @@ impl SimulationRunner {
                         gpu_cure: None,
                         #[cfg(feature = "gpu")]
                         gpu_cure_pending: Vec::new(),
+                        #[cfg(feature = "gpu")]
+                        gpu_crosstalk: None,
+                        #[cfg(feature = "gpu")]
+                        gpu_crosstalk_log_emitted: false,
                     })
                 } else {
                     None
@@ -840,7 +848,7 @@ impl SimulationRunner {
         // ADR-0025 / t2f5: initialize GPU buffers when gpu_context is provided.
         #[cfg(feature = "gpu")]
         if let (Some(state), Some(ctx)) = (voxel_state.as_mut(), gpu_context) {
-            let bufs = GpuThermalBuffers::new(&ctx, &state.thermal);
+            let thermal_bufs = GpuThermalBuffers::new(&ctx, &state.thermal);
             eprintln!(
                 "tier-2 thermal GPU: adapter={}, voxels={}",
                 ctx.adapter_name(),
@@ -859,7 +867,15 @@ impl SimulationRunner {
                 }
             );
             state.gpu_cure = Some(cure_bufs);
-            state.gpu_thermal = Some((ctx, bufs));
+            let (cure_nx, cure_ny, _) = state.cure.dimensions();
+            if cure_nx > 0 && cure_ny > 0 {
+                state.gpu_crosstalk = Some(GpuCrosstalkBuffers::new(
+                    &ctx,
+                    cure_nx,
+                    cure_ny,
+                ));
+            }
+            state.gpu_thermal = Some((ctx, thermal_bufs));
         }
 
         // ADR-0025 Stage B: GPU cure batch size. Dispatches accumulate
@@ -1646,17 +1662,43 @@ impl SimulationRunner {
         }
 
         // (2) XY pre-convolution (if σ_xy active).
+        // ADR-0025 Stage C: GPU dispatch when available, CPU fallback otherwise.
         let xy_active = if let Some(sigma_xy) = sigma_xy_um {
             let sigma_xy_voxels = sigma_xy / (voxel_size_mm * 1000.0);
             let xy_kernel = LightCrosstalkCalculator::build_separable_kernel(sigma_xy_voxels)
                 .map_err(|e| format!("xy kernel layer {layer}: {e:?}"))?;
-            let mut xy_scratch = Array2::<f32>::zeros((nx as usize, ny as usize));
-            LightCrosstalkCalculator::apply_separable_2d(
-                &mut intensity,
-                &xy_kernel,
-                &mut xy_scratch,
-            )
-            .map_err(|e| format!("xy conv layer {layer}: {e:?}"))?;
+            #[cfg(feature = "gpu")]
+            let used_gpu = if let Some(ref mut gpu_bufs) = state.gpu_crosstalk {
+                let ctx = &state.gpu_thermal.as_ref()
+                    .expect("gpu_crosstalk implies gpu_thermal is initialised").0;
+                if !state.gpu_crosstalk_log_emitted {
+                    eprintln!(
+                        "tier-2 crosstalk GPU: adapter={}, grid={}x{}, kernel_len={}",
+                        ctx.adapter_name(), nx, ny, xy_kernel.len(),
+                    );
+                    state.gpu_crosstalk_log_emitted = true;
+                }
+                gpu_bufs.apply_separable_2d(ctx, &mut intensity, &xy_kernel);
+                if !intensity.iter().all(|v| v.is_finite()) {
+                    return Err(format!(
+                        "ADR-0025 / t2f5 GPU crosstalk produced non-finite intensity at layer {layer}"
+                    ));
+                }
+                true
+            } else {
+                false
+            };
+            #[cfg(not(feature = "gpu"))]
+            let used_gpu = false;
+            if !used_gpu {
+                let mut xy_scratch = Array2::<f32>::zeros((nx as usize, ny as usize));
+                LightCrosstalkCalculator::apply_separable_2d(
+                    &mut intensity,
+                    &xy_kernel,
+                    &mut xy_scratch,
+                )
+                .map_err(|e| format!("xy conv layer {layer}: {e:?}"))?;
+            }
             true
         } else {
             false

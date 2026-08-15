@@ -3,11 +3,11 @@ issue: t2f5-gpu-acceleration-wgpu
 date: 2026-08-15
 ---
 
-# ADR-0025: GPU acceleration of the thermal FTCS solver via wgpu
+# ADR-0025: GPU acceleration via wgpu
 
 ## Status
 Accepted (Stage A: thermal FTCS, 2026-08-15; Stage B: cure + PI column
-march, 2026-08-15).
+march, 2026-08-15; Stage C: XY crosstalk convolution, 2026-08-15).
 
 ## Context
 
@@ -156,3 +156,82 @@ alongside `gpu_thermal` when `--gpu` is passed.
 builds the intensity grid on CPU, dispatches the shader, downloads,
 sanity-checks, and returns. When `None`, the existing CPU loop runs
 unchanged. Crosstalk regimes always take the CPU path.
+
+---
+
+## Stage C: GPU-accelerated XY light crosstalk convolution
+
+### Context
+
+ADR-0018 defines a separable 2D Gaussian convolution (X-pass then Y-pass)
+on the per-layer intensity grid as the XY pre-attenuation stage of light
+crosstalk. The CPU implementation (`LightCrosstalkCalculator::apply_separable_2d`)
+is O(nx × ny × kernel_len × 2) per layer. For Mars 5 Ultra (3840 × 2400 =
+9.2M pixels) this is the dominant per-layer cost in the crosstalk path.
+
+### Decision
+
+#### (viii) XY-only GPU, Z stays CPU
+
+Two WGSL compute shaders (`conv_x`, `conv_y`) implement the same 1D
+separable convolution as the CPU path. The Z post-attenuation convolution
+stays on CPU because:
+
+- Dose columns are computed per-pixel AFTER the sequential Beer-Lambert
+  column march (`compute_column_exposure`), which reads PI field state
+  and cannot move to GPU.
+- Batching all pixels' dose columns for GPU dispatch requires
+  nx × ny × nz floats (Mars 5 Ultra: 3840 × 2400 × 4492 = 41G floats
+  = 165 GB) — exceeds any GPU's memory.
+- Z conv is O(nz × kernel_len) per pixel with a typical 7-tap kernel —
+  fast enough on CPU.
+
+#### (ix) Two-buffer swap, not ping-pong
+
+The XY conv is exactly two passes (X then Y), not N substeps. Buffer A
+holds the uploaded intensity grid. X-pass reads A, writes B. Y-pass reads
+B, writes A. Result is in A. No `current_is_a` tracking needed.
+
+#### (x) Post-download NaN guard
+
+WGSL shaders cannot signal errors. The CPU path has explicit `is_finite()`
+checks (`CrosstalkError::NonFiniteInput`). The GPU path validates the
+downloaded intensity grid with `iter().all(is_finite)` before the CPU
+per-pixel Beer-Lambert loop. Returns `Err` on any non-finite value.
+
+#### (xi) Per-run buffer allocation
+
+`GpuCrosstalkBuffers` is allocated once at `VoxelState` construction
+(alongside `GpuThermalBuffers`) and reused across layers. Only the
+intensity data is uploaded per layer; kernel weights and params are
+written per-dispatch via `queue.write_buffer`.
+
+#### (xii) 2D workgroup dispatch
+
+Same pattern as the thermal solver: `wg_x = min(total_workgroups, 65535)`,
+`wg_y = ceil(total_workgroups / wg_x)`. Required for Mars 5 Ultra
+(9.2M pixels / 64 = 143,750 workgroups > 65535 limit).
+
+#### (xiii) Clamp-to-zero edge policy
+
+Both WGSL shaders implement the SKIP policy from ADR-0018 §2:
+out-of-bounds samples contribute zero. The `if src_ix >= 0 && src_ix <
+i32(params.nx)` guard matches the CPU `continue` on out-of-bounds.
+
+### Consequences
+
+- The CPU `LightCrosstalkCalculator` is unchanged.
+- GPU crosstalk dispatch only fires when σ_xy is `Some` (regimes BA/BB/DD).
+  Regime CB (σ_xy None, σ_z Some) uses CPU-only Z conv, no GPU dispatch.
+- Regime AA (both None) takes the t2f1 fast path — no crosstalk code at all.
+- GPU parity tests follow the `gpu_thermal_parity.rs` pattern: tolerance-based,
+  graceful skip when no adapter.
+
+### Rejected alternatives
+
+(d) **GPU Z convolution.** Rejected: dose columns are per-pixel
+post-Beer-Lambert; batching requires nx × ny × nz memory (prohibitive).
+
+(e) **Full 3D tensor convolution on GPU.** Rejected for v1 per ADR-0018
+§4(a): layers are exposed at different print steps, so no natural
+full-print intensity tensor exists.
