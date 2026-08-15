@@ -33,6 +33,12 @@ pub mod base_adhesion_shifts_peel_peak;
 #[cfg(feature = "field-sim")]
 pub mod calibration_disclosure_3of3_predicate;
 pub mod cli_inspect_field_slices_voxel_field;
+// FIELD-SIM-GATED (uat-unskip-cross-feature-toml-interchange): UAT-2's
+// sole error producer, ResinProfile::validate()'s thermal_conductivity_w_mk
+// required check (resin_profile.rs), is #[cfg(feature = "field-sim")].
+// See the module's own doc comment for the full rationale.
+#[cfg(feature = "field-sim")]
+pub mod cross_feature_toml_interchange;
 // FIELD-SIM-GATED (uat-unskip-cli-sim-rejects-tampered-sidecar): all
 // four scenarios need the field-sim binary (producer --voxel-cure-mm +
 // consumer load_and_install_sidecar_with_budget, both #[cfg(feature =

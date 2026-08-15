@@ -116,7 +116,7 @@ use uat_steps::{
 #[allow(unused_imports, clippy::single_component_path_imports)]
 use uat_steps::{
     calibration_disclosure_3of3_predicate, cli_sim_rejects_tampered_sidecar,
-    honest_zero_yield_fraction_on_calibrated_solid,
+    cross_feature_toml_interchange, honest_zero_yield_fraction_on_calibrated_solid,
     voxel_cure_field_photoinitiator_depletion,
 };
 
@@ -411,11 +411,13 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // (register expects 0).
     per_config("cli-sim-rejects-tampered-sidecar", 4, 0),
     // BAND MEMBERSHIP NOT YET DERIVED BY SYMBOL (uat-unskip-band-d step 9,
-    // 2026-08-06, grouped note over this row and the five below down to
-    // `thermal-field-sidecar-roundtrip`): unlike the rows above (derived
-    // by A2/C1 per docs/patterns/band-membership-by-symbol.md) and the
-    // three specs this increment lands (light-crosstalk, honest-zero,
-    // calibration-disclosure), these six specs' entry-point symbols have
+    // 2026-08-06, grouped note over this row and the four below down to
+    // `thermal-field-sidecar-roundtrip`; originally six rows, reduced to
+    // five by uat-unskip-cross-feature-toml-interchange 2026-08-15):
+    // unlike the rows above (derived by A2/C1 per
+    // docs/patterns/band-membership-by-symbol.md) and the three specs
+    // that increment lands (light-crosstalk, honest-zero,
+    // calibration-disclosure), these five specs' entry-point symbols have
     // never been walked and grepped one at a time. Their columns are
     // equal BY CONSTRUCTION here, not by derivation: `both_configs` is
     // correct for ANY spec with no field-sim-gated step-def module in
@@ -428,7 +430,19 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // increment that scopes each of these rows individually, not assumed
     // here.
     both_configs("cli-sim-voxel-cure-emits-tier2-thermal-log", 1),
-    both_configs("cross-feature-toml-interchange", 2),
+    // PAID DOWN (uat-unskip-cross-feature-toml-interchange, 2026-08-15):
+    // both scenarios now have step definitions in the field-sim-gated module
+    // `cross_feature_toml_interchange.rs`. Band membership derived BY
+    // SYMBOL: UAT-2's sole error producer is `ResinProfile::validate()`'s
+    // `thermal_conductivity_w_mk` required check (resin_profile.rs), which
+    // is `#[cfg(feature = "field-sim")]` — under default features,
+    // `validate()` returns Ok for a thermally incomplete TOML, so UAT-2's
+    // Then assertion only holds under field-sim. UAT-1 (interchange
+    // direction: TOML with thermal fields parses + validates) also runs
+    // under field-sim (strictly stronger: validate checks MORE); the
+    // default-features direction is already verified implicitly by the
+    // cross-feature nextest runs.
+    per_config("cross-feature-toml-interchange", 2, 0),
     // DECLARED DEBT (config-asymmetric field-sim scenarios; uat-unskip-band-d,
     // filed 2026-08-02): both scenarios need voxel-mode
     // `LayerResult.voxel_yield_fraction` / `.strain_magnitude_max`,
