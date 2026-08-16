@@ -18,6 +18,8 @@
 pub mod viz_cli;
 
 pub mod viz_allow_mismatch_soft_fallback;
+pub mod viz_arrow_key_step_no_mesh_reupload;
+pub mod viz_arrow_keys_step_layer_with_saturation;
 pub mod viz_bad_pairing;
 pub mod viz_layer_count_mismatch_hard_error;
 pub mod viz_load_ctb_with_sim_renders_heatmap;

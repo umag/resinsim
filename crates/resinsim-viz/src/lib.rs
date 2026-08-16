@@ -22,6 +22,8 @@ mod sim;
 mod slice;
 mod ui;
 
+pub use slice::{cumulative_z_mm, slice_stack_to_bevy_mesh, LoadedSliceStack};
+
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 
@@ -48,9 +50,7 @@ use crate::scene::{
 use crate::sim::{
     apply_run_request, load_sim_from_path, RunConfig, RunSimRequest, SimulationResult,
 };
-use crate::slice::{
-    cumulative_z_mm, slice_stack_bounding_box, slice_stack_to_bevy_mesh, LoadedSliceStack,
-};
+use crate::slice::slice_stack_bounding_box;
 use crate::ui::panels::{bottom_panel, left_panel, right_panel};
 use crate::ui::state::{refresh_listings, refresh_loaded_profiles, BottomPanelState, PickerState};
 
@@ -1150,7 +1150,7 @@ fn handle_dropped_files(
 /// the `handle_layer_keys` system so each scrub session is
 /// self-contained.
 #[derive(Default)]
-struct ScrubKeyRepeat {
+pub struct ScrubKeyRepeat {
     held: std::collections::HashMap<KeyCode, (f32, f32)>,
 }
 
@@ -1178,7 +1178,7 @@ pub(crate) fn should_repeat(
     (now - first_press) >= initial_delay && (now - last_fire) >= repeat_rate
 }
 
-fn handle_layer_keys(
+pub fn handle_layer_keys(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut current: ResMut<CurrentLayer>,
@@ -1291,7 +1291,7 @@ fn sync_cursor_max_from_sim(loaded: Res<LoadedSimulation>, mut current: ResMut<C
 /// `z_prefix[current_layer.index]`. Bevy's Transform updates do NOT
 /// re-upload the slice-stack mesh — the mesh's positions/normals/colour
 /// buffer are baked once and never mutated post-spawn.
-fn update_layer_cursor(
+pub fn update_layer_cursor(
     current: Res<CurrentLayer>,
     z_prefix: Res<LayerZPrefix>,
     mut cursor_q: Query<&mut Transform, With<LayerCursor>>,

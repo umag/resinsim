@@ -61,10 +61,28 @@ use uat_viz_steps::viz_cli::CliOutcome;
 // (below) cross-checks this list against `mod.rs`'s `pub mod` set.
 #[allow(unused_imports)]
 use uat_viz_steps::{
-    viz_allow_mismatch_soft_fallback, viz_bad_pairing, viz_layer_count_mismatch_hard_error,
-    viz_load_ctb_with_sim_renders_heatmap, viz_load_sim_missing_sidecar, viz_screenshot_ctb,
-    viz_screenshot_flag,
+    viz_allow_mismatch_soft_fallback, viz_arrow_key_step_no_mesh_reupload,
+    viz_arrow_keys_step_layer_with_saturation, viz_bad_pairing,
+    viz_layer_count_mismatch_hard_error, viz_load_ctb_with_sim_renders_heatmap,
+    viz_load_sim_missing_sidecar, viz_screenshot_ctb, viz_screenshot_flag,
 };
+
+/// Wrapper for `bevy::app::App` that implements `Debug` (App does not).
+/// Used by in-process step-def modules that drive a Bevy App across
+/// Given/When/Then step boundaries within a single scenario.
+pub struct InProcessApp(pub bevy::app::App);
+
+impl std::fmt::Debug for InProcessApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InProcessApp").finish_non_exhaustive()
+    }
+}
+
+impl Default for InProcessApp {
+    fn default() -> Self {
+        Self(bevy::app::App::new())
+    }
+}
 
 /// World for viz UAT scenarios. Carries the outcome of the last
 /// `resinsim-viz` CLI invocation, a path staged by a "When" step for a
@@ -88,6 +106,11 @@ pub struct VizWorld {
     /// ("CTB has 100 layers", "sim has 50") to the real fixture's counts.
     /// Documented coupling — see `viz_screenshot_flag.rs`.
     pub expected_mismatch_counts: Option<(usize, usize)>,
+    // ---- In-process Bevy App state (arrow-key step defs) ----
+    pub in_process_app: Option<InProcessApp>,
+    pub slice_handle: Option<bevy::asset::Handle<bevy::mesh::Mesh>>,
+    pub colors_before: Option<Vec<[f32; 4]>>,
+    pub mesh_count_before: Option<usize>,
 }
 
 impl VizWorld {
@@ -137,14 +160,11 @@ impl VizWorld {
 /// `validate_rejects_empty_path` in screenshot.rs).
 fn specs_without_step_defs() -> Vec<(&'static str, usize)> {
     vec![
-        // viz-arrow-keys-uat: both specs below ARE tested by in-process
-        // unit tests in lib.rs — keyboard simulation via
-        // `ButtonInput::press()` + `reset_all()` with synthetic fixtures
-        // (no `.ctb` needed). The lib.rs + main.rs split
-        // (viz-lib-main-split) unblocked in-process driving; cucumber
-        // step defs for these specs are now unblocked but not yet written.
-        ("viz-arrow-key-step-no-mesh-reupload", 1),
-        ("viz-arrow-keys-step-layer-with-saturation", 1),
+        // PAID DOWN (viz-arrow-keys-stepdefs): both arrow-key specs now
+        // have in-process step defs using ButtonInput::press + reset_all.
+        // viz_arrow_key_step_no_mesh_reupload.rs (UAT-6) and
+        // viz_arrow_keys_step_layer_with_saturation.rs (UAT-5).
+        //
         // PAID DOWN (viz-load-sim-missing-sidecar): UAT-1 and UAT-3
         // stepped in viz_load_sim_missing_sidecar.rs. UAT-1's steps are
         // #[cfg(feature = "field-sim")] gated — without the feature (the
