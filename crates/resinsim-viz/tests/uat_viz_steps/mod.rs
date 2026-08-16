@@ -10,10 +10,15 @@
 //! (`assert_mod_rs_and_use_list_agree` in `uat_viz_gherkin.rs`) reads
 //! it to distinguish step modules from support modules when comparing
 //! `pub mod` declarations against the `use` bindings that force linking.
+//!
+//! NON_STEP_MODULES and the layer-3 `assert_mod_rs_and_use_list_agree`
+//! cross-check are now active (triggered by the second step-def module
+//! landing). See `uat_viz_gherkin.rs` for the check.
 
 pub mod viz_cli;
 
 pub mod viz_bad_pairing;
+pub mod viz_load_sim_missing_sidecar;
 pub mod viz_screenshot_flag;
 
 /// Modules under `uat_viz_steps/` that are shared support code, not

@@ -61,7 +61,7 @@ use uat_viz_steps::viz_cli::CliOutcome;
 // core's `use uat_steps::{...}` block). `assert_mod_rs_and_use_list_agree`
 // (below) cross-checks this list against `mod.rs`'s `pub mod` set.
 #[allow(unused_imports)]
-use uat_viz_steps::{viz_bad_pairing, viz_screenshot_flag};
+use uat_viz_steps::{viz_bad_pairing, viz_load_sim_missing_sidecar, viz_screenshot_flag};
 
 /// World for viz UAT scenarios. Carries the outcome of the last
 /// `resinsim-viz` CLI invocation, a path staged by a "When" step for a
@@ -160,7 +160,16 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("viz-arrow-keys-step-layer-with-saturation", 1),
     ("viz-layer-count-mismatch-hard-error", 1),
     ("viz-load-ctb-with-sim-renders-heatmap", 1),
-    ("viz-load-sim-missing-sidecar", 3),
+    // PAID DOWN (viz-load-sim-missing-sidecar): UAT-1 and UAT-3 stepped
+    // in viz_load_sim_missing_sidecar.rs. UAT-1's steps are
+    // #[cfg(feature = "field-sim")] gated — without the feature (the
+    // default `cargo uat-viz` configuration), UAT-1 is also skipped,
+    // making the count 2 (UAT-1 + UAT-2). UAT-2 (drag-drop) is
+    // declared debt (needs synthetic egui pointer events).
+    // NOTE: this count is for default features (no field-sim). With
+    // --features field-sim, only UAT-2 is skipped (count would be 1).
+    // The viz register does not have core's per_config mechanism.
+    ("viz-load-sim-missing-sidecar", 2),
     ("viz-screenshot-flag", 5),
     ("viz-timeline-click-seeks-current-layer", 3),
     ("viz-timeline-drag-pan-does-not-seek", 2),
@@ -481,6 +490,63 @@ async fn main() {
     if total_failed > 0 || total_hook_errors > 0 {
         std::process::exit(1);
     }
+}
+
+/// Layer-3 structural guard: every `pub mod <name>` line in
+/// `uat_viz_steps/mod.rs` whose name is NOT in `NON_STEP_MODULES` must
+/// appear as `use uat_viz_steps::<name>` in THIS file. A missing `use`
+/// means step registrations from that module are silently absent
+/// (the module compiles but its inventory entries never link) — this
+/// check turns that into a hard panic rather than a vacuously-skipped
+/// scenario. Mirrors the logic from `resinsim-core`'s
+/// `uat_gherkin.rs::assert_mod_rs_and_use_list_agree`.
+fn assert_mod_rs_and_use_list_agree() {
+    let mod_rs = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/uat_viz_steps/mod.rs");
+    let mod_rs_text = std::fs::read_to_string(&mod_rs)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", mod_rs.display()));
+
+    let non_step: std::collections::HashSet<&str> =
+        uat_viz_steps::NON_STEP_MODULES.iter().copied().collect();
+
+    let step_modules: Vec<&str> = mod_rs_text
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("pub mod ") {
+                let name = trimmed
+                    .trim_start_matches("pub mod ")
+                    .trim_end_matches(';');
+                if !non_step.contains(name) {
+                    return Some(name);
+                }
+            }
+            None
+        })
+        .collect();
+
+    let harness = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/uat_viz_gherkin.rs");
+    let harness_text = std::fs::read_to_string(&harness)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", harness.display()));
+
+    let missing: Vec<&&str> = step_modules
+        .iter()
+        .filter(|&&name| {
+            let use_pattern = format!("use uat_viz_steps::{name}");
+            !harness_text.contains(&use_pattern)
+        })
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "{} step-def module(s) declared `pub mod` in uat_viz_steps/mod.rs but \
+         MISSING from the `use uat_viz_steps::{{...}}` block in \
+         uat_viz_gherkin.rs: {missing:?}\n\
+         Without the `use`, step registrations from those modules are silently \
+         absent and their scenarios vacuously skip.",
+        missing.len(),
+    );
 }
 
 /// Mirrors `resinsim-core`'s `uat_gherkin.rs::resolve_spec_uat_dir`, but

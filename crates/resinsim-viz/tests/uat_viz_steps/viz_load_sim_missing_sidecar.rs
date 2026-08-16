@@ -1,0 +1,254 @@
+//! Step definitions for `spec/uat/viz-load-sim-missing-sidecar.md`.
+//!
+//! 3 scenarios: UAT-1 and UAT-3 are subprocess CLI checks via
+//! `invoke_viz`. UAT-2 (drag-drop without sidecar) is declared debt —
+//! needs synthetic egui pointer events that bevy_egui 0.39 cannot
+//! produce (same limitation as viz-screenshot-flag's UAT-6).
+//!
+//! UAT-1 FEATURE GATE. The sidecar check in
+//! `load_and_install_sidecar_with_budget` (simulation_repo.rs:688) is
+//! `#[cfg(feature = "field-sim")]`. Without the feature, a Tier-2
+//! sim.json with a `fields_sidecar` pointer loads successfully (pointer
+//! silently ignored, no error). UAT-1's step functions are therefore
+//! individually gated with `#[cfg(feature = "field-sim")]` — the module
+//! itself is unconditional because UAT-3's steps compile in either
+//! configuration.
+//!
+//! EXIT TRIGGER. Both UAT-1 and UAT-3 add `--smoke-exit` to the
+//! invocation (not in the spec's literal command line). Without
+//! `--smoke-exit` (or `--screenshot`), `resinsim-viz` runs as an
+//! interactive GUI and the subprocess never terminates — same
+//! adaptation as `viz_screenshot_flag.rs`'s tier-B scenarios. The
+//! `should_propagate_exit_codes` predicate (main.rs:236) requires
+//! either flag for `fatal_exit` to fire on load failure.
+//!
+//! UAT-3 also passes `--v2` to bypass the bad-pairing check
+//! (main.rs:964: `--load-sim` without `--load-ctb` exits 4). That
+//! check is orthogonal to sidecar validation — it fires on ANY
+//! `--load-sim` without `--load-ctb`, regardless of tier. The spec's
+//! intent is to test the sidecar-free Tier-1 path, not pairing.
+//! `--v2` suppresses the pairing exit so `--smoke-exit` reports the
+//! actual load outcome (exit 0 for a clean Tier-1 load).
+//!
+//! UAT-1 FIXTURE. Reads the checked-in `lilith-torso.sim.json` (Tier-1
+//! envelope), injects a synthetic `fields_sidecar` pointer via
+//! `serde_json::Value` manipulation, and writes the result to the
+//! scenario tempdir as `model.sim.json` WITHOUT creating
+//! `model.fields.bin`. The stat() call in
+//! `load_and_install_sidecar_with_budget` (simulation_repo.rs:739)
+//! fails, producing the `"missing sidecar"` error substring the spec
+//! asserts on.
+//!
+//! UAT-3 FIXTURE. Uses `lilith-torso.sim.json` directly — a Tier-1
+//! envelope with no `fields_sidecar` pointer.
+//!
+//! REUSED STEPS. `then_process_does_not_panic` is defined here and
+//! also matches the same prose in other viz specs' scenarios (same
+//! shared-step pattern as `viz_screenshot_flag.rs`'s
+//! `given_the_resinsim_viz_binary`).
+
+use cucumber::{given, then, when};
+
+use crate::VizWorld;
+use crate::uat_viz_steps::viz_cli::invoke_viz;
+
+// =====================================================================
+// UAT-1: --load-sim with missing fields.bin reports missing sidecar
+//
+// All step functions gated with #[cfg(feature = "field-sim")] — the
+// sidecar check that produces the error is itself feature-gated.
+// =====================================================================
+
+#[cfg(feature = "field-sim")]
+#[given(
+    regex = r#"^a paired `model\.sim\.json` \+ `model\.fields\.bin` was produced by a previous `resinsim sim --voxel-cure-mm` run$"#
+)]
+fn given_paired_sim_and_sidecar(world: &mut VizWorld) {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/lilith-torso.sim.json");
+    assert!(
+        fixture.exists(),
+        "UAT-1's base fixture is missing at {}",
+        fixture.display(),
+    );
+    let contents = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", fixture.display()));
+    let mut envelope: serde_json::Value =
+        serde_json::from_str(&contents).expect("fixture is valid JSON");
+    envelope["fields_sidecar"] = serde_json::json!({
+        "path": "model.fields.bin",
+        "byte_size": 1024,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fields_present": ["cure"]
+    });
+    let original_dir = world.tempdir().join("original");
+    std::fs::create_dir(&original_dir).unwrap_or_else(|e| {
+        panic!("failed to mkdir {}: {e}", original_dir.display())
+    });
+    let sim_json = original_dir.join("model.sim.json");
+    std::fs::write(
+        &sim_json,
+        serde_json::to_string_pretty(&envelope).expect("envelope serialises"),
+    )
+    .expect("write model.sim.json");
+    // Deliberately do NOT create model.fields.bin — that is the test
+    // condition.
+}
+
+#[cfg(feature = "field-sim")]
+#[given(
+    regex = r#"^the user copies ONLY `model\.sim\.json` into a new directory `/tmp/move-test/` \(leaving the sidecar behind\)$"#
+)]
+fn given_copy_only_sim_json(world: &mut VizWorld) {
+    let original = world.tempdir().join("original/model.sim.json");
+    assert!(
+        original.exists(),
+        "scenario invariant: the paired Given step must create original/model.sim.json first"
+    );
+    let move_test = world.tempdir().join("move-test");
+    std::fs::create_dir(&move_test).unwrap_or_else(|e| {
+        panic!("failed to mkdir {}: {e}", move_test.display())
+    });
+    std::fs::copy(&original, move_test.join("model.sim.json"))
+        .expect("copy model.sim.json to move-test/");
+}
+
+#[cfg(feature = "field-sim")]
+#[when(
+    regex = r#"^the user invokes `resinsim-viz --load-sim /tmp/move-test/model\.sim\.json`$"#
+)]
+fn when_invoke_load_sim_missing_sidecar(world: &mut VizWorld) {
+    let sim_path = world.tempdir().join("move-test/model.sim.json");
+    let sim_str = sim_path
+        .to_str()
+        .expect("tempdir paths are UTF-8")
+        .to_string();
+    world.last = Some(invoke_viz(&["--load-sim", &sim_str, "--smoke-exit"]));
+}
+
+#[cfg(feature = "field-sim")]
+#[then(regex = r#"^`resinsim-viz` exits with non-zero code$"#)]
+fn then_exits_with_non_zero(world: &mut VizWorld) {
+    let outcome = world
+        .last
+        .as_ref()
+        .expect("scenario invariant: a When step must populate world.last before Then");
+    assert_ne!(
+        outcome.exit_code, 0,
+        "expected non-zero exit code; got 0 (stderr: {})",
+        outcome.stderr,
+    );
+}
+
+#[cfg(feature = "field-sim")]
+#[then(regex = r#"^stderr mentions "missing sidecar"$"#)]
+fn then_stderr_mentions_missing_sidecar(world: &mut VizWorld) {
+    let outcome = world
+        .last
+        .as_ref()
+        .expect("scenario invariant: a When step must populate world.last before Then/And");
+    assert!(
+        outcome.stderr_contains("missing sidecar"),
+        "expected stderr to mention \"missing sidecar\"; got:\n{}",
+        outcome.stderr,
+    );
+}
+
+#[cfg(feature = "field-sim")]
+#[then(
+    regex = r#"^stderr names the expected sidecar location next to the sim\.json$"#
+)]
+fn then_stderr_names_sidecar_location(world: &mut VizWorld) {
+    let outcome = world
+        .last
+        .as_ref()
+        .expect("scenario invariant: a When step must populate world.last before Then/And");
+    assert!(
+        outcome.stderr_contains("model.fields.bin"),
+        "expected stderr to name the sidecar file \"model.fields.bin\"; got:\n{}",
+        outcome.stderr,
+    );
+}
+
+#[then(regex = r#"^the process does not panic$"#)]
+fn then_process_does_not_panic(world: &mut VizWorld) {
+    let outcome = world
+        .last
+        .as_ref()
+        .expect("scenario invariant: a When step must populate world.last before Then/And");
+    assert!(
+        !outcome.stderr.contains("panicked at"),
+        "process panicked; stderr:\n{}",
+        outcome.stderr,
+    );
+    assert!(
+        !outcome.stderr.contains("stack backtrace"),
+        "process produced a stack backtrace (likely panic); stderr:\n{}",
+        outcome.stderr,
+    );
+}
+
+// =====================================================================
+// UAT-3: Tier-1 envelope without fields_sidecar pointer loads cleanly
+// =====================================================================
+
+#[given(
+    regex = r#"^a `tier1\.sim\.json` envelope WITHOUT a `fields_sidecar` pointer \(i\.e\. produced by `resinsim sim` without `--voxel-cure-mm`\)$"#
+)]
+fn given_tier1_envelope(world: &mut VizWorld) {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/lilith-torso.sim.json");
+    assert!(
+        fixture.exists(),
+        "UAT-3's Tier-1 fixture is missing at {}",
+        fixture.display(),
+    );
+    let tier1_dir = world.tempdir().join("tier1");
+    std::fs::create_dir(&tier1_dir).unwrap_or_else(|e| {
+        panic!("failed to mkdir {}: {e}", tier1_dir.display())
+    });
+    std::fs::copy(&fixture, tier1_dir.join("tier1.sim.json"))
+        .expect("copy lilith-torso.sim.json as tier1.sim.json");
+}
+
+#[when(
+    regex = r#"^the user invokes `resinsim-viz --load-sim tier1\.sim\.json`$"#
+)]
+fn when_invoke_load_sim_tier1(world: &mut VizWorld) {
+    let sim_path = world.tempdir().join("tier1/tier1.sim.json");
+    let sim_str = sim_path
+        .to_str()
+        .expect("tempdir paths are UTF-8")
+        .to_string();
+    // --v2 bypasses the bad-pairing check (--load-sim without --load-ctb
+    // → exit 4) which is orthogonal to sidecar validation. See module doc.
+    world.last = Some(invoke_viz(&[
+        "--load-sim", &sim_str, "--smoke-exit", "--v2",
+    ]));
+}
+
+#[then(regex = r#"^the load succeeds$"#)]
+fn then_load_succeeds(world: &mut VizWorld) {
+    let outcome = world
+        .last
+        .as_ref()
+        .expect("scenario invariant: a When step must populate world.last before Then");
+    assert_eq!(
+        outcome.exit_code, 0,
+        "expected exit code 0 (load succeeds); got {} (stderr: {})",
+        outcome.exit_code, outcome.stderr,
+    );
+}
+
+#[then(regex = r#"^no error about a missing sidecar appears$"#)]
+fn then_no_missing_sidecar_error(world: &mut VizWorld) {
+    let outcome = world
+        .last
+        .as_ref()
+        .expect("scenario invariant: a When step must populate world.last before Then/And");
+    assert!(
+        !outcome.stderr_contains("missing sidecar"),
+        "expected stderr NOT to mention \"missing sidecar\"; got:\n{}",
+        outcome.stderr,
+    );
+}
