@@ -6,12 +6,11 @@
 // verbatim (per-feature `.run()` for attribution, the silent-green
 // guard, the parse-error guard, the three-direction register check) but
 // is its own binary with its own register, scoped to `spec/uat/viz-*.md`
-// ONLY. `crates/resinsim-core/tests/uat_gherkin.rs`,
-// `crates/resinsim-core/tests/uat_steps/` and its
-// `SPECS_WITHOUT_STEP_DEFS` register are NOT touched by this harness and
-// currently still carry all 12 viz-* entries as debt — see the ADR's
-// "Migration plan" for why that double count is deliberate and
-// temporary.
+// ONLY. `crates/resinsim-core/tests/uat_gherkin.rs` lists every viz-*
+// spec in `SPECS_MIGRATED_TO_VIZ_HARNESS` (exempting them from core's
+// own register and runtime checks) and carries ZERO viz entries in its
+// `SPECS_WITHOUT_STEP_DEFS` — the migration from the transitional
+// double-count (ADR-0024) is complete.
 //
 // Harness flow (mirrors core's, see that file's header comment for the
 // full rationale):

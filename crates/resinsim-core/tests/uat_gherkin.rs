@@ -526,17 +526,6 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // scenarios skip (register expects 4). Field-sim: all 4 stepped
     // (register expects 0).
     per_config("sim-fields-sidecar-roundtrip", 4, 0),
-    both_configs("viz-allow-mismatch-soft-fallback", 1),
-    both_configs("viz-arrow-key-step-no-mesh-reupload", 1),
-    both_configs("viz-arrow-keys-step-layer-with-saturation", 1),
-    both_configs("viz-layer-count-mismatch-hard-error", 1),
-    both_configs("viz-load-ctb-with-sim-renders-heatmap", 1),
-    both_configs("viz-load-sim-missing-sidecar", 3),
-    both_configs("viz-load-sim-without-ctb-bad-pairing", 1),
-    both_configs("viz-timeline-click-seeks-current-layer", 3),
-    both_configs("viz-timeline-drag-pan-does-not-seek", 2),
-    both_configs("viz-timeline-safety-log-toggle-handles-infinite-sf", 2),
-    both_configs("viz-timeline-series-toggle-rescales-y", 2),
     // PAID DOWN (uat-unskip-voxel-cure-field-photoinitiator-depletion,
     // 2026-08-15): all 6 scenarios now have step definitions in the
     // field-sim-gated module `voxel_cure_field_photoinitiator_depletion.rs`.
@@ -551,13 +540,26 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
 ];
 
 /// Specs whose coverage is tracked by the viz harness (`cargo uat-viz`)
-/// rather than this register. Core stages all `spec/uat/*.md` files so
-/// these specs run and their scenarios are skipped, but the skips are
-/// expected — the viz register tracks their paydown. Layers 1 and 2
-/// exempt these specs from the "must have a module or be registered" and
-/// "unexpected skips" checks respectively.
+/// rather than this register (viz-uat-register-migration batch 2,
+/// 2026-08-16). Core stages all `spec/uat/*.md` files so these specs run
+/// and their scenarios are skipped, but the skips are expected — the viz
+/// register tracks their paydown. Layers 1 and 2 exempt these specs from
+/// the "must have a module or be registered" and "unexpected skips" checks
+/// respectively. Every `viz-*` spec is listed here; core's
+/// `SPECS_WITHOUT_STEP_DEFS` carries ZERO viz entries.
 const SPECS_MIGRATED_TO_VIZ_HARNESS: &[&str] = &[
+    "viz-allow-mismatch-soft-fallback",
+    "viz-arrow-key-step-no-mesh-reupload",
+    "viz-arrow-keys-step-layer-with-saturation",
+    "viz-layer-count-mismatch-hard-error",
+    "viz-load-ctb-with-sim-renders-heatmap",
+    "viz-load-sim-missing-sidecar",
+    "viz-load-sim-without-ctb-bad-pairing",
     "viz-screenshot-flag",
+    "viz-timeline-click-seeks-current-layer",
+    "viz-timeline-drag-pan-does-not-seek",
+    "viz-timeline-safety-log-toggle-handles-infinite-sf",
+    "viz-timeline-series-toggle-rescales-y",
 ];
 
 /// Step-def modules whose file name does not match their spec's file name.
