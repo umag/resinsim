@@ -457,7 +457,9 @@ in this repo today). Run it whenever `spec/uat/viz-*.md` or
 scenarios stepped): 12 features, 12 register entries summing 23, 35
 steps passed / 23 skipped / 0 failed, 0 parsing errors, exit 0.
 `viz-screenshot-flag` itself: 31 steps passed, 5 skipped (UAT-2/5/8
-env-conditional — this repo has zero committed `.ctb` fixtures; UAT-6
+env-conditional — no committed `.ctb` fixtures (a 356 MB
+lilith-torso.ctb is available locally via `RESINSIM_SLICED_FIXTURE`,
+with its matching sim at `tests/fixtures/lilith-torso.sim.json`); UAT-6
 not drivable, `bevy_egui` 0.39 has no synthetic pointer-click API;
 UAT-7d declared debt — `clap` 4.6.1 rejects an empty `--screenshot`
 value at the parser level before the app's own validation ever runs,

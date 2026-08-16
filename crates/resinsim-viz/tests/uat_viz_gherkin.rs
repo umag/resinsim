@@ -128,6 +128,34 @@ impl VizWorld {
 /// UAT-7d per above.
 const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("viz-allow-mismatch-soft-fallback", 1),
+    // viz-arrow-keys-uat: both specs below ARE tested by in-process unit
+    // tests in main.rs — keyboard simulation via `ButtonInput::press()` +
+    // `reset_all()` with synthetic fixtures (no `.ctb` needed). The
+    // cucumber debt persists because `resinsim-viz` is a binary-only crate
+    // (no `lib.rs`), so this integration test binary cannot import the
+    // systems, resources, or types it would need for in-process driving.
+    // A `lib.rs` + `main.rs` split would unblock cucumber step defs; until
+    // then, the behavior is covered by unit tests, not by this harness.
+    //
+    // UAT-6 (no-mesh-reupload): covered by
+    // `slice_stack_mesh_attribute_color_unmutated_under_arrow_keys` — asserts
+    // ATTRIBUTE_COLOR byte-identity, Assets<Mesh> count stability, and
+    // LayerCursor Transform.z-only mutation across a full ArrowUp/ArrowDown
+    // traversal. Also `update_layer_cursor_moves_transform_z_only`.
+    //
+    // UAT-5 (step-layer-with-saturation): covered by
+    // `arrow_up_advances_current_layer_with_saturation` and
+    // `arrow_down_retreats_current_layer_with_saturation` — assert
+    // CurrentLayer.index saturation at 0 and max under ArrowUp/ArrowDown.
+    // HUD text ("Layer N/N") is logged to stderr via `info!()` but the
+    // HUD content itself is not asserted by the unit tests (the cursor
+    // index IS, which is the upstream value the HUD renders).
+    //
+    // `.ctb` fixture: a 356 MB lilith-torso.ctb is available locally at
+    // /Users/mag1/Documents/3d/lilith-torso.ctb for env-var-gated tests
+    // (RESINSIM_SLICED_FIXTURE); the committed lilith-torso.sim.json in
+    // tests/fixtures/ is its matching sim. Not committed to the repo per
+    // `docs/patterns/synthesise-archive-fixture-not-committed-binary.md`.
     ("viz-arrow-key-step-no-mesh-reupload", 1),
     ("viz-arrow-keys-step-layer-with-saturation", 1),
     ("viz-layer-count-mismatch-hard-error", 1),
