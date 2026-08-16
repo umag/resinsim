@@ -137,6 +137,159 @@ fn gpu_identity_kernel_is_noop() {
 }
 
 #[test]
+fn begin_dispatch_finish_download_matches_apply() {
+    let ctx = match try_gpu_context() {
+        Some(c) => c,
+        None => {
+            eprintln!("no GPU adapter — skipping");
+            return;
+        }
+    };
+
+    let nx = 8_u32;
+    let ny = 8_u32;
+    let sigma = 1.0_f32;
+    let kernel = LightCrosstalkCalculator::build_separable_kernel(sigma)
+        .expect("sigma=1 kernel");
+
+    let make_grid = || {
+        Array2::<f32>::from_shape_fn((nx as usize, ny as usize), |(ix, iy)| {
+            ((ix * 13 + iy * 7) % 11) as f32 + 0.5
+        })
+    };
+
+    // One-shot path
+    let mut oneshot_grid = make_grid();
+    let mut bufs_a = GpuCrosstalkBuffers::new(&ctx, nx, ny);
+    bufs_a.apply_separable_2d(&ctx, &mut oneshot_grid, &kernel);
+
+    // Split path: begin_dispatch then finish_download
+    let input_grid = make_grid();
+    let mut bufs_b = GpuCrosstalkBuffers::new(&ctx, nx, ny);
+    bufs_b.begin_dispatch(&ctx, &input_grid, &kernel);
+    let split_grid = bufs_b.finish_download(&ctx);
+
+    for ix in 0..nx as usize {
+        for iy in 0..ny as usize {
+            assert_eq!(
+                oneshot_grid[(ix, iy)],
+                split_grid[(ix, iy)],
+                "begin/finish must match apply_separable_2d at ({ix},{iy})"
+            );
+        }
+    }
+}
+
+#[test]
+fn pipelined_multi_layer_matches_sequential() {
+    let ctx = match try_gpu_context() {
+        Some(c) => c,
+        None => {
+            eprintln!("no GPU adapter — skipping");
+            return;
+        }
+    };
+
+    let nx = 8_u32;
+    let ny = 8_u32;
+    let sigma = 1.0_f32;
+    let n_layers = 6_u32;
+    let kernel = LightCrosstalkCalculator::build_separable_kernel(sigma)
+        .expect("sigma=1 kernel");
+
+    let make_grid = |layer: u32| {
+        Array2::<f32>::from_shape_fn((nx as usize, ny as usize), |(ix, iy)| {
+            ((ix * 13 + iy * 7 + layer as usize * 3) % 11) as f32 + 0.5
+        })
+    };
+
+    // Sequential: one-shot per layer
+    let mut sequential_results = Vec::new();
+    let mut bufs_seq = GpuCrosstalkBuffers::new(&ctx, nx, ny);
+    for layer in 0..n_layers {
+        let mut grid = make_grid(layer);
+        bufs_seq.apply_separable_2d(&ctx, &mut grid, &kernel);
+        sequential_results.push(grid);
+    }
+
+    // Pipelined: download(K) → dispatch(K+1) → process(K)
+    let mut pipelined_results = Vec::new();
+    let mut bufs_pipe = GpuCrosstalkBuffers::new(&ctx, nx, ny);
+
+    // Prologue: dispatch layer 0
+    let grid_0 = make_grid(0);
+    bufs_pipe.begin_dispatch(&ctx, &grid_0, &kernel);
+
+    for k in 0..n_layers {
+        // Download K
+        let convolved = bufs_pipe.finish_download(&ctx);
+
+        // Dispatch K+1 (if exists)
+        if k + 1 < n_layers {
+            let grid_next = make_grid(k + 1);
+            bufs_pipe.begin_dispatch(&ctx, &grid_next, &kernel);
+        }
+
+        // "Process" K — just save result
+        pipelined_results.push(convolved);
+    }
+
+    // Compare
+    for layer in 0..n_layers as usize {
+        for ix in 0..nx as usize {
+            for iy in 0..ny as usize {
+                assert_eq!(
+                    sequential_results[layer][(ix, iy)],
+                    pipelined_results[layer][(ix, iy)],
+                    "pipelined must match sequential at layer={layer} ({ix},{iy})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn pipelined_single_layer_no_dispatch_next() {
+    let ctx = match try_gpu_context() {
+        Some(c) => c,
+        None => {
+            eprintln!("no GPU adapter — skipping");
+            return;
+        }
+    };
+
+    let nx = 5_u32;
+    let ny = 5_u32;
+    let sigma = 1.0_f32;
+    let kernel = LightCrosstalkCalculator::build_separable_kernel(sigma)
+        .expect("sigma=1 kernel");
+
+    let grid = Array2::<f32>::from_shape_fn((nx as usize, ny as usize), |(ix, iy)| {
+        (ix * 5 + iy) as f32 + 1.0
+    });
+
+    // One-shot
+    let mut oneshot = grid.clone();
+    let mut bufs_a = GpuCrosstalkBuffers::new(&ctx, nx, ny);
+    bufs_a.apply_separable_2d(&ctx, &mut oneshot, &kernel);
+
+    // Pipelined single layer: prologue dispatch, download, no dispatch-next
+    let mut bufs_b = GpuCrosstalkBuffers::new(&ctx, nx, ny);
+    bufs_b.begin_dispatch(&ctx, &grid, &kernel);
+    let pipelined = bufs_b.finish_download(&ctx);
+
+    for ix in 0..nx as usize {
+        for iy in 0..ny as usize {
+            assert_eq!(
+                oneshot[(ix, iy)],
+                pipelined[(ix, iy)],
+                "single-layer pipelined must match at ({ix},{iy})"
+            );
+        }
+    }
+}
+
+#[test]
 fn gpu_cpu_xy_parity_edge_clamp_to_zero() {
     let ctx = match try_gpu_context() {
         Some(c) => c,

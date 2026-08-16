@@ -309,3 +309,58 @@ layer.
 
 (g) **Async compute queues / multi-queue.** Rejected: wgpu does not
 expose async compute queues or multi-queue dispatch.
+
+---
+
+## Stage F: Async crosstalk layer pipelining
+
+### Context
+
+Stage C's GPU crosstalk dispatch (`GpuCrosstalkBuffers::apply_separable_2d`)
+runs upload → conv_x → conv_y → copy-to-staging → submit → poll(Wait) →
+download synchronously per layer. In the per-layer loop, each layer blocks
+on GPU completion before proceeding to thermal and strain. The GPU is idle
+during CPU-bound thermal diffusion and strain/stress computation.
+
+### Decision
+
+#### (xviii) Split apply_separable_2d into begin_dispatch + finish_download
+
+`begin_dispatch` uploads intensity, encodes X/Y passes, copies to staging,
+and calls `queue.submit()` — non-blocking. `finish_download` calls
+`map_async` + `poll(Wait)` + copy — blocking. `apply_separable_2d` is
+retained as a convenience wrapper.
+
+#### (xix) One-layer-ahead pre-dispatch in the outer loop
+
+After `apply_voxel_cure_for_layer` completes for layer K, the outer loop
+builds the intensity grid for layer K+1 and calls `begin_dispatch`. The
+GPU runs conv(K+1) while the CPU runs thermal(K) + strain(K). On
+entering `apply_voxel_cure_for_layer_crosstalk` for K+1, the function
+downloads the pre-dispatched result instead of dispatching fresh.
+
+#### (xx) download → dispatch → process ordering
+
+`poll(Wait)` waits for ALL pending GPU submissions. To prevent
+serialisation, the pre-dispatch for K+1 fires AFTER K's download
+completes (within the cure step), so `poll(Wait)` for K has no other
+pending work. The GPU then works on K+1 while the CPU runs thermal +
+strain for K.
+
+#### (xxi) Graceful degradation
+
+For the first crosstalk layer (no pre-dispatch) and the last layer (no
+K+1 to dispatch), the path degrades to sequential dispatch + download
+with no performance loss. Single-layer prints take the one-shot path.
+
+### Consequences
+
+- Supersedes Stage E consequence "GPU crosstalk path is unchanged".
+- Overlap window: GPU conv(K+1) during CPU thermal(K) + strain(K).
+  For small grids or fast GPUs the GPU finishes before the CPU work
+  starts — pipelining degrades to sequential, never slower.
+- GPU parity tests extended: 3 new tests in `gpu_crosstalk_parity.rs`
+  (begin/finish parity, multi-layer pipelined, single-layer degenerate).
+- Benchmark extended with pipelined multi-layer throughput comparison.
+- `VoxelState` gains `crosstalk_gpu_dispatched: bool` tracking whether
+  a pre-dispatch is pending.

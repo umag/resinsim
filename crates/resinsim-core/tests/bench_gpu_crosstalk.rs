@@ -36,7 +36,7 @@ fn bench_xy(
     }
     let cpu_ms = cpu_start.elapsed().as_secs_f64() * 1000.0;
 
-    // --- GPU ---
+    // --- GPU sequential (one-shot per layer) ---
     let mut bufs = GpuCrosstalkBuffers::new(ctx, nx, ny);
     let gpu_start = std::time::Instant::now();
     for _ in 0..n_layers {
@@ -45,10 +45,27 @@ fn bench_xy(
     }
     let gpu_ms = gpu_start.elapsed().as_secs_f64() * 1000.0;
 
+    // --- GPU pipelined (download K → dispatch K+1 → "process" K) ---
+    let mut bufs_p = GpuCrosstalkBuffers::new(ctx, nx, ny);
+    let pipe_start = std::time::Instant::now();
+    let grid_0 = make_grid();
+    bufs_p.begin_dispatch(ctx, &grid_0, &kernel);
+    for k in 0..n_layers {
+        let _convolved = bufs_p.finish_download(ctx);
+        if k + 1 < n_layers {
+            let grid_next = make_grid();
+            bufs_p.begin_dispatch(ctx, &grid_next, &kernel);
+        }
+    }
+    let pipe_ms = pipe_start.elapsed().as_secs_f64() * 1000.0;
+
     let speedup = cpu_ms / gpu_ms;
+    let pipe_speedup = cpu_ms / pipe_ms;
+    let pipe_vs_seq = gpu_ms / pipe_ms;
     eprintln!(
         "\n{label}\n  {total_pixels} pixels ({nx}x{ny}), kernel_len={}, {n_layers} layers\n  \
-         CPU: {cpu_ms:.1} ms  GPU: {gpu_ms:.1} ms  speedup: {speedup:.1}×",
+         CPU: {cpu_ms:.1} ms  GPU-seq: {gpu_ms:.1} ms  GPU-pipe: {pipe_ms:.1} ms\n  \
+         vs-CPU: seq {speedup:.1}× pipe {pipe_speedup:.1}×  pipe-vs-seq: {pipe_vs_seq:.2}×",
         kernel.len(),
     );
 }

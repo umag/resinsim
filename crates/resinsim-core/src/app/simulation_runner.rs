@@ -159,6 +159,8 @@ struct VoxelState {
     #[cfg(feature = "gpu")]
     gpu_crosstalk_log_emitted: bool,
     #[cfg(feature = "gpu")]
+    crosstalk_gpu_dispatched: bool,
+    #[cfg(feature = "gpu")]
     gpu_strain_stress: Option<GpuStrainStressBuffers>,
 }
 
@@ -878,6 +880,8 @@ impl SimulationRunner {
                         #[cfg(feature = "gpu")]
                         gpu_crosstalk_log_emitted: false,
                         #[cfg(feature = "gpu")]
+                        crosstalk_gpu_dispatched: false,
+                        #[cfg(feature = "gpu")]
                         gpu_strain_stress: None,
                     })
                 } else {
@@ -996,6 +1000,40 @@ impl SimulationRunner {
                     &overrides,
                     &mut result,
                 )?;
+
+                // ADR-0025 Stage F: pre-dispatch next layer's GPU crosstalk
+                // conv so the GPU works while CPU runs thermal + strain for
+                // this layer. The crosstalk function downloads the result on
+                // entry for the next layer instead of dispatching fresh.
+                #[cfg(feature = "gpu")]
+                if i + 1 < areas.len() {
+                    if let Some(sigma_xy) = printer.crosstalk_sigma_xy_um() {
+                        if let Some(ref mut gpu_bufs) = state.gpu_crosstalk {
+                            let ctx = &state.gpu_thermal.as_ref()
+                                .expect("gpu_crosstalk implies gpu_thermal").0;
+                            let next_mask = &voxel_field_masks[i + 1];
+                            let vsz = next_mask.voxel_size_mm();
+                            let (mnx, mny, _) = state.cure.dimensions();
+                            let mut next_intensity =
+                                ndarray::Array2::<f32>::zeros((mnx as usize, mny as usize));
+                            for (ix, iy) in next_mask.iter_solid() {
+                                let x_mm = (ix as f32 + 0.5) * vsz;
+                                let y_mm = (iy as f32 + 0.5) * vsz;
+                                let factor = UniformityCalculator::intensity_factor(
+                                    x_mm, y_mm, &state.uniformity,
+                                );
+                                next_intensity[(ix as usize, iy as usize)] =
+                                    state.led_power_mw_cm2 * factor;
+                            }
+                            let sigma_xy_voxels = sigma_xy / (vsz * 1000.0);
+                            let xy_kernel =
+                                LightCrosstalkCalculator::build_separable_kernel(sigma_xy_voxels)
+                                    .map_err(|e| format!("pre-dispatch xy kernel: {e:?}"))?;
+                            gpu_bufs.begin_dispatch(ctx, &next_intensity, &xy_kernel);
+                            state.crosstalk_gpu_dispatched = true;
+                        }
+                    }
+                }
 
                 Self::apply_voxel_thermal_for_layer(state, i as u32, recipe, printer)?;
 
@@ -1879,57 +1917,103 @@ impl SimulationRunner {
         let (nx, ny, nz) = state.cure.dimensions();
         let voxel_size_mm = mask.voxel_size_mm();
 
-        // (1) Build the 2D intensity grid from the solid mask + KB-120
-        // uniformity factor. Off-mask pixels stay at 0.
-        let mut intensity = Array2::<f32>::zeros((nx as usize, ny as usize));
-        for (ix, iy) in mask.iter_solid() {
-            let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
-            let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
-            let factor = UniformityCalculator::intensity_factor(x_mm, y_mm, &state.uniformity);
-            intensity[(ix as usize, iy as usize)] = state.led_power_mw_cm2 * factor;
+        let xy_active = sigma_xy_um.is_some();
+
+        // (1) Build or download the intensity grid.
+        #[cfg(feature = "gpu")]
+        if !state.gpu_crosstalk_log_emitted {
+            if let (Some(_), Some(sigma_xy)) = (&state.gpu_crosstalk, sigma_xy_um) {
+                let ctx = &state.gpu_thermal.as_ref()
+                    .expect("gpu_crosstalk implies gpu_thermal").0;
+                let sigma_xy_voxels = sigma_xy / (voxel_size_mm * 1000.0);
+                let probe_kernel = LightCrosstalkCalculator::build_separable_kernel(sigma_xy_voxels)
+                    .map_err(|e| format!("xy kernel layer {layer}: {e:?}"))?;
+                eprintln!(
+                    "tier-2 crosstalk GPU: adapter={}, grid={}x{}, kernel_len={}",
+                    ctx.adapter_name(), nx, ny, probe_kernel.len(),
+                );
+                state.gpu_crosstalk_log_emitted = true;
+            }
         }
 
-        // (2) XY pre-convolution (if σ_xy active).
-        // ADR-0025 Stage C: GPU dispatch when available, CPU fallback otherwise.
-        let xy_active = if let Some(sigma_xy) = sigma_xy_um {
+        #[cfg(feature = "gpu")]
+        let intensity = if state.crosstalk_gpu_dispatched {
+            let gpu_bufs = state.gpu_crosstalk.as_mut()
+                .expect("crosstalk_gpu_dispatched implies gpu_crosstalk");
+            let ctx = &state.gpu_thermal.as_ref()
+                .expect("gpu_crosstalk implies gpu_thermal").0;
+            state.crosstalk_gpu_dispatched = false;
+            let downloaded = gpu_bufs.finish_download(ctx);
+            if !downloaded.iter().all(|v| v.is_finite()) {
+                return Err(format!(
+                    "ADR-0025 / t2f5 GPU crosstalk produced non-finite intensity at layer {layer}"
+                ));
+            }
+            downloaded
+        } else if xy_active {
+            let mut grid = Array2::<f32>::zeros((nx as usize, ny as usize));
+            for (ix, iy) in mask.iter_solid() {
+                let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
+                let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
+                let factor = UniformityCalculator::intensity_factor(x_mm, y_mm, &state.uniformity);
+                grid[(ix as usize, iy as usize)] = state.led_power_mw_cm2 * factor;
+            }
+            let sigma_xy = sigma_xy_um.unwrap();
             let sigma_xy_voxels = sigma_xy / (voxel_size_mm * 1000.0);
             let xy_kernel = LightCrosstalkCalculator::build_separable_kernel(sigma_xy_voxels)
                 .map_err(|e| format!("xy kernel layer {layer}: {e:?}"))?;
-            #[cfg(feature = "gpu")]
-            let used_gpu = if let Some(ref mut gpu_bufs) = state.gpu_crosstalk {
+            if let Some(ref mut gpu_bufs) = state.gpu_crosstalk {
                 let ctx = &state.gpu_thermal.as_ref()
-                    .expect("gpu_crosstalk implies gpu_thermal is initialised").0;
-                if !state.gpu_crosstalk_log_emitted {
-                    eprintln!(
-                        "tier-2 crosstalk GPU: adapter={}, grid={}x{}, kernel_len={}",
-                        ctx.adapter_name(), nx, ny, xy_kernel.len(),
-                    );
-                    state.gpu_crosstalk_log_emitted = true;
-                }
-                gpu_bufs.apply_separable_2d(ctx, &mut intensity, &xy_kernel);
-                if !intensity.iter().all(|v| v.is_finite()) {
+                    .expect("gpu_crosstalk implies gpu_thermal").0;
+                gpu_bufs.apply_separable_2d(ctx, &mut grid, &xy_kernel);
+                if !grid.iter().all(|v| v.is_finite()) {
                     return Err(format!(
                         "ADR-0025 / t2f5 GPU crosstalk produced non-finite intensity at layer {layer}"
                     ));
                 }
-                true
             } else {
-                false
-            };
-            #[cfg(not(feature = "gpu"))]
-            let used_gpu = false;
-            if !used_gpu {
                 let mut xy_scratch = Array2::<f32>::zeros((nx as usize, ny as usize));
                 LightCrosstalkCalculator::apply_separable_2d(
-                    &mut intensity,
+                    &mut grid,
                     &xy_kernel,
                     &mut xy_scratch,
                 )
                 .map_err(|e| format!("xy conv layer {layer}: {e:?}"))?;
             }
-            true
+            grid
         } else {
-            false
+            let mut grid = Array2::<f32>::zeros((nx as usize, ny as usize));
+            for (ix, iy) in mask.iter_solid() {
+                let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
+                let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
+                let factor = UniformityCalculator::intensity_factor(x_mm, y_mm, &state.uniformity);
+                grid[(ix as usize, iy as usize)] = state.led_power_mw_cm2 * factor;
+            }
+            grid
+        };
+
+        #[cfg(not(feature = "gpu"))]
+        let mut intensity = {
+            let mut grid = Array2::<f32>::zeros((nx as usize, ny as usize));
+            for (ix, iy) in mask.iter_solid() {
+                let x_mm = (ix as f32 + 0.5) * voxel_size_mm;
+                let y_mm = (iy as f32 + 0.5) * voxel_size_mm;
+                let factor = UniformityCalculator::intensity_factor(x_mm, y_mm, &state.uniformity);
+                grid[(ix as usize, iy as usize)] = state.led_power_mw_cm2 * factor;
+            }
+            if let Some(sigma_xy) = sigma_xy_um {
+                let sigma_xy_voxels = sigma_xy / (voxel_size_mm * 1000.0);
+                let xy_kernel = LightCrosstalkCalculator::build_separable_kernel(sigma_xy_voxels)
+                    .map_err(|e| format!("xy kernel layer {layer}: {e:?}"))?;
+                let mut xy_scratch = Array2::<f32>::zeros((nx as usize, ny as usize));
+                LightCrosstalkCalculator::apply_separable_2d(
+                    &mut grid,
+                    &xy_kernel,
+                    &mut xy_scratch,
+                )
+                .map_err(|e| format!("xy conv layer {layer}: {e:?}"))?;
+            }
+            grid
         };
 
         // (3) Build the Z kernel + reusable per-column scratch buffers if σ_z active.

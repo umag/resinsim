@@ -288,13 +288,13 @@ impl GpuCrosstalkBuffers {
         }
     }
 
-    /// Upload intensity grid, run GPU X-pass then Y-pass, download result
-    /// back into the grid. The grid is modified in-place to match the CPU
-    /// `apply_separable_2d` contract.
-    pub fn apply_separable_2d(
+    /// Upload intensity grid, encode X-pass and Y-pass, copy result to
+    /// staging, and submit — non-blocking. Call `finish_download` to
+    /// retrieve the result after the GPU finishes.
+    pub fn begin_dispatch(
         &mut self,
         ctx: &GpuContext,
-        intensity: &mut Array2<f32>,
+        intensity: &Array2<f32>,
         kernel: &[f32],
     ) {
         let (nx, ny) = intensity.dim();
@@ -327,7 +327,6 @@ impl GpuCrosstalkBuffers {
                 label: Some("crosstalk_encoder"),
             });
 
-        // X-pass: buf_a → buf_b
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("conv_x_pass"),
@@ -338,7 +337,6 @@ impl GpuCrosstalkBuffers {
             pass.dispatch_workgroups(wg_x, wg_y, 1);
         }
 
-        // Y-pass: buf_b → buf_a
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("conv_y_pass"),
@@ -349,7 +347,6 @@ impl GpuCrosstalkBuffers {
             pass.dispatch_workgroups(wg_x, wg_y, 1);
         }
 
-        // Result is in buf_a → copy to staging
         encoder.copy_buffer_to_buffer(
             &self.buf_a,
             0,
@@ -358,8 +355,11 @@ impl GpuCrosstalkBuffers {
             (self.total_pixels as usize * std::mem::size_of::<f32>()) as u64,
         );
         ctx.queue().submit(Some(encoder.finish()));
+    }
 
-        // Download
+    /// Block until the previously dispatched GPU work completes, then
+    /// download the convolved intensity grid from the staging buffer.
+    pub fn finish_download(&mut self, ctx: &GpuContext) -> Array2<f32> {
         let slice = self.staging_buf.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -372,10 +372,28 @@ impl GpuCrosstalkBuffers {
 
         let mapped = slice.get_mapped_range();
         let gpu_data: &[f32] = bytemuck::cast_slice(&mapped);
-        for (dst, &src_val) in intensity.iter_mut().zip(gpu_data.iter()) {
+        let mut result = Array2::<f32>::zeros((self.nx as usize, self.ny as usize));
+        for (dst, &src_val) in result.iter_mut().zip(gpu_data.iter()) {
             *dst = src_val;
         }
         drop(mapped);
         self.staging_buf.unmap();
+        result
+    }
+
+    /// Upload intensity grid, run GPU X-pass then Y-pass, download result
+    /// back into the grid. The grid is modified in-place to match the CPU
+    /// `apply_separable_2d` contract.
+    pub fn apply_separable_2d(
+        &mut self,
+        ctx: &GpuContext,
+        intensity: &mut Array2<f32>,
+        kernel: &[f32],
+    ) {
+        self.begin_dispatch(ctx, intensity, kernel);
+        let result = self.finish_download(ctx);
+        for (dst, &src_val) in intensity.iter_mut().zip(result.iter()) {
+            *dst = src_val;
+        }
     }
 }
