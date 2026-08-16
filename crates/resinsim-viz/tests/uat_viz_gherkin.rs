@@ -65,6 +65,7 @@ use uat_viz_steps::{
     viz_arrow_keys_step_layer_with_saturation, viz_bad_pairing,
     viz_layer_count_mismatch_hard_error, viz_load_ctb_with_sim_renders_heatmap,
     viz_load_sim_missing_sidecar, viz_screenshot_ctb, viz_screenshot_flag,
+    viz_timeline_click_seeks_current_layer, viz_timeline_drag_pan_does_not_seek,
     viz_timeline_safety_log_toggle_handles_infinite_sf,
     viz_timeline_series_toggle_rescales_y,
 };
