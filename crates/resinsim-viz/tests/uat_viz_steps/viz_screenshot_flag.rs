@@ -1,26 +1,16 @@
 //! Step definitions for `spec/uat/viz-screenshot-flag.md`.
 //!
-//! TIER A (this module, step 4 of viz-uat-cucumber-harness): UAT-7a/7b/7c
+//! TIER A (this module, step 4 of viz-uat-cucumber-harness): UAT-7a/7b/7c/7d
 //! — renderer-free, `--screenshot` path validation exits 5 via
 //! `std::process::exit` at main.rs BEFORE `App::new()`. No window, no
 //! wgpu, no LogPlugin; these run on any machine, display or not.
 //!
-//! UAT-7d ("empty path → exit 5") is declared debt, NOT stepped, despite
-//! being read as tier-A-shaped by the plan. Empirically probed at
-//! viz-uat-cucumber-harness step 1 via a direct subprocess invocation
-//! (bypassing shell-quoting ambiguity) AND an isolated minimal clap 4.6.1
-//! repro: passing an empty string to `--screenshot` (either
-//! `--screenshot ""` or the unambiguous `--screenshot=` form) is rejected
-//! by clap's OWN parser — exit 2, "a value is required for '--screenshot
-//! <PATH.png>' but none was supplied" — before `main()`'s own
-//! `validate_screenshot_path` / `PathError::Empty` (screenshot.rs:124)
-//! ever runs. The scenario as literally written (exit 5 + "is empty") is
-//! therefore NOT reachable via CLI subprocess. Per the hard rule that
-//! every spec/harness mismatch is resolved on the HARNESS side, never by
-//! editing the spec or weakening the assertion, UAT-7d stays an actual
-//! runtime skip, covered instead by the pre-existing in-process unit test
-//! `validate_rejects_empty_path` (screenshot.rs) — the same pattern the
-//! spec's own "Test coverage notes" section already uses for exit 7/8.
+//! UAT-7d ("empty path → exit 5") was previously declared debt because
+//! clap 4.6.1 rejected empty `--screenshot` values (exit 2) before
+//! `main()`'s `validate_screenshot_path` ran. Fixed by adding a custom
+//! `value_parser` on the `--screenshot` arg that accepts any string
+//! including empty, letting our `PathError::Empty` validation handle it
+//! (exit 5 + "is empty" as the spec requires).
 //!
 //! TIER B (this module, step 5): UAT-1/3/4/9 — renderer-dependent. Each
 //! opens a real window for a few seconds; `cargo uat-viz`'s `main()` runs
@@ -170,7 +160,16 @@ fn when_invoke_screenshot_bad_extension(world: &mut VizWorld) {
 }
 
 // ---------------------------------------------------------------------
-// Shared Then/And assertions (UAT-7a/7b/7c today; UAT-1/3/4/9 reuse the
+// UAT-7d: empty path -> exit 5, "is empty"
+// ---------------------------------------------------------------------
+
+#[when(regex = r#"^the user invokes resinsim-viz --screenshot ""$"#)]
+fn when_invoke_screenshot_empty_path(world: &mut VizWorld) {
+    world.last = Some(invoke_viz(&["--screenshot", ""]));
+}
+
+// ---------------------------------------------------------------------
+// Shared Then/And assertions (UAT-7a/7b/7c/7d; UAT-1/3/4/9 reuse the
 // same exit-code step in step 5).
 // ---------------------------------------------------------------------
 

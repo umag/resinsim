@@ -9,10 +9,12 @@
 //! `load_and_install_sidecar_with_budget` (simulation_repo.rs:688) is
 //! `#[cfg(feature = "field-sim")]`. Without the feature, a Tier-2
 //! sim.json with a `fields_sidecar` pointer loads successfully (pointer
-//! silently ignored, no error). UAT-1's step functions are therefore
-//! individually gated with `#[cfg(feature = "field-sim")]` — the module
-//! itself is unconditional because UAT-3's steps compile in either
-//! configuration.
+//! silently ignored, no error). UAT-1's step functions use a runtime
+//! `cfg!(feature = "field-sim")` check with `fixture_skipped` — the
+//! same env-gated trivial-pass pattern used for `RESINSIM_SLICED_FIXTURE`
+//! scenarios (docs/patterns/env-gated-fixture-with-trivial-pass-step.md).
+//! Without the feature, UAT-1 passes trivially; with it, real assertions
+//! run.
 //!
 //! EXIT TRIGGER. Both UAT-1 and UAT-3 add `--smoke-exit` to the
 //! invocation (not in the spec's literal command line). Without
@@ -55,15 +57,19 @@ use crate::uat_viz_steps::viz_cli::invoke_viz;
 // =====================================================================
 // UAT-1: --load-sim with missing fields.bin reports missing sidecar
 //
-// All step functions gated with #[cfg(feature = "field-sim")] — the
-// sidecar check that produces the error is itself feature-gated.
+// Runtime-gated: cfg!(feature = "field-sim") checked at the first Given
+// step. Without the feature, world.fixture_skipped is set and all steps
+// pass trivially — same pattern as env-gated .ctb fixture scenarios.
 // =====================================================================
 
-#[cfg(feature = "field-sim")]
 #[given(
     regex = r#"^a paired `model\.sim\.json` \+ `model\.fields\.bin` was produced by a previous `resinsim sim --voxel-cure-mm` run$"#
 )]
 fn given_paired_sim_and_sidecar(world: &mut VizWorld) {
+    if !cfg!(feature = "field-sim") {
+        world.fixture_skipped = true;
+        return;
+    }
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/lilith-torso.sim.json");
     assert!(
@@ -91,15 +97,15 @@ fn given_paired_sim_and_sidecar(world: &mut VizWorld) {
         serde_json::to_string_pretty(&envelope).expect("envelope serialises"),
     )
     .expect("write model.sim.json");
-    // Deliberately do NOT create model.fields.bin — that is the test
-    // condition.
 }
 
-#[cfg(feature = "field-sim")]
 #[given(
     regex = r#"^the user copies ONLY `model\.sim\.json` into a new directory `/tmp/move-test/` \(leaving the sidecar behind\)$"#
 )]
 fn given_copy_only_sim_json(world: &mut VizWorld) {
+    if world.fixture_skipped {
+        return;
+    }
     let original = world.tempdir().join("original/model.sim.json");
     assert!(
         original.exists(),
@@ -113,11 +119,13 @@ fn given_copy_only_sim_json(world: &mut VizWorld) {
         .expect("copy model.sim.json to move-test/");
 }
 
-#[cfg(feature = "field-sim")]
 #[when(
     regex = r#"^the user invokes `resinsim-viz --load-sim /tmp/move-test/model\.sim\.json`$"#
 )]
 fn when_invoke_load_sim_missing_sidecar(world: &mut VizWorld) {
+    if world.fixture_skipped {
+        return;
+    }
     let sim_path = world.tempdir().join("move-test/model.sim.json");
     let sim_str = sim_path
         .to_str()
@@ -126,9 +134,11 @@ fn when_invoke_load_sim_missing_sidecar(world: &mut VizWorld) {
     world.last = Some(invoke_viz(&["--load-sim", &sim_str, "--smoke-exit"]));
 }
 
-#[cfg(feature = "field-sim")]
 #[then(regex = r#"^`resinsim-viz` exits with non-zero code$"#)]
 fn then_exits_with_non_zero(world: &mut VizWorld) {
+    if world.fixture_skipped {
+        return;
+    }
     let outcome = world
         .last
         .as_ref()
@@ -140,9 +150,11 @@ fn then_exits_with_non_zero(world: &mut VizWorld) {
     );
 }
 
-#[cfg(feature = "field-sim")]
 #[then(regex = r#"^stderr mentions "missing sidecar"$"#)]
 fn then_stderr_mentions_missing_sidecar(world: &mut VizWorld) {
+    if world.fixture_skipped {
+        return;
+    }
     let outcome = world
         .last
         .as_ref()
@@ -154,11 +166,13 @@ fn then_stderr_mentions_missing_sidecar(world: &mut VizWorld) {
     );
 }
 
-#[cfg(feature = "field-sim")]
 #[then(
     regex = r#"^stderr names the expected sidecar location next to the sim\.json$"#
 )]
 fn then_stderr_names_sidecar_location(world: &mut VizWorld) {
+    if world.fixture_skipped {
+        return;
+    }
     let outcome = world
         .last
         .as_ref()
@@ -172,6 +186,9 @@ fn then_stderr_names_sidecar_location(world: &mut VizWorld) {
 
 #[then(regex = r#"^the process does not panic$"#)]
 fn then_process_does_not_panic(world: &mut VizWorld) {
+    if world.fixture_skipped {
+        return;
+    }
     let outcome = world
         .last
         .as_ref()

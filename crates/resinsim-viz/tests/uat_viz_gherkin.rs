@@ -152,12 +152,11 @@ impl VizWorld {
 /// constant register.
 ///
 /// `viz-screenshot-flag` started (step 2) at 12; step 4 piloted
-/// UAT-7a/7b/7c → 9; step 5 piloted UAT-1/3/4/9 → 5. Now UAT-2/5/8
-/// are stepped (env-gated) → 2 remaining: UAT-6 (needs synthetic egui
-/// pointer click bevy_egui 0.39 cannot produce) and UAT-7d (unreachable
-/// via CLI — clap rejects empty `--screenshot` value before main()'s
-/// validate_screenshot_path runs; covered by unit test
-/// `validate_rejects_empty_path` in screenshot.rs).
+/// UAT-7a/7b/7c → 9; step 5 piloted UAT-1/3/4/9 → 5; UAT-2/5/8
+/// stepped (env-gated) → 2; UAT-7d unblocked (custom value_parser
+/// on --screenshot accepts empty strings, clap no longer intercepts)
+/// → 1 remaining: UAT-6 (needs synthetic egui pointer click,
+/// bevy_egui 0.39 limitation).
 fn specs_without_step_defs() -> Vec<(&'static str, usize)> {
     vec![
         // PAID DOWN (viz-arrow-keys-stepdefs): both arrow-key specs now
@@ -166,16 +165,17 @@ fn specs_without_step_defs() -> Vec<(&'static str, usize)> {
         // viz_arrow_keys_step_layer_with_saturation.rs (UAT-5).
         //
         // PAID DOWN (viz-load-sim-missing-sidecar): UAT-1 and UAT-3
-        // stepped in viz_load_sim_missing_sidecar.rs. UAT-1's steps are
-        // #[cfg(feature = "field-sim")] gated — without the feature (the
-        // default `cargo uat-viz` configuration), UAT-1 is also skipped,
-        // making the count 2 (UAT-1 + UAT-2). UAT-2 (drag-drop) is
-        // declared debt (needs synthetic egui pointer events).
-        // NOTE: this count is for default features (no field-sim). With
-        // --features field-sim, only UAT-2 is skipped (count would be 1).
-        ("viz-load-sim-missing-sidecar", 2),
-        // UAT-6 + UAT-7d remain as declared debt (see doc comment above).
-        ("viz-screenshot-flag", 2),
+        // stepped in viz_load_sim_missing_sidecar.rs. UAT-1's steps use
+        // runtime cfg!(feature = "field-sim") with fixture_skipped —
+        // without the feature, UAT-1 passes trivially (not skipped).
+        // UAT-2 (drag-drop) is declared debt (needs synthetic egui
+        // pointer events).
+        ("viz-load-sim-missing-sidecar", 1),
+        // UAT-6 remains as declared debt (needs synthetic egui pointer
+        // click, bevy_egui 0.39 limitation). UAT-7d was unblocked by
+        // adding a custom value_parser to --screenshot that accepts
+        // empty strings (clap previously intercepted them).
+        ("viz-screenshot-flag", 1),
         ("viz-timeline-click-seeks-current-layer", 3),
         ("viz-timeline-drag-pan-does-not-seek", 2),
         ("viz-timeline-safety-log-toggle-handles-infinite-sf", 2),

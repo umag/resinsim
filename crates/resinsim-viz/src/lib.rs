@@ -58,6 +58,10 @@ use crate::ui::state::{refresh_listings, refresh_loaded_profiles, BottomPanelSta
 // CLI
 // ---------------------------------------------------------------------------
 
+fn parse_path_including_empty(s: &str) -> Result<PathBuf, std::convert::Infallible> {
+    Ok(PathBuf::from(s))
+}
+
 #[derive(Parser, Debug, Resource)]
 #[command(
     name = "resinsim-viz",
@@ -158,7 +162,7 @@ pub struct Args {
     /// post-spawn wait, exits with code 8. MAX_FILE_WAIT (1 s) cap on
     /// Phase 3 post-Captured wait, exits with code 7. See README
     /// "Screenshot capture (AI feedback loop)".
-    #[arg(long, value_name = "PATH.png")]
+    #[arg(long, value_name = "PATH.png", value_parser = parse_path_including_empty)]
     pub screenshot: Option<PathBuf>,
 
     /// Use the v2 Grafana-style dashboard layout instead of the v1
