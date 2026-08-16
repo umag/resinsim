@@ -494,7 +494,6 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // lifecycle. Also covered by the six-row "not yet derived by symbol"
     // note above.
     both_configs("printer-envelope-min-extent-under-field-sim", 1),
-    both_configs("sim-fields-sidecar-roundtrip", 4),
     // PAID DOWN (uat-unskip-thermal-fields, 2026-08-16): both scenarios now
     // have step definitions in the field-sim-gated module
     // `thermal_field_arrhenius_per_voxel.rs`. Band membership derived BY
@@ -534,7 +533,6 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     both_configs("viz-load-ctb-with-sim-renders-heatmap", 1),
     both_configs("viz-load-sim-missing-sidecar", 3),
     both_configs("viz-load-sim-without-ctb-bad-pairing", 1),
-    both_configs("viz-screenshot-flag", 12),
     both_configs("viz-timeline-click-seeks-current-layer", 3),
     both_configs("viz-timeline-drag-pan-does-not-seek", 2),
     both_configs("viz-timeline-safety-log-toggle-handles-infinite-sf", 2),
@@ -550,6 +548,16 @@ const SPECS_WITHOUT_STEP_DEFS: &[SpecDebt] = &[
     // Default features: module doesn't compile, all 6 scenarios skip
     // (register expects 6). Field-sim: all 6 stepped (register expects 0).
     per_config("voxel-cure-field-photoinitiator-depletion", 6, 0),
+];
+
+/// Specs whose coverage is tracked by the viz harness (`cargo uat-viz`)
+/// rather than this register. Core stages all `spec/uat/*.md` files so
+/// these specs run and their scenarios are skipped, but the skips are
+/// expected — the viz register tracks their paydown. Layers 1 and 2
+/// exempt these specs from the "must have a module or be registered" and
+/// "unexpected skips" checks respectively.
+const SPECS_MIGRATED_TO_VIZ_HARNESS: &[&str] = &[
+    "viz-screenshot-flag",
 ];
 
 /// Step-def modules whose file name does not match their spec's file name.
@@ -717,8 +725,9 @@ fn assert_every_spec_has_a_module_or_is_registered(spec_uat: &std::path::Path) {
         .map(String::as_str)
         .filter(|s| !stepped.contains(*s))
         .collect();
-    let registered: std::collections::BTreeSet<&str> =
+    let mut registered: std::collections::BTreeSet<&str> =
         SPECS_WITHOUT_STEP_DEFS.iter().map(|d| d.spec).collect();
+    registered.extend(SPECS_MIGRATED_TO_VIZ_HARNESS.iter().copied());
 
     let newly_unstepped: Vec<&&str> = unstepped.difference(&registered).collect();
     assert!(
@@ -824,7 +833,9 @@ fn assert_runtime_attribution_matches_register(
         .iter()
         .filter(|&(_, &count)| count > 0)
         .filter_map(|(spec, &count)| {
-            (!register.contains_key(spec.as_str())).then_some((spec.as_str(), count))
+            let s = spec.as_str();
+            (!register.contains_key(s) && !SPECS_MIGRATED_TO_VIZ_HARNESS.contains(&s))
+                .then_some((s, count))
         })
         .collect();
     assert!(

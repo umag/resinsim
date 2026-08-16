@@ -125,6 +125,7 @@ pub mod thermal_field_sidecar_roundtrip;
 // (simulation_repo.rs:685-687) — are all #[cfg(feature = "field-sim")].
 // UAT-4 (Tier-1 negative) is ungated but tested under field-sim for
 // semantic strength. See the module's own doc comment.
+#[cfg(feature = "field-sim")]
 pub mod sim_fields_sidecar_roundtrip;
 // FIELD-SIM-GATED (uat-unskip-voxel-cure-field-photoinitiator-depletion):
 // every scenario's entry points — SimulationRunner::
