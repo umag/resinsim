@@ -26,6 +26,8 @@ pub mod viz_load_ctb_with_sim_renders_heatmap;
 pub mod viz_load_sim_missing_sidecar;
 pub mod viz_screenshot_ctb;
 pub mod viz_screenshot_flag;
+pub mod viz_timeline_safety_log_toggle_handles_infinite_sf;
+pub mod viz_timeline_series_toggle_rescales_y;
 
 /// Modules under `uat_viz_steps/` that are shared support code, not
 /// per-spec step-def bindings. Single source for this list — layer 3

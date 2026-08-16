@@ -20,7 +20,7 @@ mod scene;
 pub mod screenshot;
 mod sim;
 mod slice;
-mod ui;
+pub mod ui;
 
 pub use slice::{cumulative_z_mm, slice_stack_to_bevy_mesh, LoadedSliceStack};
 

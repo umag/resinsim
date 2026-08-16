@@ -65,6 +65,8 @@ use uat_viz_steps::{
     viz_arrow_keys_step_layer_with_saturation, viz_bad_pairing,
     viz_layer_count_mismatch_hard_error, viz_load_ctb_with_sim_renders_heatmap,
     viz_load_sim_missing_sidecar, viz_screenshot_ctb, viz_screenshot_flag,
+    viz_timeline_safety_log_toggle_handles_infinite_sf,
+    viz_timeline_series_toggle_rescales_y,
 };
 
 /// Wrapper for `bevy::app::App` that implements `Debug` (App does not).
@@ -111,6 +113,15 @@ pub struct VizWorld {
     pub slice_handle: Option<bevy::asset::Handle<bevy::mesh::Mesh>>,
     pub colors_before: Option<Vec<[f32; 4]>>,
     pub mesh_count_before: Option<usize>,
+    /// In-process sim for toggle step defs (safety-log-toggle,
+    /// series-toggle). Constructed in Given steps via resinsim_core
+    /// builder; consumed by When/Then steps that call
+    /// `build_layer_chart_data` directly.
+    pub sim: Option<resinsim_core::simulation::PrintSimulation>,
+    /// Chart data produced by `build_layer_chart_data` in a When step.
+    pub chart_data: Option<resinsim_viz::ui::plots::LayerChartData>,
+    /// View-state snapshot for default-assertion step defs.
+    pub panel_state: Option<resinsim_viz::ui::state::BottomPanelState>,
 }
 
 impl VizWorld {
@@ -178,8 +189,6 @@ fn specs_without_step_defs() -> Vec<(&'static str, usize)> {
         ("viz-screenshot-flag", 1),
         ("viz-timeline-click-seeks-current-layer", 3),
         ("viz-timeline-drag-pan-does-not-seek", 2),
-        ("viz-timeline-safety-log-toggle-handles-infinite-sf", 2),
-        ("viz-timeline-series-toggle-rescales-y", 2),
     ]
 }
 
