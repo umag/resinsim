@@ -22,6 +22,7 @@ mod sim;
 mod slice;
 pub mod ui;
 
+pub use scene::{ActivePrinterProfile, PrinterEnvelope};
 pub use slice::{cumulative_z_mm, slice_stack_to_bevy_mesh, LoadedSliceStack};
 
 use std::num::NonZero;
@@ -44,8 +45,7 @@ use crate::heatmap::{cure_depth_domain, ramp};
 use crate::mesh::{fit_panorbit_to_bbox, triangles_to_bevy_mesh, LoadedStlMesh};
 use crate::profile_repos::ProfileRepos;
 use crate::scene::{
-    resolve_envelope_after_ctb_load, spawn_build_plate, ActivePrinterProfile, BuildPlate,
-    PrinterEnvelope, BUILD_PLATE_THICKNESS_MM,
+    resolve_envelope_after_ctb_load, spawn_build_plate, BuildPlate, BUILD_PLATE_THICKNESS_MM,
 };
 use crate::sim::{
     apply_run_request, load_sim_from_path, RunConfig, RunSimRequest, SimulationResult,
@@ -1039,7 +1039,7 @@ fn setup_initial_load(
 /// CTB whose layer count matches the loaded sim re-colours; mismatch
 /// hard-errors (without exiting, since the user is interactive).
 #[allow(clippy::too_many_arguments)]
-fn handle_dropped_files(
+pub fn handle_dropped_files(
     mut events: MessageReader<FileDragAndDrop>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,

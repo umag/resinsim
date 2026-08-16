@@ -1,9 +1,12 @@
 //! Step definitions for `spec/uat/viz-load-sim-missing-sidecar.md`.
 //!
 //! 3 scenarios: UAT-1 and UAT-3 are subprocess CLI checks via
-//! `invoke_viz`. UAT-2 (drag-drop without sidecar) is declared debt —
-//! needs synthetic egui pointer events that bevy_egui 0.39 cannot
-//! produce (same limitation as viz-screenshot-flag's UAT-6).
+//! `invoke_viz`. UAT-2 (drag-drop without sidecar) is an in-process
+//! Bevy App test: injects a synthetic `FileDragAndDrop::DroppedFile`
+//! event via `write_message()` and asserts `LoadedSimulation.last_attempt`
+//! carries the "missing sidecar" error. Does NOT require egui pointer
+//! events — the drag-drop handler reads from Bevy's message queue,
+//! not from egui.
 //!
 //! UAT-1 FEATURE GATE. The sidecar check in
 //! `load_and_install_sidecar_with_budget` (simulation_repo.rs:688) is
@@ -49,6 +52,8 @@
 //! shared-step pattern as `viz_screenshot_flag.rs`'s
 //! `given_the_resinsim_viz_binary`).
 
+use bevy::prelude::*;
+use bevy::window::FileDragAndDrop;
 use cucumber::{given, then, when};
 
 use crate::VizWorld;
@@ -202,6 +207,141 @@ fn then_process_does_not_panic(world: &mut VizWorld) {
         !outcome.stderr.contains("stack backtrace"),
         "process produced a stack backtrace (likely panic); stderr:\n{}",
         outcome.stderr,
+    );
+}
+
+// =====================================================================
+// UAT-2: drag-drop without sidecar produces typed error
+//
+// IN-PROCESS. Builds a minimal Bevy App with handle_dropped_files,
+// injects FileDragAndDrop::DroppedFile via write_message(), and
+// checks LoadedSimulation.last_attempt for the "missing sidecar"
+// error.
+//
+// Runtime-gated: cfg!(feature = "field-sim") like UAT-1, because the
+// sidecar check in load_and_install_sidecar_with_budget is cfg-gated.
+// =====================================================================
+
+#[given(regex = r#"^resinsim-viz is running with no sim loaded$"#)]
+fn given_viz_running_no_sim(world: &mut VizWorld) {
+    if !cfg!(feature = "field-sim") {
+        world.fixture_skipped = true;
+        return;
+    }
+    use clap::Parser;
+    use resinsim_viz::{
+        ActivePrinterProfile, CurrentLayer, CureDepthDomain, LayerZPrefix,
+        LoadedSimulation, LoadedSliceMasks, PrinterEnvelope, handle_dropped_files,
+    };
+
+    let mut app = App::new();
+    app.add_plugins(bevy::asset::AssetPlugin::default())
+        .init_asset::<Mesh>()
+        .init_asset::<StandardMaterial>()
+        .add_message::<FileDragAndDrop>()
+        .add_message::<AppExit>()
+        .insert_resource(resinsim_viz::Args::parse_from(["resinsim-viz"]))
+        .init_resource::<LoadedSimulation>()
+        .init_resource::<LoadedSliceMasks>()
+        .init_resource::<CurrentLayer>()
+        .init_resource::<LayerZPrefix>()
+        .init_resource::<CureDepthDomain>()
+        .init_resource::<ActivePrinterProfile>()
+        .init_resource::<PrinterEnvelope>()
+        .add_systems(Update, handle_dropped_files);
+
+    world.in_process_app = Some(crate::InProcessApp(app));
+}
+
+#[when(
+    regex = r#"^the user drags `model\.sim\.json` from a directory that does NOT contain `model\.fields\.bin` into the viewer window$"#
+)]
+fn when_drag_sim_json_without_sidecar(world: &mut VizWorld) {
+    if world.fixture_skipped {
+        return;
+    }
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/lilith-torso.sim.json");
+    let contents = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", fixture.display()));
+    let mut envelope: serde_json::Value =
+        serde_json::from_str(&contents).expect("fixture is valid JSON");
+    envelope["fields_sidecar"] = serde_json::json!({
+        "path": "model.fields.bin",
+        "byte_size": 1024,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fields_present": ["cure"]
+    });
+    let drop_dir = world.tempdir().join("drop-no-sidecar");
+    std::fs::create_dir(&drop_dir).unwrap_or_else(|e| {
+        panic!("failed to mkdir {}: {e}", drop_dir.display())
+    });
+    let sim_path = drop_dir.join("model.sim.json");
+    std::fs::write(
+        &sim_path,
+        serde_json::to_string_pretty(&envelope).expect("envelope serialises"),
+    )
+    .expect("write model.sim.json");
+
+    let app = &mut world
+        .in_process_app
+        .as_mut()
+        .expect("Given step must initialise in_process_app")
+        .0;
+    app.world_mut()
+        .write_message(FileDragAndDrop::DroppedFile {
+            window: Entity::PLACEHOLDER,
+            path_buf: sim_path,
+        });
+    app.update();
+}
+
+// spec/uat/viz-load-sim-missing-sidecar.md UAT-2
+#[then(
+    regex = r#"^the in-app error toast / status mentions "missing sidecar"$"#
+)]
+fn then_in_app_error_mentions_missing_sidecar(world: &mut VizWorld) {
+    if world.fixture_skipped {
+        return;
+    }
+    let app = &world
+        .in_process_app
+        .as_ref()
+        .expect("scenario invariant: When step must run before Then")
+        .0;
+    let loaded_sim = app
+        .world()
+        .get_resource::<resinsim_viz::LoadedSimulation>()
+        .expect("LoadedSimulation resource must be present");
+    let err = loaded_sim
+        .last_attempt
+        .as_ref()
+        .expect("last_attempt must be set after a drop attempt")
+        .as_ref()
+        .expect_err("last_attempt must be Err for a missing-sidecar drop");
+    assert!(
+        err.contains("missing sidecar"),
+        "expected error to mention \"missing sidecar\"; got: {err}",
+    );
+}
+
+// spec/uat/viz-load-sim-missing-sidecar.md UAT-2
+#[then(
+    regex = r#"^resinsim-viz remains running \(drop failure is not fatal\)$"#
+)]
+fn then_viz_remains_running(world: &mut VizWorld) {
+    if world.fixture_skipped {
+        return;
+    }
+    let app = &world
+        .in_process_app
+        .as_ref()
+        .expect("scenario invariant: When step must run before Then")
+        .0;
+    let messages = app.world().resource::<Messages<AppExit>>();
+    assert!(
+        messages.is_empty(),
+        "handle_dropped_files must not send AppExit on a drop failure",
     );
 }
 

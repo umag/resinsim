@@ -182,22 +182,18 @@ fn specs_without_step_defs() -> Vec<(&'static str, usize)> {
         // viz_arrow_key_step_no_mesh_reupload.rs (UAT-6) and
         // viz_arrow_keys_step_layer_with_saturation.rs (UAT-5).
         //
-        // PAID DOWN (viz-load-sim-missing-sidecar): UAT-1 and UAT-3
-        // stepped in viz_load_sim_missing_sidecar.rs. UAT-1's steps use
-        // runtime cfg!(feature = "field-sim") with fixture_skipped —
-        // without the feature, UAT-1 passes trivially (not skipped).
-        // UAT-2 (drag-drop) is declared debt (needs synthetic egui
-        // pointer events).
-        ("viz-load-sim-missing-sidecar", 1),
-        // UAT-6 stepped via headless egui pointer injection
-        // (viz_screenshot_egui.rs). All scenarios now covered.
+        // PAID DOWN (viz-load-sim-missing-sidecar): all 3 scenarios
+        // stepped. UAT-1/3 are subprocess CLI checks; UAT-2 (drag-drop)
+        // is an in-process Bevy App test injecting FileDragAndDrop via
+        // write_message(). UAT-1 and UAT-2 are cfg!(feature = "field-sim")
+        // gated — without the feature, they pass trivially (not skipped).
+        // PAID DOWN (viz-screenshot-egui): UAT-6 stepped via headless
+        // egui pointer injection (viz_screenshot_egui.rs).
         ("viz-screenshot-flag", 0),
         // PAID DOWN (viz-timeline-egui-pointer): all 5 scenarios now
         // have in-process step defs using headless egui::Context with
         // synthetic pointer injection (Event::PointerMoved +
-        // Event::PointerButton via RawInput::events). Bypasses bevy_egui
-        // 0.39's integration layer — see
-        // docs/patterns/bevy-egui-no-synthetic-pointer-events.md.
+        // Event::PointerButton via RawInput::events).
     ]
 }
 
