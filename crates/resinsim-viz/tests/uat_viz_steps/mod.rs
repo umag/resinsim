@@ -17,8 +17,12 @@
 
 pub mod viz_cli;
 
+pub mod viz_allow_mismatch_soft_fallback;
 pub mod viz_bad_pairing;
+pub mod viz_layer_count_mismatch_hard_error;
+pub mod viz_load_ctb_with_sim_renders_heatmap;
 pub mod viz_load_sim_missing_sidecar;
+pub mod viz_screenshot_ctb;
 pub mod viz_screenshot_flag;
 
 /// Modules under `uat_viz_steps/` that are shared support code, not

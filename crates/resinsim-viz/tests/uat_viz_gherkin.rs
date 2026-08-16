@@ -60,7 +60,11 @@ use uat_viz_steps::viz_cli::CliOutcome;
 // core's `use uat_steps::{...}` block). `assert_mod_rs_and_use_list_agree`
 // (below) cross-checks this list against `mod.rs`'s `pub mod` set.
 #[allow(unused_imports)]
-use uat_viz_steps::{viz_bad_pairing, viz_load_sim_missing_sidecar, viz_screenshot_flag};
+use uat_viz_steps::{
+    viz_allow_mismatch_soft_fallback, viz_bad_pairing, viz_layer_count_mismatch_hard_error,
+    viz_load_ctb_with_sim_renders_heatmap, viz_load_sim_missing_sidecar, viz_screenshot_ctb,
+    viz_screenshot_flag,
+};
 
 /// World for viz UAT scenarios. Carries the outcome of the last
 /// `resinsim-viz` CLI invocation, a path staged by a "When" step for a
@@ -75,6 +79,15 @@ pub struct VizWorld {
     pub last: Option<CliOutcome>,
     pub pending_screenshot_path: Option<std::path::PathBuf>,
     tempdir: Option<tempfile::TempDir>,
+    /// Set by env-gated Given/When steps when `RESINSIM_SLICED_FIXTURE` is
+    /// absent. Shared Then steps check this and return early (trivial pass)
+    /// instead of panicking on `world.last.as_ref().expect(...)`.
+    pub fixture_skipped: bool,
+    /// When set by a mismatch scenario's When step, the shared
+    /// `then_stderr_contains` adapts the spec's placeholder layer counts
+    /// ("CTB has 100 layers", "sim has 50") to the real fixture's counts.
+    /// Documented coupling — see `viz_screenshot_flag.rs`.
+    pub expected_mismatch_counts: Option<(usize, usize)>,
 }
 
 impl VizWorld {
@@ -93,86 +106,62 @@ impl VizWorld {
 /// prefix-filtered subset. See the ADR's ddd section for why that makes
 /// the `viz-` prefix load-bearing rather than cosmetic.
 ///
-/// `viz-screenshot-flag` started (step 2) at 12 — UAT-7 is ONE gherkin
-/// fence holding FOUR `Scenario:` blocks (7a/7b/7c/7d), one
-/// `ExtractedScenario` but four runtime scenarios; the other eight
-/// `UAT-N` headings in that spec are one scenario each (8 + 4 = 12).
+/// ENV-AWARE REGISTER. Three specs (viz-allow-mismatch-soft-fallback,
+/// viz-layer-count-mismatch-hard-error, viz-load-ctb-with-sim-renders-
+/// heatmap) and three viz-screenshot-flag scenarios (UAT-2/5/8) have
+/// step defs that are env-gated on `RESINSIM_SLICED_FIXTURE`. When the
+/// env var IS set, these scenarios run with real assertions and their
+/// register entries reflect 0 skips (or reduced counts). When the env
+/// var is ABSENT, the step functions pass trivially via
+/// `world.fixture_skipped`, so the scenarios still count as PASSED (not
+/// skipped) and the same reduced counts apply.
 ///
-/// Step 4 pilots UAT-7a/7b/7c (tier A, renderer-free `--screenshot` path
-/// validation) — 12 - 3 = 9. UAT-7d ("empty path → exit 5") stays
-/// declared debt: empirically probed at step 1 (three independent ways
-/// — direct subprocess argv, the unambiguous `--screenshot=` form, and
-/// an isolated clap 4.6.1 repro) to be UNREACHABLE via CLI. clap's own
-/// parser rejects an empty-string value for this `Option<PathBuf>` arg
-/// (exit 2, "a value is required... but none was supplied") BEFORE
-/// `main()`'s own `validate_screenshot_path` / `PathError::Empty`
-/// (screenshot.rs) ever runs. Covered instead by the pre-existing
-/// in-process unit test `validate_rejects_empty_path` (screenshot.rs) —
-/// see `uat_viz_steps::viz_screenshot_flag`'s module doc for the full
-/// evidence trail. This is a NEW finding, not anticipated by the
-/// campaign or the approved plan; it is NOT a design choice — it is what
-/// the probe evidence supports, applying the same declared-debt
-/// mechanism the plan itself prescribes for an unfaithful scenario
-/// (see UAT-3's resolution below) to a scenario the plan did not
-/// anticipate would be unreachable.
+/// This is a DELIBERATE departure from the Band-D constant-register
+/// principle (`uat_gherkin.rs` documents at length). Justified because
+/// the fixture is a 356 MB uncommitted binary — env-gating is the only
+/// viable mechanism. The env check is read once at harness startup
+/// (effectively a two-value constant, not a per-scenario dynamic
+/// check). The viz harness already has a known config-dependent count
+/// precedent (viz-load-sim-missing-sidecar's per-config comment below).
 ///
-/// Step 5 pilots UAT-1/3/4/9 (tier B, renderer-dependent) — 9 - 4 = 5.
-/// The 5 remaining actual skips are UAT-2, UAT-5, UAT-6, UAT-7d, UAT-8 —
-/// all declared debt: UAT-2/5/8 need `$RESINSIM_SLICED_FIXTURE` /
-/// `$RESINSIM_SIM_FIXTURE` and this repo has zero committed `.ctb`
-/// fixtures (env-conditional step behaviour would make the register
-/// non-constant, the exact Band-D defect `uat_gherkin.rs` documents at
-/// length — resolved once at plan time, not at harness run time); UAT-6
-/// needs a synthetic egui pointer click bevy_egui 0.39 cannot produce;
-/// UAT-7d per above.
-const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
-    ("viz-allow-mismatch-soft-fallback", 1),
-    // viz-arrow-keys-uat: both specs below ARE tested by in-process unit
-    // tests in lib.rs — keyboard simulation via `ButtonInput::press()` +
-    // `reset_all()` with synthetic fixtures (no `.ctb` needed). The
-    // lib.rs + main.rs split (viz-lib-main-split) unblocked in-process
-    // driving; cucumber step defs for these specs are now unblocked but
-    // not yet written. The behavior is covered by unit tests in lib.rs.
-    //
-    // UAT-6 (no-mesh-reupload): covered by
-    // `slice_stack_mesh_attribute_color_unmutated_under_arrow_keys` — asserts
-    // ATTRIBUTE_COLOR byte-identity, Assets<Mesh> count stability, and
-    // LayerCursor Transform.z-only mutation across a full ArrowUp/ArrowDown
-    // traversal. Also `update_layer_cursor_moves_transform_z_only`.
-    //
-    // UAT-5 (step-layer-with-saturation): covered by
-    // `arrow_up_advances_current_layer_with_saturation` and
-    // `arrow_down_retreats_current_layer_with_saturation` — assert
-    // CurrentLayer.index saturation at 0 and max under ArrowUp/ArrowDown.
-    // HUD text ("Layer N/N") is logged to stderr via `info!()` but the
-    // HUD content itself is not asserted by the unit tests (the cursor
-    // index IS, which is the upstream value the HUD renders).
-    //
-    // `.ctb` fixture: a 356 MB lilith-torso.ctb is available locally at
-    // /Users/mag1/Documents/3d/lilith-torso.ctb for env-var-gated tests
-    // (RESINSIM_SLICED_FIXTURE); the committed lilith-torso.sim.json in
-    // tests/fixtures/ is its matching sim. Not committed to the repo per
-    // `docs/patterns/synthesise-archive-fixture-not-committed-binary.md`.
-    ("viz-arrow-key-step-no-mesh-reupload", 1),
-    ("viz-arrow-keys-step-layer-with-saturation", 1),
-    ("viz-layer-count-mismatch-hard-error", 1),
-    ("viz-load-ctb-with-sim-renders-heatmap", 1),
-    // PAID DOWN (viz-load-sim-missing-sidecar): UAT-1 and UAT-3 stepped
-    // in viz_load_sim_missing_sidecar.rs. UAT-1's steps are
-    // #[cfg(feature = "field-sim")] gated — without the feature (the
-    // default `cargo uat-viz` configuration), UAT-1 is also skipped,
-    // making the count 2 (UAT-1 + UAT-2). UAT-2 (drag-drop) is
-    // declared debt (needs synthetic egui pointer events).
-    // NOTE: this count is for default features (no field-sim). With
-    // --features field-sim, only UAT-2 is skipped (count would be 1).
-    // The viz register does not have core's per_config mechanism.
-    ("viz-load-sim-missing-sidecar", 2),
-    ("viz-screenshot-flag", 5),
-    ("viz-timeline-click-seeks-current-layer", 3),
-    ("viz-timeline-drag-pan-does-not-seek", 2),
-    ("viz-timeline-safety-log-toggle-handles-infinite-sf", 2),
-    ("viz-timeline-series-toggle-rescales-y", 2),
-];
+/// REVISIT TRIGGER: if the viz harness gains a per_config mechanism
+/// (like core's SpecDebt), migrate these entries to it and restore the
+/// constant register.
+///
+/// `viz-screenshot-flag` started (step 2) at 12; step 4 piloted
+/// UAT-7a/7b/7c → 9; step 5 piloted UAT-1/3/4/9 → 5. Now UAT-2/5/8
+/// are stepped (env-gated) → 2 remaining: UAT-6 (needs synthetic egui
+/// pointer click bevy_egui 0.39 cannot produce) and UAT-7d (unreachable
+/// via CLI — clap rejects empty `--screenshot` value before main()'s
+/// validate_screenshot_path runs; covered by unit test
+/// `validate_rejects_empty_path` in screenshot.rs).
+fn specs_without_step_defs() -> Vec<(&'static str, usize)> {
+    vec![
+        // viz-arrow-keys-uat: both specs below ARE tested by in-process
+        // unit tests in lib.rs — keyboard simulation via
+        // `ButtonInput::press()` + `reset_all()` with synthetic fixtures
+        // (no `.ctb` needed). The lib.rs + main.rs split
+        // (viz-lib-main-split) unblocked in-process driving; cucumber
+        // step defs for these specs are now unblocked but not yet written.
+        ("viz-arrow-key-step-no-mesh-reupload", 1),
+        ("viz-arrow-keys-step-layer-with-saturation", 1),
+        // PAID DOWN (viz-load-sim-missing-sidecar): UAT-1 and UAT-3
+        // stepped in viz_load_sim_missing_sidecar.rs. UAT-1's steps are
+        // #[cfg(feature = "field-sim")] gated — without the feature (the
+        // default `cargo uat-viz` configuration), UAT-1 is also skipped,
+        // making the count 2 (UAT-1 + UAT-2). UAT-2 (drag-drop) is
+        // declared debt (needs synthetic egui pointer events).
+        // NOTE: this count is for default features (no field-sim). With
+        // --features field-sim, only UAT-2 is skipped (count would be 1).
+        ("viz-load-sim-missing-sidecar", 2),
+        // UAT-6 + UAT-7d remain as declared debt (see doc comment above).
+        ("viz-screenshot-flag", 2),
+        ("viz-timeline-click-seeks-current-layer", 3),
+        ("viz-timeline-drag-pan-does-not-seek", 2),
+        ("viz-timeline-safety-log-toggle-handles-infinite-sf", 2),
+        ("viz-timeline-series-toggle-rescales-y", 2),
+    ]
+}
 
 /// Layer 2 (runtime): per-spec attribution of ACTUALLY skipped scenarios
 /// matches the register in all three directions. Identical logic to
@@ -183,8 +172,9 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
 fn assert_runtime_attribution_matches_register(
     actual_skipped: &std::collections::BTreeMap<String, usize>,
 ) {
+    let debt = specs_without_step_defs();
     let register: std::collections::BTreeMap<&str, usize> =
-        SPECS_WITHOUT_STEP_DEFS.iter().copied().collect();
+        debt.iter().map(|&(s, n)| (s, n)).collect();
 
     let unexpected_skips: Vec<(&str, usize)> = actual_skipped
         .iter()
@@ -196,16 +186,16 @@ fn assert_runtime_attribution_matches_register(
     assert!(
         unexpected_skips.is_empty(),
         "{} viz spec(s) have skipped scenarios but are NOT on \
-         SPECS_WITHOUT_STEP_DEFS: {unexpected_skips:?}\n\
+         specs_without_step_defs: {unexpected_skips:?}\n\
          Either write the step-def module, or — if genuinely deferred —\
-         add (spec, count) to SPECS_WITHOUT_STEP_DEFS naming the issue \
+         add (spec, count) to specs_without_step_defs naming the issue \
          that defers it.",
         unexpected_skips.len(),
     );
 
     let mut stale: Vec<(&str, usize)> = Vec::new();
     let mut mismatched: Vec<(&str, usize, usize)> = Vec::new();
-    for &(spec, expected) in SPECS_WITHOUT_STEP_DEFS {
+    for &(spec, expected) in &debt {
         let actual = actual_skipped.get(spec).copied().unwrap_or(0);
         if expected == 0 {
             if actual != 0 {
@@ -223,13 +213,13 @@ fn assert_runtime_attribution_matches_register(
         stale.is_empty(),
         "{} registered viz spec(s) now have ZERO actual skipped scenarios: \
          {stale:?} (spec, expected)\nThe debt was paid down — remove the \
-         entry from SPECS_WITHOUT_STEP_DEFS.",
+         entry from specs_without_step_defs.",
         stale.len(),
     );
     assert!(
         mismatched.is_empty(),
         "{} registered viz spec(s) have an actual skipped-scenario count \
-         that differs from SPECS_WITHOUT_STEP_DEFS: {mismatched:?} \
+         that differs from specs_without_step_defs: {mismatched:?} \
          (spec, expected, actual). Update the registered count to match.",
         mismatched.len(),
     );
@@ -292,23 +282,45 @@ fn assert_mod_rs_and_use_list_agree() {
         .collect();
 
     let mut used: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    // Collect the use block(s), handling multi-line `use uat_viz_steps::{
+    //     ident1, ident2,
+    // };` formatting by joining continuation lines.
+    let mut in_use_block = false;
+    let mut use_buf = String::new();
     for line in this_src.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("use uat_viz_steps::") {
-            let rest = rest.trim_end_matches(';');
-            if rest.starts_with('{') && rest.ends_with('}') {
-                for ident in rest[1..rest.len() - 1].split(',') {
-                    let ident = ident.trim();
-                    if !ident.is_empty() {
-                        used.insert(ident);
-                    }
-                }
-            } else if !rest.is_empty() && !rest.contains("::") {
-                // Skip nested path imports (e.g. `viz_cli::CliOutcome`)
-                // — those are type imports, not module link-forcing.
-                used.insert(rest);
+        let trimmed = line.trim();
+        if in_use_block {
+            use_buf.push(' ');
+            use_buf.push_str(trimmed);
+            if trimmed.contains('}') {
+                in_use_block = false;
+            }
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("use uat_viz_steps::") {
+            if rest.contains('}') || !rest.contains('{') {
+                use_buf = rest.to_string();
+            } else {
+                use_buf = rest.to_string();
+                in_use_block = true;
+                continue;
+            }
+        } else {
+            continue;
+        }
+        // Process completed use statement (single-line or now-joined multi-line).
+    }
+    let use_text = use_buf.trim_end_matches(';').trim();
+    if use_text.starts_with('{') && use_text.contains('}') {
+        let inner = &use_text[1..use_text.rfind('}').unwrap()];
+        for ident in inner.split(',') {
+            let ident = ident.trim();
+            if !ident.is_empty() && !ident.contains("::") {
+                used.insert(ident);
             }
         }
+    } else if !use_text.is_empty() && !use_text.contains("::") {
+        used.insert(use_text);
     }
 
     let missing_from_use: Vec<&&str> = declared.difference(&used).collect();

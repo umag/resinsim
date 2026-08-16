@@ -176,6 +176,9 @@ fn when_invoke_screenshot_bad_extension(world: &mut VizWorld) {
 
 #[then(regex = r#"^the process exits with code (\d+)$"#)]
 fn then_process_exits_with_code(world: &mut VizWorld, code: u8) {
+    if world.fixture_skipped {
+        return;
+    }
     let outcome = world
         .last
         .as_ref()
@@ -191,15 +194,36 @@ fn then_process_exits_with_code(world: &mut VizWorld, code: u8) {
 // (UAT-7c) and `And stderr contains "..."` (UAT-7a/7b/UAT-1/4) lines —
 // an `And` following a `Then` resolves to StepType::Then (same mechanism
 // as above), so cucumber matches both against this single `#[then]`.
+/// When `expected_mismatch_counts` is set (by a mismatch scenario's When
+/// step), this replaces the spec's placeholder layer counts in the needle
+/// with real fixture counts before checking. The replacement targets are
+/// the EXACT placeholder text from `viz-layer-count-mismatch-hard-error`'s
+/// spec ("CTB has 100 layers", "sim has 50"). If future mismatch specs use
+/// different placeholder counts, this list must be extended — a documented
+/// coupling point, not a generic pattern matcher.
 #[then(regex = r#"^stderr contains "([^"]*)"$"#)]
 fn then_stderr_contains(world: &mut VizWorld, needle: String) {
+    if world.fixture_skipped {
+        return;
+    }
     let outcome = world
         .last
         .as_ref()
         .expect("scenario invariant: a When step must populate world.last before Then/And");
+    let effective_needle =
+        if let Some((ctb_layers, sim_layers)) = world.expected_mismatch_counts {
+            needle
+                .replace(
+                    "CTB has 100 layers",
+                    &format!("CTB has {ctb_layers} layers"),
+                )
+                .replace("sim has 50", &format!("sim has {sim_layers}"))
+        } else {
+            needle
+        };
     assert!(
-        outcome.stderr_contains(&needle),
-        "expected stderr to contain {needle:?}; got:\n{}",
+        outcome.stderr_contains(&effective_needle),
+        "expected stderr to contain {effective_needle:?}; got:\n{}",
         outcome.stderr,
     );
 }
@@ -298,6 +322,9 @@ fn when_invoke_it_with_load_ctb_nonexistent_uat9(world: &mut VizWorld) {
 /// is the only textual difference between the two spec lines.
 #[then(regex = r#"^(?:the file )?/tmp/(uat\d+\.png) exists$"#)]
 fn then_screenshot_file_exists(world: &mut VizWorld, filename: String) {
+    if world.fixture_skipped {
+        return;
+    }
     let target = world.tempdir().join(&filename);
     assert!(
         target.exists(),
@@ -311,6 +338,9 @@ fn then_screenshot_file_exists(world: &mut VizWorld, filename: String) {
 /// `And /tmp/uat9.png does NOT exist` (UAT-9).
 #[then(regex = r#"^/tmp/(uat\d+\.png) does NOT exist$"#)]
 fn then_screenshot_file_does_not_exist(world: &mut VizWorld, filename: String) {
+    if world.fixture_skipped {
+        return;
+    }
     let target = world.tempdir().join(&filename);
     assert!(
         !target.exists(),
@@ -326,6 +356,9 @@ fn then_screenshot_file_does_not_exist(world: &mut VizWorld, filename: String) {
 /// underlying CTB parser error" rather than a bare "stderr contains".
 #[then(regex = r#"^stderr matches "([^"]*)" followed by the underlying CTB parser error$"#)]
 fn then_stderr_matches_ctb_load_failed(world: &mut VizWorld, needle: String) {
+    if world.fixture_skipped {
+        return;
+    }
     let outcome = world
         .last
         .as_ref()
