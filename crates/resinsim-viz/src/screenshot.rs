@@ -401,7 +401,11 @@ pub fn loads_settled(
     stl_present: bool,
     sim_loaded: bool,
     sim_attempted_and_failed: bool,
+    ctb_loading: bool,
 ) -> bool {
+    if ctb_loading {
+        return false;
+    }
     let ctb_settled = args.load_ctb.is_none() || slice_present;
     let stl_settled = args.load_stl.is_none() || stl_present;
     let sim_settled = args.load_sim.is_none() || sim_loaded || sim_attempted_and_failed;
@@ -478,6 +482,7 @@ pub struct LoadStateParams<'w, 's> {
 pub fn capture_screenshot_and_exit(
     args: Res<Args>,
     loads: LoadStateParams,
+    ctb_task: Res<crate::CtbLoadTask>,
     mut commands: Commands,
     mut writer: MessageWriter<AppExit>,
     mut frame_count: Local<u32>,
@@ -509,7 +514,7 @@ pub fn capture_screenshot_and_exit(
     let sim_failed = loads.sim.last_attempt.as_ref().is_some_and(|r| r.is_err());
     let slice_present = !loads.slice.is_empty();
     let stl_present = !loads.stl.is_empty();
-    let ready = loads_settled(&args, slice_present, stl_present, sim_loaded, sim_failed);
+    let ready = loads_settled(&args, slice_present, stl_present, sim_loaded, sim_failed, ctb_task.is_loading());
     let bevy_captured = !loads.auto_captured.is_empty();
 
     let ctb_pending = args.load_ctb.is_some() && !slice_present;
@@ -640,37 +645,37 @@ mod tests {
     #[test]
     fn loads_settled_no_loads_requested_is_immediately_true() {
         let args = args_with_loads(false, false, false);
-        assert!(loads_settled(&args, false, false, false, false));
+        assert!(loads_settled(&args, false, false, false, false, false));
     }
 
     #[test]
     fn loads_settled_ctb_requested_and_present_is_true() {
         let args = args_with_loads(true, false, false);
-        assert!(loads_settled(&args, true, false, false, false));
+        assert!(loads_settled(&args, true, false, false, false, false));
     }
 
     #[test]
     fn loads_settled_ctb_requested_but_absent_is_false() {
         let args = args_with_loads(true, false, false);
-        assert!(!loads_settled(&args, false, false, false, false));
+        assert!(!loads_settled(&args, false, false, false, false, false));
     }
 
     #[test]
     fn loads_settled_stl_requested_and_present_is_true() {
         let args = args_with_loads(false, true, false);
-        assert!(loads_settled(&args, false, true, false, false));
+        assert!(loads_settled(&args, false, true, false, false, false));
     }
 
     #[test]
     fn loads_settled_stl_requested_but_absent_is_false() {
         let args = args_with_loads(false, true, false);
-        assert!(!loads_settled(&args, false, false, false, false));
+        assert!(!loads_settled(&args, false, false, false, false, false));
     }
 
     #[test]
     fn loads_settled_sim_requested_and_loaded_is_true() {
         let args = args_with_loads(false, false, true);
-        assert!(loads_settled(&args, false, false, true, false));
+        assert!(loads_settled(&args, false, false, true, false, false));
     }
 
     #[test]
@@ -679,20 +684,26 @@ mod tests {
         // (we know it failed; not "still waiting"). Capture proceeds
         // without the heatmap.
         let args = args_with_loads(false, false, true);
-        assert!(loads_settled(&args, false, false, false, true));
+        assert!(loads_settled(&args, false, false, false, true, false));
     }
 
     #[test]
     fn loads_settled_sim_requested_neither_loaded_nor_failed_is_false() {
         let args = args_with_loads(false, false, true);
-        assert!(!loads_settled(&args, false, false, false, false));
+        assert!(!loads_settled(&args, false, false, false, false, false));
     }
 
     #[test]
     fn loads_settled_all_three_requested_one_pending_is_false() {
         let args = args_with_loads(true, false, true);
         // CTB present, sim still loading → not ready.
-        assert!(!loads_settled(&args, true, false, false, false));
+        assert!(!loads_settled(&args, true, false, false, false, false));
+    }
+
+    #[test]
+    fn loads_settled_false_when_ctb_task_loading() {
+        let args = args_with_loads(false, false, false);
+        assert!(!loads_settled(&args, false, false, false, false, true));
     }
 
     // ---- capture_inner three-phase decision tests ----

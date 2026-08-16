@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy::tasks::{IoTaskPool, Task, block_on, poll_once};
 use bevy::window::FileDragAndDrop;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin, TrackpadBehavior};
@@ -308,6 +309,40 @@ pub struct LayerZPrefix(pub Vec<f32>);
 /// re-compute it every tick.
 #[derive(Resource, Default)]
 pub struct CureDepthDomain(pub Option<(f32, f32)>);
+
+type CtbParseResult =
+    Result<(resinsim_core::io::sliced::SlicedFileInfo, Vec<resinsim_core::io::sliced::LayerInput>), String>;
+
+/// Tracks the lifecycle of an async CTB parse. The parse runs on
+/// `IoTaskPool`; the result is polled each frame by `poll_ctb_load`
+/// and applied to the world when ready.
+#[derive(Resource, Default)]
+pub enum CtbLoadTask {
+    #[default]
+    Idle,
+    Loading {
+        task: Task<CtbParseResult>,
+        path: PathBuf,
+        propagate_exit: bool,
+        preserve_view: bool,
+    },
+    Failed(String),
+}
+
+impl CtbLoadTask {
+    pub fn is_loading(&self) -> bool {
+        matches!(self, CtbLoadTask::Loading { .. })
+    }
+
+    pub fn loading_filename(&self) -> Option<&str> {
+        match self {
+            CtbLoadTask::Loading { path, .. } => {
+                path.file_name().and_then(|n| n.to_str())
+            }
+            _ => None,
+        }
+    }
+}
 
 /// Marker component: the translucent layer-cursor entity that sits at
 /// `z = z_prefix[current_layer.index]`. Distinct from `LoadedSliceStack`
@@ -652,36 +687,18 @@ fn despawn_geometry(
 // CTB + sim loader (heatmap-aware)
 // ---------------------------------------------------------------------------
 
-/// Load a CTB sliced file and (optionally) overlay a per-layer cure-depth
-/// heatmap from the currently-loaded `LoadedSimulation`. Mutual exclusion
-/// + fail-soft posture mirror `load_stl_into_world`.
-///
-/// **Heatmap policy.** When `LoadedSimulation` is `Some(sim)`:
-/// - If `sim.layers().len() == layers.len()`: bake per-vertex
-///   `Mesh::ATTRIBUTE_COLOR` from `heatmap::ramp(layer.cure_depth_um, domain)`
-///   and spawn a `LayerCursor` entity at `z_prefix[max]`.
-/// - Otherwise: emit `error!`, despawn any prior geometry, leave the
-///   world empty, optionally exit with `EXIT_LAYER_COUNT_MISMATCH` when
-///   `--smoke-exit` is set. The sim is preserved (a future drop with the
-///   correct layer count will recover). `--allow-mismatch` overrides
-///   this and falls back to soft-warn + uncoloured mesh.
-///
-/// Returns `Some(layers)` when the CTB was parsed successfully, so
-/// the caller can stash the per-layer masks in `LoadedSliceMasks`
-/// for slice E's `LayerMask2dPane`. `None` on load failure (the
-/// world is left empty regardless; the return value's only purpose
-/// is the masks-stash path). Choosing a return value over a new
-/// `&mut LoadedSliceMasks` parameter keeps the function under the
-/// Bevy 16-param-system limit at every test call site.
+/// Apply already-parsed CTB data to the world: reconcile envelope,
+/// bake mesh + heatmap, spawn cursor, frame camera. Extracted from
+/// `load_ctb_into_world` so the async `poll_ctb_load` system and
+/// the sync test path share the same post-parse logic.
 #[allow(clippy::too_many_arguments)]
-fn load_ctb_into_world(
+fn apply_parsed_ctb(
+    info: resinsim_core::io::sliced::SlicedFileInfo,
+    layers: Vec<resinsim_core::io::sliced::LayerInput>,
     path: &Path,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
-    prior_stl: &Query<Entity, With<LoadedStlMesh>>,
-    prior_slice: &Query<Entity, With<LoadedSliceStack>>,
-    prior_cursor: &Query<Entity, With<LayerCursor>>,
     prior_plate: &Query<Entity, With<BuildPlate>>,
     camera: &mut Query<&mut PanOrbitCamera, With<Camera3d>>,
     loaded_sim: &LoadedSimulation,
@@ -696,35 +713,7 @@ fn load_ctb_into_world(
     smoke_exit: bool,
     exit_writer: &mut MessageWriter<AppExit>,
 ) -> Option<Vec<resinsim_core::io::sliced::LayerInput>> {
-    despawn_geometry(commands, prior_stl, prior_slice, prior_cursor);
-    // Reset cursor/Z state on every reload — repopulated below if the
-    // load succeeds.
-    current_layer.index = 0;
-    current_layer.max = 0;
-    z_prefix_res.0.clear();
-    domain_res.0 = None;
-
-    let (info, layers) = match ctb::parse_ctb(path) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            error!("CTB load failed for {}: {e}", path.display());
-            // Propagate exit-6 when the caller is in CI/AI consumer
-            // mode (--smoke-exit OR --screenshot — call site
-            // already routes the disjunction via the smoke_exit
-            // parameter). Drag-drop passes false unconditionally
-            // (DROP_IS_INTERACTIVE) so an interactive drop of a
-            // bad .ctb logs the error but never crashes the session.
-            if smoke_exit {
-                fatal_exit(exit_writer, EXIT_CTB_LOAD_FAILED);
-            }
-            return None;
-        }
-    };
     let layers_for_caller = layers.clone();
-    // Reconcile envelope with the freshly-parsed CTB header (priority chain
-    // documented on resolve_envelope_after_ctb_load + ADR-0011 / ADR-0012).
-    // Then respawn the plate so its position + XY footprint reflect the new
-    // dimensions.
     resolve_envelope_after_ctb_load(
         active_profile,
         info.bed_size_mm,
@@ -733,7 +722,6 @@ fn load_ctb_into_world(
     );
     spawn_build_plate(commands, meshes, materials, prior_plate, envelope);
 
-    // Decide whether to bake a heatmap.
     let layer_colors: Option<Vec<[f32; 4]>> = match loaded_sim.simulation.as_ref() {
         None => None,
         Some(sim) => {
@@ -764,9 +752,6 @@ fn load_ctb_into_world(
                 if smoke_exit {
                     fatal_exit(exit_writer, EXIT_LAYER_COUNT_MISMATCH);
                 }
-                // World stays empty; sim resource preserved. Return the
-                // parsed layers so the masks resource still updates even
-                // when the heatmap pipeline rejects the mismatch.
                 return Some(layers_for_caller);
             }
         }
@@ -777,10 +762,6 @@ fn load_ctb_into_world(
 
     let mesh_handle = meshes.add(slice_stack_to_bevy_mesh(&layers, layer_colors.as_deref()));
     let material_handle = materials.add(StandardMaterial::from(Color::WHITE));
-    // Mesh-anchor Transform (ADR-0011): 180° X-rotation + translate so
-    // native layer 0 glues to plate's underside; native layer N hangs at
-    // the lowest world Z. Mesh data unchanged — issue 09 contract preserved
-    // at the data layer; the entity Transform applies the flip + anchor.
     let stack_entity = commands
         .spawn((
             Mesh3d(mesh_handle),
@@ -792,13 +773,6 @@ fn load_ctb_into_world(
         ))
         .id();
 
-    // Cursor: only spawn when a heatmap is active (sim present + matching
-    // counts, OR allow_mismatch). Mismatch-allowed has layer_colors=None
-    // but the cursor is still useful for stepping through the geometry,
-    // so we spawn whenever a sim is loaded — the HUD just won't have a
-    // domain to report. Decision: spawn cursor iff sim is present AND
-    // (counts match OR allow_mismatch) — i.e. iff this is a "heatmap or
-    // explicitly-tolerated overlay" load.
     let cursor_active = loaded_sim.simulation.is_some()
         && (layer_colors.is_some() || allow_mismatch)
         && !layers.is_empty();
@@ -808,14 +782,6 @@ fn load_ctb_into_world(
         current_layer.max = max;
         z_prefix_res.0 = z_prefix.clone();
 
-        // Cursor entity: thin Plane3d (zero Z thickness) sized 1.1× the
-        // bbox X/Y so it overhangs the model — gives the user an
-        // unambiguous "ring" silhouette outside the print volume that's
-        // visible even when the camera is dead-on-axis. Bright magenta
-        // base + strong magenta emissive guarantees visibility against
-        // any viridis colour (no point on the viridis ramp is magenta).
-        // Double-sided + cull_mode=None so the cursor stays visible
-        // when the user orbits below the print bed.
         let bbox_min_x = bbox.min[0];
         let bbox_min_y = bbox.min[1];
         let bbox_max_x = bbox.max[0];
@@ -835,11 +801,6 @@ fn load_ctb_into_world(
             ..default()
         });
         let cursor_z = z_prefix_res.0[current_layer.index as usize] + LAYER_CURSOR_EPSILON_MM;
-        // Parented to the slice stack entity so the cursor inherits the
-        // mesh-anchor Transform (180° X-rotation + envelope.depth/max_z
-        // translate). Cursor coords stay in NATIVE CTB space — matches
-        // z_prefix_res entries — and update_layer_cursor doesn't need to
-        // know about the world-space anchor.
         commands.spawn((
             Mesh3d(cursor_mesh),
             MeshMaterial3d(cursor_material),
@@ -848,19 +809,12 @@ fn load_ctb_into_world(
             ChildOf(stack_entity),
         ));
 
-        // Controls hint + first-layer HUD line. Fires on Startup AND on
-        // drag-drop reload — users who first interact via drag-drop also
-        // see the hint. The README is the canonical reference.
         info!("Controls: ↑/↓ arrows step layers");
         if let Some(sim) = loaded_sim.simulation.as_ref() {
             log_layer_line(sim, current_layer.index, current_layer.max, domain_res.0);
         }
     }
 
-    // Combined model + plate bbox in WORLD coords (the camera frames the
-    // visible span, not the native mesh bounds). Native bbox at
-    // (0..bed, 0..bed, 0..mesh_max_z); the entity Transform maps it to
-    // the world span computed below.
     let mesh_max_z = bbox.max[2];
     let world_bbox = resinsim_core::io::stl::BoundingBox {
         min: [0.0, 0.0, envelope.max_z_mm - mesh_max_z],
@@ -875,6 +829,73 @@ fn load_ctb_into_world(
     }
 
     Some(layers_for_caller)
+}
+
+/// Synchronous CTB loader — parses then applies. Used by tests and
+/// kept as the test-facing entry point so existing `register_system`
+/// test call sites continue to work unchanged.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn load_ctb_into_world(
+    path: &Path,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    prior_stl: &Query<Entity, With<LoadedStlMesh>>,
+    prior_slice: &Query<Entity, With<LoadedSliceStack>>,
+    prior_cursor: &Query<Entity, With<LayerCursor>>,
+    prior_plate: &Query<Entity, With<BuildPlate>>,
+    camera: &mut Query<&mut PanOrbitCamera, With<Camera3d>>,
+    loaded_sim: &LoadedSimulation,
+    current_layer: &mut CurrentLayer,
+    z_prefix_res: &mut LayerZPrefix,
+    domain_res: &mut CureDepthDomain,
+    active_profile: &ActivePrinterProfile,
+    envelope: &mut PrinterEnvelope,
+    warned_about_envelope_mismatch: &mut bool,
+    preserve_view: bool,
+    allow_mismatch: bool,
+    smoke_exit: bool,
+    exit_writer: &mut MessageWriter<AppExit>,
+) -> Option<Vec<resinsim_core::io::sliced::LayerInput>> {
+    despawn_geometry(commands, prior_stl, prior_slice, prior_cursor);
+    current_layer.index = 0;
+    current_layer.max = 0;
+    z_prefix_res.0.clear();
+    domain_res.0 = None;
+
+    let (info, layers) = match ctb::parse_ctb(path) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            error!("CTB load failed for {}: {e}", path.display());
+            if smoke_exit {
+                fatal_exit(exit_writer, EXIT_CTB_LOAD_FAILED);
+            }
+            return None;
+        }
+    };
+
+    apply_parsed_ctb(
+        info,
+        layers,
+        path,
+        commands,
+        meshes,
+        materials,
+        prior_plate,
+        camera,
+        loaded_sim,
+        current_layer,
+        z_prefix_res,
+        domain_res,
+        active_profile,
+        envelope,
+        warned_about_envelope_mismatch,
+        preserve_view,
+        allow_mismatch,
+        smoke_exit,
+        exit_writer,
+    )
 }
 
 /// Format the per-layer HUD line. Right-aligned numeric fields keep
@@ -901,10 +922,30 @@ fn log_layer_line(sim: &PrintSimulation, index: u32, max: u32, domain: Option<(f
 // Startup orchestration
 // ---------------------------------------------------------------------------
 
+/// Spawn the CTB parse on `IoTaskPool` and set `CtbLoadTask::Loading`.
+fn spawn_ctb_parse(
+    ctb_task: &mut CtbLoadTask,
+    path: &Path,
+    propagate_exit: bool,
+    preserve_view: bool,
+) {
+    let owned = path.to_path_buf();
+    let task = IoTaskPool::get().spawn(async move { ctb::parse_ctb(&owned) });
+    *ctb_task = CtbLoadTask::Loading {
+        task,
+        path: path.to_path_buf(),
+        propagate_exit,
+        preserve_view,
+    };
+}
+
 /// Startup system: load STL/CTB and (optionally) sim. Pre-validates the
 /// flag pairing — `--load-sim` requires `--load-ctb`. Resources are
 /// inserted unconditionally (with default values); this system just
 /// populates them.
+///
+/// The CTB path spawns an async parse on `IoTaskPool`; the result is
+/// polled by `poll_ctb_load` on the first Update tick.
 #[allow(clippy::too_many_arguments)]
 fn setup_initial_load(
     args: Res<Args>,
@@ -914,13 +955,7 @@ fn setup_initial_load(
     prior: PriorGeometry,
     mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
     mut loaded_sim: ResMut<LoadedSimulation>,
-    mut loaded_masks: ResMut<LoadedSliceMasks>,
-    mut current_layer: ResMut<CurrentLayer>,
-    mut z_prefix: ResMut<LayerZPrefix>,
-    mut domain: ResMut<CureDepthDomain>,
-    active_profile: Res<ActivePrinterProfile>,
-    mut envelope: ResMut<PrinterEnvelope>,
-    mut warned_about_envelope_mismatch: Local<bool>,
+    mut ctb_task: ResMut<CtbLoadTask>,
     mut exit_writer: MessageWriter<AppExit>,
 ) {
     // Pre-load: --load-sim if any. On Err leave LoadedSimulation as None.
@@ -933,38 +968,15 @@ fn setup_initial_load(
             }
             Err(e) => {
                 error!("simulation load failed for {}: {e}", sim_path.display());
-                // Record the failure BEFORE potentially exiting so the
-                // --screenshot loads_settled predicate sees the settled
-                // state (issue 12 / code-r5 finding). The assignment must
-                // happen unconditionally — fatal_exit only writes AppExit;
-                // execution continues for the rest of this Startup tick.
                 loaded_sim.last_attempt = Some(Err(e.to_string()));
                 loaded_sim.source_path = None;
-                // The exit-code propagation is the v1 contract for
-                // CI / capture-and-exit consumers. Under `--v2` the
-                // dashboard surfaces the parse error as the brief
-                // §6 ParseError block — exiting with code 2 would
-                // prevent that visual from ever rendering.
                 if !args.v2 && should_propagate_exit_codes(&args) {
                     fatal_exit(&mut exit_writer, EXIT_SIM_LOAD_FAILED);
                 }
-                // Continue to geometry load — without the sim the heatmap
-                // is silently skipped (LoadedSimulation.simulation stays
-                // None; last_attempt records the failure).
             }
         }
     }
 
-    // Bad pairing check: --load-sim with no --load-ctb (or with --load-stl).
-    // Emit error so the user notices; continue to geometry load so an
-    // interactive user can drag-drop a CTB and recover (the loaded sim
-    // is preserved).
-    //
-    // The check is **skipped under --v2**: the v2 dashboard reads sim
-    // data directly and only the (optional) layer-mask 2D pane needs a
-    // CTB — and that pane gracefully degrades to a "no CTB loaded"
-    // state. The sim/CTB pairing rule is a v1 heatmap-pipeline
-    // concern, not a v2 one.
     if !args.v2 && args.load_sim.is_some() && args.load_ctb.is_none() {
         error!(
             "--load-sim was supplied without --load-ctb; the heatmap \
@@ -987,38 +999,17 @@ fn setup_initial_load(
             &prior.slice,
             &prior.cursor,
             &mut camera,
-            // Startup = first load: re-frame AND lock the 3/4 view.
             false,
         ),
         (None, Some(path)) => {
-            if let Some(parsed) = load_ctb_into_world(
+            spawn_ctb_parse(
+                &mut ctb_task,
                 path,
-                &mut commands,
-                &mut meshes,
-                &mut materials,
-                &prior.stl,
-                &prior.slice,
-                &prior.cursor,
-                &prior.plate,
-                &mut camera,
-                &loaded_sim,
-                &mut current_layer,
-                &mut z_prefix,
-                &mut domain,
-                &active_profile,
-                &mut envelope,
-                &mut warned_about_envelope_mismatch,
-                false,
-                args.allow_mismatch,
                 should_propagate_exit_codes(&args),
-                &mut exit_writer,
-            ) {
-                loaded_masks.layers = parsed;
-            }
+                false,
+            );
         }
         (None, None) => {}
-        // clap's `conflicts_with` makes this unreachable, but the
-        // exhaustive match keeps the dispatch total and grep-able.
         (Some(_), Some(_)) => {
             unreachable!("clap conflicts_with should reject --load-stl + --load-ctb at parse time")
         }
@@ -1046,16 +1037,8 @@ pub fn handle_dropped_files(
     mut materials: ResMut<Assets<StandardMaterial>>,
     prior: PriorGeometry,
     mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
-    args: Res<Args>,
     mut loaded_sim: ResMut<LoadedSimulation>,
-    mut loaded_masks: ResMut<LoadedSliceMasks>,
-    mut current_layer: ResMut<CurrentLayer>,
-    mut z_prefix: ResMut<LayerZPrefix>,
-    mut domain: ResMut<CureDepthDomain>,
-    active_profile: Res<ActivePrinterProfile>,
-    mut envelope: ResMut<PrinterEnvelope>,
-    mut warned_about_envelope_mismatch: Local<bool>,
-    mut exit_writer: MessageWriter<AppExit>,
+    mut ctb_task: ResMut<CtbLoadTask>,
 ) {
     let dropped: Vec<PathBuf> = events
         .read()
@@ -1084,34 +1067,10 @@ pub fn handle_dropped_files(
             &prior.slice,
             &prior.cursor,
             &mut camera,
-            // Drag-drop = reload: preserve user's current orbit angle.
             true,
         ),
         DropAction::Ctb => {
-            if let Some(parsed) = load_ctb_into_world(
-                path,
-                &mut commands,
-                &mut meshes,
-                &mut materials,
-                &prior.stl,
-                &prior.slice,
-                &prior.cursor,
-                &prior.plate,
-                &mut camera,
-                &loaded_sim,
-                &mut current_layer,
-                &mut z_prefix,
-                &mut domain,
-                &active_profile,
-                &mut envelope,
-                &mut warned_about_envelope_mismatch,
-                true,
-                args.allow_mismatch,
-                DROP_IS_INTERACTIVE,
-                &mut exit_writer,
-            ) {
-                loaded_masks.layers = parsed;
-            }
+            spawn_ctb_parse(&mut ctb_task, path, DROP_IS_INTERACTIVE, true);
         }
         DropAction::Sim => match load_sim_from_path(path) {
             Ok(sim) => {
@@ -1327,6 +1286,93 @@ fn log_layer_change(
         return;
     };
     log_layer_line(s, current.index, current.max, domain.0);
+}
+
+// ---------------------------------------------------------------------------
+// Async CTB load poller
+// ---------------------------------------------------------------------------
+
+/// Update system: polls the in-flight `CtbLoadTask`. When the parse
+/// completes, despawns prior geometry and calls `apply_parsed_ctb`
+/// to build the mesh/cursor/camera on the main thread.
+#[allow(clippy::too_many_arguments)]
+fn poll_ctb_load(
+    mut ctb_task: ResMut<CtbLoadTask>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    prior: PriorGeometry,
+    mut camera: Query<&mut PanOrbitCamera, With<Camera3d>>,
+    args: Res<Args>,
+    loaded_sim: Res<LoadedSimulation>,
+    mut loaded_masks: ResMut<LoadedSliceMasks>,
+    mut current_layer: ResMut<CurrentLayer>,
+    mut z_prefix: ResMut<LayerZPrefix>,
+    mut domain: ResMut<CureDepthDomain>,
+    active_profile: Res<ActivePrinterProfile>,
+    mut envelope: ResMut<PrinterEnvelope>,
+    mut warned_about_envelope_mismatch: Local<bool>,
+    mut exit_writer: MessageWriter<AppExit>,
+) {
+    let CtbLoadTask::Loading {
+        ref mut task,
+        ref path,
+        propagate_exit,
+        preserve_view,
+    } = *ctb_task
+    else {
+        return;
+    };
+
+    let Some(result) = block_on(poll_once(task)) else {
+        return;
+    };
+
+    let path = path.clone();
+    let propagate_exit = propagate_exit;
+    let preserve_view = preserve_view;
+
+    match result {
+        Ok((info, layers)) => {
+            despawn_geometry(&mut commands, &prior.stl, &prior.slice, &prior.cursor);
+            current_layer.index = 0;
+            current_layer.max = 0;
+            z_prefix.0.clear();
+            domain.0 = None;
+
+            if let Some(parsed) = apply_parsed_ctb(
+                info,
+                layers,
+                &path,
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                &prior.plate,
+                &mut camera,
+                &loaded_sim,
+                &mut current_layer,
+                &mut z_prefix,
+                &mut domain,
+                &active_profile,
+                &mut envelope,
+                &mut warned_about_envelope_mismatch,
+                preserve_view,
+                args.allow_mismatch,
+                propagate_exit,
+                &mut exit_writer,
+            ) {
+                loaded_masks.layers = parsed;
+            }
+            *ctb_task = CtbLoadTask::Idle;
+        }
+        Err(e) => {
+            error!("CTB load failed for {}: {e}", path.display());
+            if propagate_exit {
+                fatal_exit(&mut exit_writer, EXIT_CTB_LOAD_FAILED);
+            }
+            *ctb_task = CtbLoadTask::Failed(e);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1551,6 +1597,7 @@ pub fn run(args: Args) -> AppExit {
     .init_resource::<BottomPanelState>()
     .init_resource::<SimulationResult>()
     .init_resource::<screenshot::LastScreenshot>()
+    .init_resource::<CtbLoadTask>()
     .add_message::<RunSimRequest>()
     .add_systems(
         Startup,
@@ -1566,6 +1613,7 @@ pub fn run(args: Args) -> AppExit {
         Update,
         (
             handle_dropped_files,
+            poll_ctb_load,
             handle_layer_keys,
             update_layer_cursor,
             log_layer_change,
@@ -1733,6 +1781,7 @@ mod tests {
             .init_resource::<CurrentLayer>()
             .init_resource::<LayerZPrefix>()
             .init_resource::<CureDepthDomain>()
+            .init_resource::<CtbLoadTask>()
             // Issue 10 plate / envelope resources read by load_ctb_into_world.
             .init_resource::<ActivePrinterProfile>()
             .insert_resource(PrinterEnvelope::default())
@@ -2442,6 +2491,26 @@ mod tests {
     }
 
     #[test]
+    fn ctb_load_task_defaults_to_idle() {
+        let mut app = App::new();
+        app.init_resource::<CtbLoadTask>();
+        assert!(
+            matches!(
+                app.world().resource::<CtbLoadTask>() as &CtbLoadTask,
+                CtbLoadTask::Idle
+            ),
+            "init_resource must produce CtbLoadTask::Idle"
+        );
+    }
+
+    #[test]
+    fn ctb_load_task_loading_filename_returns_stem() {
+        let task = CtbLoadTask::Failed("test".to_string());
+        assert!(task.loading_filename().is_none());
+        assert!(!task.is_loading());
+    }
+
+    #[test]
     fn route_drop_recognises_sim_json_with_case_folding() {
         for (path, want) in [
             ("foo.sim.json", DropAction::Sim),
@@ -2510,8 +2579,9 @@ mod tests {
             v2: false,
         });
         app.add_systems(Startup, setup_initial_load);
-        app.add_systems(Update, smoke_exit_after_one_frame);
-        app.update();
+        app.add_systems(Update, (poll_ctb_load, smoke_exit_after_one_frame));
+        app.update(); // Startup: spawns async task
+        app.update(); // Update: poll_ctb_load applies the result
         assert_eq!(
             count_loaded_slice(&mut app),
             1,
@@ -2688,8 +2758,9 @@ mod tests {
             v2: false,
         });
         app.add_systems(Startup, setup_initial_load);
-        app.add_systems(Update, smoke_exit_after_one_frame);
-        app.update();
+        app.add_systems(Update, (poll_ctb_load, smoke_exit_after_one_frame));
+        app.update(); // Startup: spawns async task + loads sim
+        app.update(); // Update: poll_ctb_load applies the CTB result
 
         assert_eq!(
             count_loaded_slice(&mut app),

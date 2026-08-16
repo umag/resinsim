@@ -24,7 +24,7 @@ use crate::ui::plots::{
     build_layer_chart_data, build_plot_data, render_layer_timeline, render_plots,
 };
 use crate::ui::state::{run_block_reason, BottomPanelState, PickerState};
-use crate::CurrentLayer;
+use crate::{CtbLoadTask, CurrentLayer};
 
 /// Toast lifetime for the "Captured: <basename>" label after the
 /// Capture-screenshot button is clicked. 3 s @ 60 Hz keeps the
@@ -52,6 +52,7 @@ pub fn left_panel(
     loaded_q: Query<&LoadedSliceStack>,
     mut commands: Commands,
     mut last_screenshot: ResMut<LastScreenshot>,
+    ctb_task: Res<CtbLoadTask>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
@@ -123,10 +124,16 @@ pub fn left_panel(
             ui.add_space(6.0);
 
             // --- Loaded CTB hint ---
-            match loaded_path.as_deref() {
-                Some(p) => ui.label(format!("Loaded CTB: {}", loaded_basename(p))),
-                None => ui.label("(drag a .ctb file in to load)"),
-            };
+            if let Some(name) = ctb_task.loading_filename() {
+                ui.colored_label(egui::Color32::GRAY, format!("Loading: {name}..."));
+            } else if let CtbLoadTask::Failed(ref e) = *ctb_task {
+                ui.colored_label(egui::Color32::LIGHT_RED, format!("CTB load failed: {e}"));
+            } else {
+                match loaded_path.as_deref() {
+                    Some(p) => ui.label(format!("Loaded CTB: {}", loaded_basename(p))),
+                    None => ui.label("(drag a .ctb file in to load)"),
+                };
+            }
 
             ui.add_space(6.0);
 
