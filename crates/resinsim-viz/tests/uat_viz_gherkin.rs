@@ -56,13 +56,12 @@ use cucumber::{StatsWriter as _, World};
 
 use uat_viz_steps::viz_cli::CliOutcome;
 
-// Force the step-def module to link so its `#[given]/#[when]/#[then]`
+// Force every step-def module to link so its `#[given]/#[when]/#[then]`
 // registrations reach cucumber-rs's global inventory (same reasoning as
-// core's `use uat_steps::{...}` block). Only one module today, so no
-// `assert_mod_rs_and_use_list_agree`-style cross-check is needed yet —
-// see `uat_viz_steps/mod.rs`'s doc comment for when to add it.
+// core's `use uat_steps::{...}` block). `assert_mod_rs_and_use_list_agree`
+// (below) cross-checks this list against `mod.rs`'s `pub mod` set.
 #[allow(unused_imports)]
-use uat_viz_steps::viz_screenshot_flag;
+use uat_viz_steps::{viz_bad_pairing, viz_screenshot_flag};
 
 /// World for viz UAT scenarios. Carries the outcome of the last
 /// `resinsim-viz` CLI invocation, a path staged by a "When" step for a
@@ -134,7 +133,6 @@ const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("viz-layer-count-mismatch-hard-error", 1),
     ("viz-load-ctb-with-sim-renders-heatmap", 1),
     ("viz-load-sim-missing-sidecar", 3),
-    ("viz-load-sim-without-ctb-bad-pairing", 1),
     ("viz-screenshot-flag", 5),
     ("viz-timeline-click-seeks-current-layer", 3),
     ("viz-timeline-drag-pan-does-not-seek", 2),
@@ -232,6 +230,69 @@ fn assert_spec_set_matches_viz_prefix_on_disk(
          harness's register and resinsim-core's — a mismatch here means a viz spec \
          can fall through both harnesses unnoticed. Harness sees: {harness_stems:?}\n\
          On disk: {on_disk:?}",
+    );
+}
+
+/// Layer 3 (structural): the `pub mod` set in `uat_viz_steps/mod.rs`
+/// (minus `NON_STEP_MODULES`) must exactly equal the identifiers in the
+/// `use uat_viz_steps::{...}` binding in this file. `-Aunused_imports`
+/// (.cargo/config.toml) makes a missing `use` unable to warn, so a
+/// module declared in `mod.rs` but absent from the `use` list would
+/// have its `#[given]/#[when]/#[then]` registrations silently unlinked.
+///
+/// Simpler than core's version: no feature-gate classification needed
+/// (all viz step modules are unconditionally compiled).
+fn assert_mod_rs_and_use_list_agree() {
+    let mod_src: &str = include_str!("uat_viz_steps/mod.rs");
+    let this_src: &str = include_str!("uat_viz_gherkin.rs");
+
+    let non_step: std::collections::BTreeSet<&str> =
+        uat_viz_steps::NON_STEP_MODULES.iter().copied().collect();
+
+    let declared: std::collections::BTreeSet<&str> = mod_src
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix("pub mod "))
+        .filter_map(|rest| rest.strip_suffix(';'))
+        .filter(|name| !non_step.contains(name))
+        .collect();
+
+    let mut used: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for line in this_src.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("use uat_viz_steps::") {
+            let rest = rest.trim_end_matches(';');
+            if rest.starts_with('{') && rest.ends_with('}') {
+                for ident in rest[1..rest.len() - 1].split(',') {
+                    let ident = ident.trim();
+                    if !ident.is_empty() {
+                        used.insert(ident);
+                    }
+                }
+            } else if !rest.is_empty() && !rest.contains("::") {
+                // Skip nested path imports (e.g. `viz_cli::CliOutcome`)
+                // — those are type imports, not module link-forcing.
+                used.insert(rest);
+            }
+        }
+    }
+
+    let missing_from_use: Vec<&&str> = declared.difference(&used).collect();
+    let missing_from_mod: Vec<&&str> = used.difference(&declared).collect();
+    assert!(
+        missing_from_use.is_empty(),
+        "{} step-def module(s) declared `pub mod` in uat_viz_steps/mod.rs but \
+         MISSING from the `use uat_viz_steps::{{...}}` binding in uat_viz_gherkin.rs: \
+         {missing_from_use:?}\n\
+         Their #[given]/#[when]/#[then] registrations are not proven to link.",
+        missing_from_use.len(),
+    );
+    assert!(
+        missing_from_mod.is_empty(),
+        "{} identifier(s) in uat_viz_gherkin.rs's `use uat_viz_steps::{{...}}` have \
+         NO matching `pub mod` in uat_viz_steps/mod.rs: {missing_from_mod:?}\n\
+         Remove the stale entry or add the module declaration.",
+        missing_from_mod.len(),
     );
 }
 
@@ -387,11 +448,7 @@ async fn main() {
         .collect();
     assert_runtime_attribution_matches_register(&actual_skipped);
 
-    // NOT replicated: core's layer-3 `assert_mod_rs_and_use_list_agree`.
-    // It exists because `-Aunused_imports` (.cargo/config.toml) makes a
-    // missing `use` unable to warn across core's 27 step modules; with
-    // ONE step module here the check would be pure noise. Add it back
-    // when a second viz step-def module lands.
+    assert_mod_rs_and_use_list_agree();
 
     if total_failed > 0 || total_hook_errors > 0 {
         std::process::exit(1);

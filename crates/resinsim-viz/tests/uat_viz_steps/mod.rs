@@ -5,20 +5,19 @@
 //! resinsim-core's naming convention: snake_case name matches the
 //! kebab-case `spec/uat/viz-*.md` stem verbatim, for grep traceability.
 //!
-//! This tree currently has ONE per-spec module
-//! (`viz_screenshot_flag`), piloting `spec/uat/viz-screenshot-flag.md`
-//! per docs/adr/0024-second-uat-harness-in-resinsim-viz.md. Every other
-//! viz spec stays fully skipped, registered in
-//! `tests/uat_viz_gherkin.rs::SPECS_WITHOUT_STEP_DEFS`.
-//!
-//! Unlike resinsim-core's `uat_steps/mod.rs`, there is no
-//! `NON_STEP_MODULES` bookkeeping and no layer-3
-//! `assert_mod_rs_and_use_list_agree` cross-check yet — with a single
-//! step module, `-Aunused_imports` (.cargo/config.toml) has nothing to
-//! silently drop, so that guard would be pure noise. Add both back when
-//! a second viz step-def module lands (see `uat_viz_gherkin.rs`'s
-//! comment at the same point).
+//! `NON_STEP_MODULES` lists shared-support modules (viz_cli) that are
+//! NOT per-spec step-def bindings — the layer-3 cross-check
+//! (`assert_mod_rs_and_use_list_agree` in `uat_viz_gherkin.rs`) reads
+//! it to distinguish step modules from support modules when comparing
+//! `pub mod` declarations against the `use` bindings that force linking.
 
 pub mod viz_cli;
 
+pub mod viz_bad_pairing;
 pub mod viz_screenshot_flag;
+
+/// Modules under `uat_viz_steps/` that are shared support code, not
+/// per-spec step-def bindings. Single source for this list — layer 3
+/// (`assert_mod_rs_and_use_list_agree` in `uat_viz_gherkin.rs`) reads
+/// it from here.
+pub const NON_STEP_MODULES: &[&str] = &["viz_cli"];
