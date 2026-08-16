@@ -128,13 +128,11 @@ impl VizWorld {
 const SPECS_WITHOUT_STEP_DEFS: &[(&str, usize)] = &[
     ("viz-allow-mismatch-soft-fallback", 1),
     // viz-arrow-keys-uat: both specs below ARE tested by in-process unit
-    // tests in main.rs — keyboard simulation via `ButtonInput::press()` +
+    // tests in lib.rs — keyboard simulation via `ButtonInput::press()` +
     // `reset_all()` with synthetic fixtures (no `.ctb` needed). The
-    // cucumber debt persists because `resinsim-viz` is a binary-only crate
-    // (no `lib.rs`), so this integration test binary cannot import the
-    // systems, resources, or types it would need for in-process driving.
-    // A `lib.rs` + `main.rs` split would unblock cucumber step defs; until
-    // then, the behavior is covered by unit tests, not by this harness.
+    // lib.rs + main.rs split (viz-lib-main-split) unblocked in-process
+    // driving; cucumber step defs for these specs are now unblocked but
+    // not yet written. The behavior is covered by unit tests in lib.rs.
     //
     // UAT-6 (no-mesh-reupload): covered by
     // `slice_stack_mesh_attribute_color_unmutated_under_arrow_keys` — asserts
