@@ -3,6 +3,8 @@ name = "resinsim-viz"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+
 [[bin]]
 name = "resinsim-viz"
 path = "src/main.rs"

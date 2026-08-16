@@ -491,63 +491,6 @@ async fn main() {
     }
 }
 
-/// Layer-3 structural guard: every `pub mod <name>` line in
-/// `uat_viz_steps/mod.rs` whose name is NOT in `NON_STEP_MODULES` must
-/// appear as `use uat_viz_steps::<name>` in THIS file. A missing `use`
-/// means step registrations from that module are silently absent
-/// (the module compiles but its inventory entries never link) — this
-/// check turns that into a hard panic rather than a vacuously-skipped
-/// scenario. Mirrors the logic from `resinsim-core`'s
-/// `uat_gherkin.rs::assert_mod_rs_and_use_list_agree`.
-fn assert_mod_rs_and_use_list_agree() {
-    let mod_rs = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/uat_viz_steps/mod.rs");
-    let mod_rs_text = std::fs::read_to_string(&mod_rs)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", mod_rs.display()));
-
-    let non_step: std::collections::HashSet<&str> =
-        uat_viz_steps::NON_STEP_MODULES.iter().copied().collect();
-
-    let step_modules: Vec<&str> = mod_rs_text
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.starts_with("pub mod ") {
-                let name = trimmed
-                    .trim_start_matches("pub mod ")
-                    .trim_end_matches(';');
-                if !non_step.contains(name) {
-                    return Some(name);
-                }
-            }
-            None
-        })
-        .collect();
-
-    let harness = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/uat_viz_gherkin.rs");
-    let harness_text = std::fs::read_to_string(&harness)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", harness.display()));
-
-    let missing: Vec<&&str> = step_modules
-        .iter()
-        .filter(|&&name| {
-            let use_pattern = format!("use uat_viz_steps::{name}");
-            !harness_text.contains(&use_pattern)
-        })
-        .collect();
-
-    assert!(
-        missing.is_empty(),
-        "{} step-def module(s) declared `pub mod` in uat_viz_steps/mod.rs but \
-         MISSING from the `use uat_viz_steps::{{...}}` block in \
-         uat_viz_gherkin.rs: {missing:?}\n\
-         Without the `use`, step registrations from those modules are silently \
-         absent and their scenarios vacuously skip.",
-        missing.len(),
-    );
-}
-
 /// Mirrors `resinsim-core`'s `uat_gherkin.rs::resolve_spec_uat_dir`, but
 /// verified rather than copied blindly: `resinsim-viz`'s
 /// `CARGO_MANIFEST_DIR` is `crates/resinsim-viz`, the SAME ancestor depth
