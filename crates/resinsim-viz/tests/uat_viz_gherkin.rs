@@ -64,7 +64,8 @@ use uat_viz_steps::{
     viz_allow_mismatch_soft_fallback, viz_arrow_key_step_no_mesh_reupload,
     viz_arrow_keys_step_layer_with_saturation, viz_bad_pairing,
     viz_layer_count_mismatch_hard_error, viz_load_ctb_with_sim_renders_heatmap,
-    viz_load_sim_missing_sidecar, viz_screenshot_ctb, viz_screenshot_flag,
+    viz_load_sim_missing_sidecar, viz_screenshot_ctb, viz_screenshot_egui,
+    viz_screenshot_flag,
     viz_timeline_click_seeks_current_layer, viz_timeline_drag_pan_does_not_seek,
     viz_timeline_safety_log_toggle_handles_infinite_sf,
     viz_timeline_series_toggle_rescales_y,
@@ -167,8 +168,8 @@ impl VizWorld {
 /// UAT-7a/7b/7c → 9; step 5 piloted UAT-1/3/4/9 → 5; UAT-2/5/8
 /// stepped (env-gated) → 2; UAT-7d unblocked (custom value_parser
 /// on --screenshot accepts empty strings, clap no longer intercepts)
-/// → 1 remaining: UAT-6 (needs synthetic egui pointer click,
-/// bevy_egui 0.39 limitation).
+/// → 1; UAT-6 stepped via headless egui pointer injection
+/// (viz_screenshot_egui.rs, bypasses bevy_egui limitation) → 0.
 fn specs_without_step_defs() -> Vec<(&'static str, usize)> {
     vec![
         // PAID DOWN (viz-arrow-keys-stepdefs): both arrow-key specs now
@@ -183,11 +184,9 @@ fn specs_without_step_defs() -> Vec<(&'static str, usize)> {
         // UAT-2 (drag-drop) is declared debt (needs synthetic egui
         // pointer events).
         ("viz-load-sim-missing-sidecar", 1),
-        // UAT-6 remains as declared debt (needs synthetic egui pointer
-        // click, bevy_egui 0.39 limitation). UAT-7d was unblocked by
-        // adding a custom value_parser to --screenshot that accepts
-        // empty strings (clap previously intercepted them).
-        ("viz-screenshot-flag", 1),
+        // UAT-6 stepped via headless egui pointer injection
+        // (viz_screenshot_egui.rs). All scenarios now covered.
+        ("viz-screenshot-flag", 0),
         ("viz-timeline-click-seeks-current-layer", 3),
         ("viz-timeline-drag-pan-does-not-seek", 2),
     ]

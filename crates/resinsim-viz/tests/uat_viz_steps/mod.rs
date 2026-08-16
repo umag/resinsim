@@ -25,6 +25,7 @@ pub mod viz_layer_count_mismatch_hard_error;
 pub mod viz_load_ctb_with_sim_renders_heatmap;
 pub mod viz_load_sim_missing_sidecar;
 pub mod viz_screenshot_ctb;
+pub mod viz_screenshot_egui;
 pub mod viz_screenshot_flag;
 pub mod viz_timeline_click_seeks_current_layer;
 pub mod viz_timeline_drag_pan_does_not_seek;
