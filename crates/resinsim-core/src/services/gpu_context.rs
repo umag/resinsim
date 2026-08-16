@@ -37,6 +37,7 @@ impl GpuContext {
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("resinsim-thermal"),
+                required_limits: adapter.limits(),
                 ..Default::default()
             },
             None,
