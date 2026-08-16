@@ -90,7 +90,8 @@ fn gpu_cpu_strain_stress_parity_mixed_cure() {
     }
 
     // --- GPU path ---
-    let bufs = GpuStrainStressBuffers::new(&ctx, &cure);
+    let bufs = GpuStrainStressBuffers::new(&ctx, &cure, nz);
+    bufs.upload_dose(&ctx, &cure, 0);
     bufs.dispatch(
         &ctx,
         layer_z,
@@ -102,6 +103,7 @@ fn gpu_cpu_strain_stress_parity_mixed_cure() {
         youngs_modulus_mpa,
         poissons_ratio,
         nz,
+        0,
     );
     let gpu_strain = bufs.download_strain(&ctx);
     let gpu_stress = bufs.download_stress(&ctx);
@@ -179,7 +181,8 @@ fn gpu_uncured_voxels_produce_zero() {
         .expect("cure field");
     // No dose added → all voxels have dose=0 → all uncured
 
-    let bufs = GpuStrainStressBuffers::new(&ctx, &cure);
+    let bufs = GpuStrainStressBuffers::new(&ctx, &cure, nz);
+    bufs.upload_dose(&ctx, &cure, 0);
     bufs.dispatch(
         &ctx,
         0,       // layer_z
@@ -191,6 +194,7 @@ fn gpu_uncured_voxels_produce_zero() {
         2000.0,  // youngs_modulus_mpa
         0.35,    // poissons_ratio
         nz,
+        0,
     );
     let gpu_strain = bufs.download_strain(&ctx);
     let gpu_stress = bufs.download_stress(&ctx);

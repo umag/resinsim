@@ -27,7 +27,11 @@ struct Params {
     z_anisotropy_ratio: f32,
     youngs_modulus_mpa: f32,
     poissons_ratio: f32,
-    _pad: u32,
+    slab_iz_start: u32,
+    slab_nz: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -35,8 +39,8 @@ struct Params {
 @group(0) @binding(2) var<storage, read_write> strain_out: array<f32>;
 @group(0) @binding(3) var<storage, read_write> stress_out: array<f32>;
 
-fn dose_idx(ix: u32, iy: u32, iz: u32) -> u32 {
-    return ix * params.ny * params.nz + iy * params.nz + iz;
+fn dose_idx(ix: u32, iy: u32, iz_local: u32) -> u32 {
+    return ix * params.ny * params.slab_nz + iy * params.slab_nz + iz_local;
 }
 
 fn out_idx(ix: u32, iy: u32) -> u32 {
@@ -54,7 +58,7 @@ fn strain_stress_step(@builtin(global_invocation_id) gid: vec3<u32>) {
     let iy = linear % params.ny;
     let ix = linear / params.ny;
 
-    let absorbed_dose = dose[dose_idx(ix, iy, params.layer_z)];
+    let absorbed_dose = dose[dose_idx(ix, iy, params.layer_z - params.slab_iz_start)];
 
     let base = out_idx(ix, iy) * 6u;
 
@@ -122,7 +126,9 @@ struct GpuStrainStressParams {
     z_anisotropy_ratio: f32,
     youngs_modulus_mpa: f32,
     poissons_ratio: f32,
-    _pad: u32,
+    slab_iz_start: u32,
+    slab_nz: u32,
+    _pad: [u32; 3],
 }
 
 pub struct GpuStrainStressBuffers {
@@ -136,20 +142,23 @@ pub struct GpuStrainStressBuffers {
     bind_group: wgpu::BindGroup,
     nx: u32,
     ny: u32,
+    slab_nz: u32,
 }
 
 impl GpuStrainStressBuffers {
-    pub fn new(ctx: &GpuContext, cure_field: &CureField) -> Self {
+    pub fn new(ctx: &GpuContext, cure_field: &CureField, slab_nz: u32) -> Self {
         let (nx, ny, _nz) = cure_field.dimensions();
         let total_layer = (nx as usize) * (ny as usize);
-        let dose_data: Vec<f32> = cure_field.data().iter().copied().collect();
+        let dose_slab_bytes = (nx as u64) * (ny as u64) * (slab_nz as u64)
+            * std::mem::size_of::<f32>() as u64;
 
         let device = ctx.device();
 
-        let dose_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let dose_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("strain_dose"),
-            contents: bytemuck::cast_slice(&dose_data),
+            size: dose_slab_bytes,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let strain_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("strain_out"),
@@ -283,13 +292,40 @@ impl GpuStrainStressBuffers {
             bind_group,
             nx,
             ny,
+            slab_nz,
         }
     }
 
-    pub fn upload_dose(&self, ctx: &GpuContext, cure_field: &CureField) {
-        let dose_data: Vec<f32> = cure_field.data().iter().copied().collect();
+    pub fn upload_dose(&self, ctx: &GpuContext, cure_field: &CureField, slab_iz_start: u32) {
+        let (nx, ny, nz) = cure_field.dimensions();
+        let this_slab_nz = self.slab_nz.min(nz - slab_iz_start);
+        let slab = Self::gather_dose_slab(
+            cure_field.data(), nx, ny, nz, slab_iz_start, this_slab_nz,
+        );
         ctx.queue()
-            .write_buffer(&self.dose_buf, 0, bytemuck::cast_slice(&dose_data));
+            .write_buffer(&self.dose_buf, 0, bytemuck::cast_slice(&slab));
+    }
+
+    fn gather_dose_slab(
+        data: &ndarray::Array3<f32>,
+        nx: u32, ny: u32, nz: u32,
+        slab_iz_start: u32, this_slab_nz: u32,
+    ) -> Vec<f32> {
+        let nx = nx as usize;
+        let ny = ny as usize;
+        let nz = nz as usize;
+        let start = slab_iz_start as usize;
+        let snz = this_slab_nz as usize;
+        let flat = data.as_slice().expect("contiguous ndarray");
+        let mut slab = vec![0.0f32; nx * ny * snz];
+        for ix in 0..nx {
+            for iy in 0..ny {
+                let src = ix * ny * nz + iy * nz + start;
+                let dst = ix * ny * snz + iy * snz;
+                slab[dst..dst + snz].copy_from_slice(&flat[src..src + snz]);
+            }
+        }
+        slab
     }
 
     /// Record a GPU-side copy from an external cure buffer into this
@@ -312,6 +348,10 @@ impl GpuStrainStressBuffers {
     /// Record the strain/stress compute pass onto an external
     /// `CommandEncoder` without submitting. The dose data must already
     /// be in `dose_buf` (via `upload_dose` or `encode_copy_dose_from`).
+    pub fn slab_nz(&self) -> u32 {
+        self.slab_nz
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn encode_strain_stress_pass(
         &self,
@@ -326,6 +366,7 @@ impl GpuStrainStressBuffers {
         youngs_modulus_mpa: f32,
         poissons_ratio: f32,
         nz: u32,
+        slab_iz_start: u32,
     ) {
         let params = GpuStrainStressParams {
             nx: self.nx,
@@ -339,7 +380,9 @@ impl GpuStrainStressBuffers {
             z_anisotropy_ratio,
             youngs_modulus_mpa,
             poissons_ratio,
-            _pad: 0,
+            slab_iz_start,
+            slab_nz: self.slab_nz,
+            _pad: [0; 3],
         };
         ctx.queue()
             .write_buffer(&self.params_buf, 0, bytemuck::bytes_of(&params));
@@ -373,6 +416,7 @@ impl GpuStrainStressBuffers {
         youngs_modulus_mpa: f32,
         poissons_ratio: f32,
         nz: u32,
+        slab_iz_start: u32,
     ) {
         let mut encoder = ctx
             .device()
@@ -382,7 +426,7 @@ impl GpuStrainStressBuffers {
         self.encode_strain_stress_pass(
             ctx, &mut encoder, layer_z, ec_at_temp, dp_um, layer_height_um,
             linear_shrinkage_frac, z_anisotropy_ratio, youngs_modulus_mpa,
-            poissons_ratio, nz,
+            poissons_ratio, nz, slab_iz_start,
         );
         ctx.queue().submit(Some(encoder.finish()));
     }

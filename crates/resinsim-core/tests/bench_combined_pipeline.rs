@@ -46,22 +46,23 @@ fn bench_combined_vs_separate() {
 
     // --- Separate dispatches (old path): cure.dispatch() + upload_dose + strain.dispatch() ---
     {
-        let cure = CureField::new(nx, ny, nz, voxel_mm, [0.0, 0.0, 0.0]).unwrap();
-        let pi = PhotoinitiatorField::new(nx, ny, nz, 1.0).unwrap();
-        let cure_bufs = GpuCureBuffers::new(&ctx, &cure, &pi);
-        let strain_bufs = GpuStrainStressBuffers::new(&ctx, &cure);
+        let mut cure = CureField::new(nx, ny, nz, voxel_mm, [0.0, 0.0, 0.0]).unwrap();
+        let mut pi = PhotoinitiatorField::new(nx, ny, nz, 1.0).unwrap();
+        let cure_bufs = GpuCureBuffers::new(&ctx, &cure, &pi)
+            .expect("gpu cure buffers");
+        let strain_bufs = GpuStrainStressBuffers::new(&ctx, &cure, nz);
 
         let start = std::time::Instant::now();
         for layer in 0..n_layers {
             cure_bufs.dispatch(
                 &ctx, &intensity_grid, layer, nz, exposure_sec, dp_um, k_d,
-                layer_height_um,
+                layer_height_um, &mut cure, &mut pi,
             );
-            strain_bufs.upload_dose(&ctx, &cure);
+            strain_bufs.upload_dose(&ctx, &cure, 0);
             strain_bufs.dispatch(
                 &ctx, layer, ec_ref, dp_um, layer_height_um,
                 linear_shrinkage_frac, z_anisotropy_ratio, youngs_modulus_mpa,
-                poissons_ratio, nz,
+                poissons_ratio, nz, 0,
             );
         }
         let separate_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -76,8 +77,11 @@ fn bench_combined_vs_separate() {
     {
         let cure = CureField::new(nx, ny, nz, voxel_mm, [0.0, 0.0, 0.0]).unwrap();
         let pi = PhotoinitiatorField::new(nx, ny, nz, 1.0).unwrap();
-        let cure_bufs = GpuCureBuffers::new(&ctx, &cure, &pi);
-        let strain_bufs = GpuStrainStressBuffers::new(&ctx, &cure);
+        let cure_bufs = GpuCureBuffers::new(&ctx, &cure, &pi)
+            .expect("gpu cure buffers");
+        let strain_bufs = GpuStrainStressBuffers::new(&ctx, &cure, nz);
+
+        cure_bufs.upload_slab(&ctx, &cure, &pi, 0, nz);
 
         let start = std::time::Instant::now();
         for layer in 0..n_layers {
@@ -87,13 +91,13 @@ fn bench_combined_vs_separate() {
             );
             cure_bufs.encode_cure_pass(
                 &ctx, &mut encoder, layer, nz, exposure_sec, dp_um, k_d,
-                layer_height_um,
+                layer_height_um, 0, nz,
             );
             strain_bufs.encode_copy_dose_from(&mut encoder, cure_bufs.cure_buf());
             strain_bufs.encode_strain_stress_pass(
                 &ctx, &mut encoder, layer, ec_ref, dp_um, layer_height_um,
                 linear_shrinkage_frac, z_anisotropy_ratio, youngs_modulus_mpa,
-                poissons_ratio, nz,
+                poissons_ratio, nz, 0,
             );
             ctx.queue().submit(Some(encoder.finish()));
         }

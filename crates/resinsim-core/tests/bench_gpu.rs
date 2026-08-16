@@ -48,7 +48,7 @@ fn bench_one(
     // --- GPU: n_layers × n_substeps (batched per layer) ---
     let mut gpu_field =
         ThermalField::new(nx, ny, nz, voxel_mm, [0.0, 0.0, 0.0], 25.0).expect("field");
-    let mut bufs = GpuThermalBuffers::new(ctx, &gpu_field);
+    let mut bufs = GpuThermalBuffers::new(ctx, &gpu_field).expect("thermal buffers");
     bufs.upload(ctx, &gpu_field);
     let gpu_start = std::time::Instant::now();
     for _ in 0..n_layers {

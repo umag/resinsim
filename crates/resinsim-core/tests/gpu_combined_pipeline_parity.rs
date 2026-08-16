@@ -93,9 +93,11 @@ fn combined_cure_strain_single_encoder_parity() {
     let mut cure_gpu = CureField::new(nx, ny, nz, voxel_mm, [0.0, 0.0, 0.0]).unwrap();
     let mut pi_gpu = PhotoinitiatorField::new(nx, ny, nz, 1.0).unwrap();
 
-    let cure_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu);
-    let strain_bufs = GpuStrainStressBuffers::new(&ctx, &cure_gpu);
+    let cure_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu)
+        .expect("gpu cure buffers");
+    let strain_bufs = GpuStrainStressBuffers::new(&ctx, &cure_gpu, nz);
 
+    cure_bufs.upload_slab(&ctx, &cure_gpu, &pi_gpu, 0, nz);
     cure_bufs.write_intensity(&ctx, &intensity_grid);
 
     let mut encoder = ctx.device().create_command_encoder(
@@ -103,16 +105,17 @@ fn combined_cure_strain_single_encoder_parity() {
     );
     cure_bufs.encode_cure_pass(
         &ctx, &mut encoder, iz_top, nz, exposure_sec, dp_um, k_d, layer_height_um,
+        0, nz,
     );
     strain_bufs.encode_copy_dose_from(&mut encoder, cure_bufs.cure_buf());
     strain_bufs.encode_strain_stress_pass(
         &ctx, &mut encoder, iz_top, ec_ref, dp_um, layer_height_um,
         linear_shrinkage_frac, z_anisotropy_ratio, youngs_modulus_mpa,
-        poissons_ratio, nz,
+        poissons_ratio, nz, 0,
     );
     ctx.queue().submit(Some(encoder.finish()));
 
-    cure_bufs.download(&ctx, &mut cure_gpu, &mut pi_gpu);
+    cure_bufs.download_slab(&ctx, &mut cure_gpu, &mut pi_gpu, 0, nz);
     let gpu_strain = strain_bufs.download_strain(&ctx);
     let gpu_stress = strain_bufs.download_stress(&ctx);
 
@@ -191,8 +194,11 @@ fn combined_pipeline_multi_layer_8_layers() {
     let mut cure_gpu = CureField::new(nx, ny, nz, voxel_mm, [0.0, 0.0, 0.0]).unwrap();
     let mut pi_gpu = PhotoinitiatorField::new(nx, ny, nz, 1.0).unwrap();
 
-    let cure_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu);
-    let strain_bufs = GpuStrainStressBuffers::new(&ctx, &cure_gpu);
+    let cure_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu)
+        .expect("gpu cure buffers");
+    let strain_bufs = GpuStrainStressBuffers::new(&ctx, &cure_gpu, nz);
+
+    cure_bufs.upload_slab(&ctx, &cure_gpu, &pi_gpu, 0, nz);
 
     for layer in 0..nz {
         let layer_intensity = led_power * (1.0 + 0.05 * layer as f32);
@@ -213,17 +219,18 @@ fn combined_pipeline_multi_layer_8_layers() {
         );
         cure_bufs.encode_cure_pass(
             &ctx, &mut encoder, layer, nz, exposure_sec, dp_um, k_d, layer_height_um,
+            0, nz,
         );
         strain_bufs.encode_copy_dose_from(&mut encoder, cure_bufs.cure_buf());
         strain_bufs.encode_strain_stress_pass(
             &ctx, &mut encoder, layer, ec_ref, dp_um, layer_height_um,
             linear_shrinkage_frac, z_anisotropy_ratio, youngs_modulus_mpa,
-            poissons_ratio, nz,
+            poissons_ratio, nz, 0,
         );
         ctx.queue().submit(Some(encoder.finish()));
     }
 
-    cure_bufs.download(&ctx, &mut cure_gpu, &mut pi_gpu);
+    cure_bufs.download_slab(&ctx, &mut cure_gpu, &mut pi_gpu, 0, nz);
 
     let mut max_dose_diff: f32 = 0.0;
     for ix in 0..nx {
@@ -277,8 +284,10 @@ fn combined_pipeline_single_layer_boundary() {
     let mut cure_gpu = CureField::new(nx, ny, nz, voxel_mm, [0.0, 0.0, 0.0]).unwrap();
     let mut pi_gpu = PhotoinitiatorField::new(nx, ny, nz, 1.0).unwrap();
 
-    let cure_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu);
+    let cure_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu)
+        .expect("gpu cure buffers");
 
+    cure_bufs.upload_slab(&ctx, &cure_gpu, &pi_gpu, 0, nz);
     let intensity_grid = vec![led_power; (nx * ny) as usize];
     cure_bufs.write_intensity(&ctx, &intensity_grid);
     let mut encoder = ctx.device().create_command_encoder(
@@ -286,9 +295,10 @@ fn combined_pipeline_single_layer_boundary() {
     );
     cure_bufs.encode_cure_pass(
         &ctx, &mut encoder, 0, nz, exposure_sec, dp_um, k_d, layer_height_um,
+        0, nz,
     );
     ctx.queue().submit(Some(encoder.finish()));
-    cure_bufs.download(&ctx, &mut cure_gpu, &mut pi_gpu);
+    cure_bufs.download_slab(&ctx, &mut cure_gpu, &mut pi_gpu, 0, nz);
 
     let mut max_diff: f32 = 0.0;
     for ix in 0..nx {
@@ -344,7 +354,10 @@ fn double_buffer_swap_isolation() {
 
     let mut cure_gpu = CureField::new(nx, ny, nz, voxel_mm, [0.0, 0.0, 0.0]).unwrap();
     let mut pi_gpu = PhotoinitiatorField::new(nx, ny, nz, 1.0).unwrap();
-    let cure_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu);
+    let cure_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu)
+        .expect("gpu cure buffers");
+
+    cure_bufs.upload_slab(&ctx, &cure_gpu, &pi_gpu, 0, nz);
 
     cure_bufs.write_intensity(&ctx, &intensity_low);
     let mut enc0 = ctx.device().create_command_encoder(
@@ -352,6 +365,7 @@ fn double_buffer_swap_isolation() {
     );
     cure_bufs.encode_cure_pass(
         &ctx, &mut enc0, 0, nz, exposure_sec, dp_um, k_d, layer_height_um,
+        0, nz,
     );
     ctx.queue().submit(Some(enc0.finish()));
 
@@ -361,10 +375,11 @@ fn double_buffer_swap_isolation() {
     );
     cure_bufs.encode_cure_pass(
         &ctx, &mut enc1, 1, nz, exposure_sec, dp_um, k_d, layer_height_um,
+        0, nz,
     );
     ctx.queue().submit(Some(enc1.finish()));
 
-    cure_bufs.download(&ctx, &mut cure_gpu, &mut pi_gpu);
+    cure_bufs.download_slab(&ctx, &mut cure_gpu, &mut pi_gpu, 0, nz);
 
     let dose_layer0 = cure_gpu.dose_at(0, 0, 0).unwrap();
     let dose_layer1 = cure_gpu.dose_at(0, 0, 1).unwrap();

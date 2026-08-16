@@ -29,7 +29,11 @@ struct Params {
     c_threshold: f32,
     dp_max_factor: f32,
     negligible_dose_floor: f32,
-    _pad: u32,
+    slab_iz_start: u32,
+    slab_nz: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -37,8 +41,8 @@ struct Params {
 @group(0) @binding(2) var<storage, read_write> pi: array<f32>;
 @group(0) @binding(3) var<storage, read> intensity: array<f32>;
 
-fn idx3(ix: u32, iy: u32, iz: u32) -> u32 {
-    return ix * params.ny * params.nz + iy * params.nz + iz;
+fn idx3(ix: u32, iy: u32, iz_local: u32) -> u32 {
+    return ix * params.ny * params.slab_nz + iy * params.slab_nz + iz_local;
 }
 
 @compute @workgroup_size(8, 8)
@@ -55,10 +59,18 @@ fn cure_column_march(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    for (var iz = params.iz_top; iz < params.nz; iz++) {
-        let depth_um = f32(iz - params.iz_top) * params.layer_height_um
+    let slab_iz_end = params.slab_iz_start + params.slab_nz;
+    let loop_start = max(params.iz_top, params.slab_iz_start);
+    let loop_end = min(params.nz, slab_iz_end);
+    if loop_start >= loop_end {
+        return;
+    }
+
+    for (var iz_global = loop_start; iz_global < loop_end; iz_global++) {
+        let iz_local = iz_global - params.slab_iz_start;
+        let depth_um = f32(iz_global - params.iz_top) * params.layer_height_um
                        + params.layer_height_um * 0.5;
-        let linear = idx3(ix, iy, iz);
+        let linear = idx3(ix, iy, iz_local);
         let c_local = pi[linear];
         let c_clamped = max(c_local, params.c_threshold);
         let dp_local = min(params.dp_base / c_clamped,
@@ -94,7 +106,9 @@ struct GpuCureParams {
     c_threshold: f32,
     dp_max_factor: f32,
     negligible_dose_floor: f32,
-    _pad: u32,
+    slab_iz_start: u32,
+    slab_nz: u32,
+    _pad: [u32; 3],
 }
 
 pub struct GpuCureBuffers {
@@ -106,9 +120,19 @@ pub struct GpuCureBuffers {
     staging_pi: wgpu::Buffer,
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
-    total_voxels: u32,
     nx: u32,
     ny: u32,
+    nz: u32,
+    slab_nz: u32,
+}
+
+fn compute_slab_nz(nx: u32, ny: u32, nz: u32, max_buffer_size: u64) -> u32 {
+    let xy_bytes = (nx as u64) * (ny as u64) * std::mem::size_of::<f32>() as u64;
+    if xy_bytes == 0 || xy_bytes > max_buffer_size {
+        return 0;
+    }
+    let max_nz = max_buffer_size / xy_bytes;
+    (max_nz as u32).min(nz).max(1)
 }
 
 impl GpuCureBuffers {
@@ -116,30 +140,34 @@ impl GpuCureBuffers {
         ctx: &GpuContext,
         cure_field: &CureField,
         pi_field: &PhotoinitiatorField,
-    ) -> Self {
+    ) -> Option<Self> {
         let (nx, ny, nz) = cure_field.dimensions();
-        let total = (nx as usize) * (ny as usize) * (nz as usize);
-        let total_bytes = (total * std::mem::size_of::<f32>()) as u64;
-        let xy_count = (nx as usize) * (ny as usize);
+        let slab_nz = compute_slab_nz(nx, ny, nz, ctx.max_buffer_size());
+        if slab_nz == 0 {
+            return None;
+        }
 
-        let cure_data: Vec<f32> = cure_field.data().iter().copied().collect();
-        let pi_data: Vec<f32> = pi_field.data().iter().copied().collect();
+        let slab_voxels = (nx as usize) * (ny as usize) * (slab_nz as usize);
+        let slab_bytes = (slab_voxels * std::mem::size_of::<f32>()) as u64;
+        let xy_count = (nx as usize) * (ny as usize);
 
         let device = ctx.device();
 
-        let cure_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let cure_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("cure"),
-            contents: bytemuck::cast_slice(&cure_data),
+            size: slab_bytes,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        let pi_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let pi_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pi"),
-            contents: bytemuck::cast_slice(&pi_data),
+            size: slab_bytes,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let intensity_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("intensity"),
@@ -155,13 +183,13 @@ impl GpuCureBuffers {
         });
         let staging_cure = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("staging_cure"),
-            size: total_bytes,
+            size: slab_bytes,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let staging_pi = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("staging_pi"),
-            size: total_bytes,
+            size: slab_bytes,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -233,7 +261,7 @@ impl GpuCureBuffers {
             cache: None,
         });
 
-        Self {
+        Some(Self {
             cure_buf,
             pi_buf,
             intensity_buf,
@@ -242,14 +270,24 @@ impl GpuCureBuffers {
             staging_pi,
             pipeline,
             bind_group_layout,
-            total_voxels: total as u32,
             nx,
             ny,
-        }
+            nz,
+            slab_nz,
+        })
     }
 
-    /// Upload per-pixel intensity grid and dispatch the cure column march.
-    /// `intensity_grid` is row-major (iy * nx + ix), length nx * ny.
+    pub fn slab_nz(&self) -> u32 {
+        self.slab_nz
+    }
+
+    pub fn nz(&self) -> u32 {
+        self.nz
+    }
+
+    /// Upload per-pixel intensity grid and dispatch the cure column march
+    /// across all Z-slabs. Each slab's cure+PI data is uploaded from the
+    /// host arrays, dispatched, and downloaded back.
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
@@ -261,17 +299,25 @@ impl GpuCureBuffers {
         dp_base: f32,
         k_d: f32,
         layer_height_um: f32,
+        cure_field: &mut CureField,
+        pi_field: &mut PhotoinitiatorField,
     ) {
         self.write_intensity(ctx, intensity_grid);
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("cure_encoder"),
-            });
-        self.encode_cure_pass(
-            ctx, &mut encoder, iz_top, nz, exposure_sec, dp_base, k_d, layer_height_um,
-        );
-        ctx.queue().submit(Some(encoder.finish()));
+        for slab_iz_start in (0..nz).step_by(self.slab_nz as usize) {
+            let this_slab_nz = self.slab_nz.min(nz - slab_iz_start);
+            self.upload_slab(ctx, cure_field, pi_field, slab_iz_start, this_slab_nz);
+            let mut encoder = ctx
+                .device()
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("cure_encoder"),
+                });
+            self.encode_cure_pass(
+                ctx, &mut encoder, iz_top, nz, exposure_sec, dp_base, k_d,
+                layer_height_um, slab_iz_start, this_slab_nz,
+            );
+            ctx.queue().submit(Some(encoder.finish()));
+            self.download_slab(ctx, cure_field, pi_field, slab_iz_start, this_slab_nz);
+        }
     }
 
     /// Write per-pixel intensity grid to the GPU buffer without
@@ -281,6 +327,60 @@ impl GpuCureBuffers {
             &self.intensity_buf,
             0,
             bytemuck::cast_slice(intensity_grid),
+        );
+    }
+
+    /// Upload a Z-slab of cure and PI data from host arrays to GPU buffers.
+    pub fn upload_slab(
+        &self,
+        ctx: &GpuContext,
+        cure_field: &CureField,
+        pi_field: &PhotoinitiatorField,
+        slab_iz_start: u32,
+        this_slab_nz: u32,
+    ) {
+        let cure_slab = Self::gather_slab(
+            cure_field.data(), self.nx, self.ny, self.nz, slab_iz_start, this_slab_nz,
+        );
+        let pi_slab = Self::gather_slab(
+            pi_field.data(), self.nx, self.ny, self.nz, slab_iz_start, this_slab_nz,
+        );
+        ctx.queue()
+            .write_buffer(&self.cure_buf, 0, bytemuck::cast_slice(&cure_slab));
+        ctx.queue()
+            .write_buffer(&self.pi_buf, 0, bytemuck::cast_slice(&pi_slab));
+    }
+
+    /// Download a Z-slab of cure and PI data from GPU buffers back to host.
+    pub fn download_slab(
+        &self,
+        ctx: &GpuContext,
+        cure_field: &mut CureField,
+        pi_field: &mut PhotoinitiatorField,
+        slab_iz_start: u32,
+        this_slab_nz: u32,
+    ) {
+        let slab_bytes = (self.nx as u64) * (self.ny as u64)
+            * (this_slab_nz as u64) * std::mem::size_of::<f32>() as u64;
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("cure_download_encoder"),
+            });
+        encoder.copy_buffer_to_buffer(&self.cure_buf, 0, &self.staging_cure, 0, slab_bytes);
+        encoder.copy_buffer_to_buffer(&self.pi_buf, 0, &self.staging_pi, 0, slab_bytes);
+        ctx.queue().submit(Some(encoder.finish()));
+
+        let cure_slab = Self::read_staging_flat(ctx, &self.staging_cure, slab_bytes);
+        Self::scatter_slab(
+            &cure_slab, cure_field.data_mut(),
+            self.nx, self.ny, self.nz, slab_iz_start, this_slab_nz,
+        );
+        let pi_slab = Self::read_staging_flat(ctx, &self.staging_pi, slab_bytes);
+        Self::scatter_slab(
+            &pi_slab, pi_field.data_mut(),
+            self.nx, self.ny, self.nz, slab_iz_start, this_slab_nz,
         );
     }
 
@@ -299,6 +399,8 @@ impl GpuCureBuffers {
         dp_base: f32,
         k_d: f32,
         layer_height_um: f32,
+        slab_iz_start: u32,
+        slab_nz: u32,
     ) {
         let params = GpuCureParams {
             nx: self.nx,
@@ -312,7 +414,9 @@ impl GpuCureBuffers {
             c_threshold: 0.01,
             dp_max_factor: 10.0,
             negligible_dose_floor: 1e-6,
-            _pad: 0,
+            slab_iz_start,
+            slab_nz,
+            _pad: [0; 3],
         };
         ctx.queue()
             .write_buffer(&self.params_buf, 0, bytemuck::bytes_of(&params));
@@ -359,34 +463,72 @@ impl GpuCureBuffers {
         &self.cure_buf
     }
 
-    /// Download cure and PI fields from GPU back to host.
-    pub fn download(
+    /// Download the current slab's cure and PI data from GPU to host.
+    /// With slab chunking, `dispatch()` handles per-slab upload/download
+    /// internally. This method downloads whatever is currently in the GPU
+    /// buffer (the last-dispatched slab).
+    pub fn download_current_slab(
         &self,
         ctx: &GpuContext,
         cure_field: &mut CureField,
         pi_field: &mut PhotoinitiatorField,
+        slab_iz_start: u32,
+        this_slab_nz: u32,
     ) {
-        let size = (self.total_voxels as usize * std::mem::size_of::<f32>()) as u64;
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("cure_download_encoder"),
-            });
-        encoder.copy_buffer_to_buffer(&self.cure_buf, 0, &self.staging_cure, 0, size);
-        encoder.copy_buffer_to_buffer(&self.pi_buf, 0, &self.staging_pi, 0, size);
-        ctx.queue().submit(Some(encoder.finish()));
-
-        Self::read_staging(ctx, &self.staging_cure, cure_field.data_mut());
-        Self::read_staging(ctx, &self.staging_pi, pi_field.data_mut());
+        self.download_slab(ctx, cure_field, pi_field, slab_iz_start, this_slab_nz);
     }
 
-    fn read_staging(
+    fn gather_slab(
+        data: &ndarray::Array3<f32>,
+        nx: u32, ny: u32, nz: u32,
+        slab_iz_start: u32, this_slab_nz: u32,
+    ) -> Vec<f32> {
+        let nx = nx as usize;
+        let ny = ny as usize;
+        let nz = nz as usize;
+        let slab_iz_start = slab_iz_start as usize;
+        let this_slab_nz = this_slab_nz as usize;
+        let mut slab = vec![0.0f32; nx * ny * this_slab_nz];
+        let flat = data.as_slice().expect("contiguous ndarray");
+        for ix in 0..nx {
+            for iy in 0..ny {
+                let src_base = ix * ny * nz + iy * nz + slab_iz_start;
+                let dst_base = ix * ny * this_slab_nz + iy * this_slab_nz;
+                slab[dst_base..dst_base + this_slab_nz]
+                    .copy_from_slice(&flat[src_base..src_base + this_slab_nz]);
+            }
+        }
+        slab
+    }
+
+    fn scatter_slab(
+        slab: &[f32],
+        target: &mut ndarray::Array3<f32>,
+        nx: u32, ny: u32, nz: u32,
+        slab_iz_start: u32, this_slab_nz: u32,
+    ) {
+        let nx = nx as usize;
+        let ny = ny as usize;
+        let nz = nz as usize;
+        let slab_iz_start = slab_iz_start as usize;
+        let this_slab_nz = this_slab_nz as usize;
+        let flat = target.as_slice_mut().expect("contiguous ndarray");
+        for ix in 0..nx {
+            for iy in 0..ny {
+                let dst_base = ix * ny * nz + iy * nz + slab_iz_start;
+                let src_base = ix * ny * this_slab_nz + iy * this_slab_nz;
+                flat[dst_base..dst_base + this_slab_nz]
+                    .copy_from_slice(&slab[src_base..src_base + this_slab_nz]);
+            }
+        }
+    }
+
+    fn read_staging_flat(
         ctx: &GpuContext,
         staging: &wgpu::Buffer,
-        target: &mut ndarray::Array3<f32>,
-    ) {
-        let slice = staging.slice(..);
+        byte_size: u64,
+    ) -> Vec<f32> {
+        let slice = staging.slice(..byte_size);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
@@ -398,10 +540,9 @@ impl GpuCureBuffers {
 
         let mapped = slice.get_mapped_range();
         let gpu_data: &[f32] = bytemuck::cast_slice(&mapped);
-        for (dst, &src_val) in target.iter_mut().zip(gpu_data.iter()) {
-            *dst = src_val;
-        }
+        let result = gpu_data.to_vec();
         drop(mapped);
         staging.unmap();
+        result
     }
 }

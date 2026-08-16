@@ -64,7 +64,8 @@ fn gpu_cure_parity_basic_4x4x8() {
         }
     }
 
-    let gpu_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu);
+    let gpu_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu)
+        .expect("gpu cure buffers");
     gpu_bufs.dispatch(
         &ctx,
         &intensity_grid,
@@ -74,8 +75,9 @@ fn gpu_cure_parity_basic_4x4x8() {
         dp_um,
         k_d,
         layer_height_um,
+        &mut cure_gpu,
+        &mut pi_gpu,
     );
-    gpu_bufs.download(&ctx, &mut cure_gpu, &mut pi_gpu);
 
     let mut max_dose_diff: f32 = 0.0;
     let mut max_pi_diff: f32 = 0.0;
@@ -132,9 +134,10 @@ fn gpu_cure_parity_zero_intensity_noop() {
     let mut pi_gpu = PhotoinitiatorField::new(nx, ny, nz, 1.0).expect("valid");
 
     let intensity_grid = vec![0.0f32; (nx as usize) * (ny as usize)];
-    let gpu_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu);
-    gpu_bufs.dispatch(&ctx, &intensity_grid, 0, nz, 2.5, 100.0, 0.05, 50.0);
-    gpu_bufs.download(&ctx, &mut cure_gpu, &mut pi_gpu);
+    let gpu_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu)
+        .expect("gpu cure buffers");
+    gpu_bufs.dispatch(&ctx, &intensity_grid, 0, nz, 2.5, 100.0, 0.05, 50.0,
+        &mut cure_gpu, &mut pi_gpu);
 
     for ix in 0..nx {
         for iy in 0..ny {
@@ -191,9 +194,10 @@ fn gpu_cure_parity_depleted_column() {
         }
     }
 
-    let gpu_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu);
-    gpu_bufs.dispatch(&ctx, &intensity_grid, 0, nz, exposure_sec, dp_um, k_d, layer_height_um);
-    gpu_bufs.download(&ctx, &mut cure_gpu, &mut pi_gpu);
+    let gpu_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu)
+        .expect("gpu cure buffers");
+    gpu_bufs.dispatch(&ctx, &intensity_grid, 0, nz, exposure_sec, dp_um, k_d, layer_height_um,
+        &mut cure_gpu, &mut pi_gpu);
 
     let mut max_dose_diff: f32 = 0.0;
     let mut max_pi_diff: f32 = 0.0;
@@ -249,9 +253,10 @@ fn gpu_cure_parity_single_voxel_nz1() {
     )
     .expect("CPU");
 
-    let gpu_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu);
-    gpu_bufs.dispatch(&ctx, &intensity_grid, 0, nz, exposure_sec, dp_um, k_d, layer_height_um);
-    gpu_bufs.download(&ctx, &mut cure_gpu, &mut pi_gpu);
+    let gpu_bufs = GpuCureBuffers::new(&ctx, &cure_gpu, &pi_gpu)
+        .expect("gpu cure buffers");
+    gpu_bufs.dispatch(&ctx, &intensity_grid, 0, nz, exposure_sec, dp_um, k_d, layer_height_um,
+        &mut cure_gpu, &mut pi_gpu);
 
     let dose_diff =
         (cure_cpu.dose_at(0, 0, 0).expect("in bounds") - cure_gpu.dose_at(0, 0, 0).expect("in bounds")).abs();

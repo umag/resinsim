@@ -13,6 +13,7 @@ pub struct GpuContext {
     device: Device,
     queue: Queue,
     adapter_name: String,
+    max_buffer_size: u64,
 }
 
 impl GpuContext {
@@ -32,6 +33,7 @@ impl GpuContext {
             },
         ))?;
         let adapter_name = adapter.get_info().name.clone();
+        let max_buffer_size = adapter.limits().max_buffer_size;
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("resinsim-thermal"),
@@ -44,6 +46,7 @@ impl GpuContext {
             device,
             queue,
             adapter_name,
+            max_buffer_size,
         })
     }
 
@@ -57,5 +60,9 @@ impl GpuContext {
 
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
+    }
+
+    pub fn max_buffer_size(&self) -> u64 {
+        self.max_buffer_size
     }
 }

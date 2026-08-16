@@ -77,7 +77,7 @@ fn gpu_cpu_parity_uniform_field_20_substeps() {
     let mut gpu_field =
         ThermalField::new(nx, ny, nz, VOXEL_MM, [0.0, 0.0, 0.0], initial_c)
             .expect("GPU field");
-    let mut bufs = GpuThermalBuffers::new(&ctx, &gpu_field);
+    let mut bufs = GpuThermalBuffers::new(&ctx, &gpu_field).expect("thermal buffers");
     bufs.upload(&ctx, &gpu_field);
     bufs.dispatch_substeps(&ctx, n_substeps, dt, ALPHA, VOXEL_MM, &bcs, nx, ny, nz);
     bufs.download(&ctx, &mut gpu_field);
@@ -131,7 +131,7 @@ fn gpu_cpu_parity_odd_substep_count() {
     let mut gpu_field =
         ThermalField::new(nx, ny, nz, VOXEL_MM, [0.0, 0.0, 0.0], initial_c)
             .expect("GPU field");
-    let mut bufs = GpuThermalBuffers::new(&ctx, &gpu_field);
+    let mut bufs = GpuThermalBuffers::new(&ctx, &gpu_field).expect("thermal buffers");
     bufs.upload(&ctx, &gpu_field);
     bufs.dispatch_substeps(&ctx, 7, dt, ALPHA, VOXEL_MM, &bcs, nx, ny, nz);
     bufs.download(&ctx, &mut gpu_field);
@@ -171,7 +171,7 @@ fn gpu_dirichlet_bottom_pinned() {
     let mut field =
         ThermalField::new(nx, ny, nz, VOXEL_MM, [0.0, 0.0, 0.0], 25.0)
             .expect("field");
-    let mut bufs = GpuThermalBuffers::new(&ctx, &field);
+    let mut bufs = GpuThermalBuffers::new(&ctx, &field).expect("thermal buffers");
     bufs.upload(&ctx, &field);
     bufs.dispatch_substeps(&ctx, 10, dt, ALPHA, VOXEL_MM, &bcs, nx, ny, nz);
     bufs.download(&ctx, &mut field);

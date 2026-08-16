@@ -897,25 +897,28 @@ impl SimulationRunner {
         // ADR-0025 / t2f5: initialize GPU buffers when gpu_context is provided.
         #[cfg(feature = "gpu")]
         if let (Some(state), Some(ctx)) = (voxel_state.as_mut(), gpu_context) {
-            let thermal_bufs = GpuThermalBuffers::new(&ctx, &state.thermal);
+            let thermal_bufs = GpuThermalBuffers::new(&ctx, &state.thermal)
+                .expect("thermal buffers: single XY plane must fit in max_buffer_size");
             eprintln!(
-                "tier-2 thermal GPU: adapter={}, voxels={}",
+                "tier-2 thermal GPU: adapter={}, voxels={}, max_buffer={}",
                 ctx.adapter_name(),
                 {
                     let (nx, ny, nz) = state.thermal.dimensions();
                     (nx as u64) * (ny as u64) * (nz as u64)
-                }
+                },
+                ctx.max_buffer_size(),
             );
             let cure_bufs = GpuCureBuffers::new(&ctx, &state.cure, &state.pi);
             eprintln!(
-                "tier-2 cure GPU: adapter={}, voxels={}",
+                "tier-2 cure GPU: adapter={}, voxels={}, slab_nz={}",
                 ctx.adapter_name(),
                 {
                     let (nx, ny, nz) = state.cure.dimensions();
                     (nx as u64) * (ny as u64) * (nz as u64)
-                }
+                },
+                cure_bufs.as_ref().map_or(0, |b| b.slab_nz()),
             );
-            state.gpu_cure = Some(cure_bufs);
+            state.gpu_cure = cure_bufs;
             let (cure_nx, cure_ny, _) = state.cure.dimensions();
             if cure_nx > 0 && cure_ny > 0 {
                 state.gpu_crosstalk = Some(GpuCrosstalkBuffers::new(
@@ -924,7 +927,8 @@ impl SimulationRunner {
                     cure_ny,
                 ));
             }
-            let ss_bufs = GpuStrainStressBuffers::new(&ctx, &state.cure);
+            let cure_slab_nz = state.gpu_cure.as_ref().map_or(1, |c| c.slab_nz());
+            let ss_bufs = GpuStrainStressBuffers::new(&ctx, &state.cure, cure_slab_nz);
             state.gpu_strain_stress = Some(ss_bufs);
             state.gpu_thermal = Some((ctx, thermal_bufs));
         }
@@ -1068,6 +1072,14 @@ impl SimulationRunner {
                             vat_temp,
                             state.ea_cure_kj_mol,
                         );
+                        let (_, _, nz_full) = state.cure.dimensions();
+                        let slab_nz = ss_bufs.slab_nz();
+                        let slab_iz_start = (i as u32 / slab_nz) * slab_nz;
+                        let this_slab_nz = slab_nz.min(nz_full - slab_iz_start);
+                        // Ensure the cure slab containing layer_z is in GPU memory.
+                        gpu_cure.upload_slab(
+                            ctx, &state.cure, &state.pi, slab_iz_start, this_slab_nz,
+                        );
                         let mut encoder = ctx
                             .device()
                             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1085,10 +1097,8 @@ impl SimulationRunner {
                             state.shrinkage_anisotropy_z_ratio,
                             state.youngs_modulus_mpa,
                             state.poissons_ratio,
-                            {
-                                let (_, _, nz) = state.cure.dimensions();
-                                nz
-                            },
+                            nz_full,
+                            slab_iz_start,
                         );
                         ctx.queue().submit(Some(encoder.finish()));
                         let gpu_strain = ss_bufs.download_strain(ctx);
@@ -1198,7 +1208,9 @@ impl SimulationRunner {
                         vat_temp,
                         state.ea_cure_kj_mol,
                     );
-                    ss_bufs.upload_dose(ctx, &state.cure);
+                    let slab_nz = ss_bufs.slab_nz();
+                    let slab_iz_start = (i as u32 / slab_nz) * slab_nz;
+                    ss_bufs.upload_dose(ctx, &state.cure, slab_iz_start);
                     ss_bufs.dispatch(
                         ctx,
                         i as u32,
@@ -1213,6 +1225,7 @@ impl SimulationRunner {
                             let (_, _, nz) = state.cure.dimensions();
                             nz
                         },
+                        slab_iz_start,
                     );
                     let gpu_strain = ss_bufs.download_strain(ctx);
                     let gpu_stress = ss_bufs.download_stress(ctx);
@@ -1412,6 +1425,8 @@ impl SimulationRunner {
                     dp.value(),
                     state.k_d,
                     layer_height_um,
+                    &mut state.cure,
+                    &mut state.pi,
                 );
                 state.gpu_cure_pending.push(layer);
                 true
@@ -1627,20 +1642,15 @@ impl SimulationRunner {
         // ADR-0025 / t2f5: GPU dispatch when available, else CPU fallback.
         #[cfg(feature = "gpu")]
         let used_gpu = if let Some((ref ctx, ref mut bufs)) = state.gpu_thermal {
-            let (nx, ny, nz) = state.thermal.dimensions();
-            bufs.upload(ctx, &state.thermal);
-            bufs.dispatch_substeps(
+            bufs.dispatch_substeps_with_field(
                 ctx,
                 substeps_per_layer,
                 dt_use,
                 state.alpha_m2_s,
                 state.thermal.voxel_size_mm(),
                 &bcs,
-                nx,
-                ny,
-                nz,
+                &mut state.thermal,
             );
-            bufs.download(ctx, &mut state.thermal);
             if !state.thermal.volume_max_c().is_finite() {
                 return Err(format!(
                     "ADR-0025 / t2f5 GPU thermal solver produced non-finite field at layer {layer}"
@@ -1761,13 +1771,9 @@ impl SimulationRunner {
         if state.gpu_cure_pending.is_empty() {
             return Ok(());
         }
-        if let Some(ref gpu_cure) = state.gpu_cure {
-            let ctx = state
-                .gpu_thermal
-                .as_ref()
-                .map(|(ctx, _)| ctx)
-                .expect("gpu_cure requires gpu_thermal to hold the GpuContext");
-            gpu_cure.download(ctx, &mut state.cure, &mut state.pi);
+        if let Some(ref _gpu_cure) = state.gpu_cure {
+            // With slab chunking, dispatch() already downloads each slab's
+            // results back to the host cure+PI fields. Nothing to flush.
             if !state.cure.max_dose().is_finite() {
                 return Err(
                     "ADR-0025 / t2f5 GPU cure solver produced non-finite dose".to_string(),
