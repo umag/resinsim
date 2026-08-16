@@ -124,6 +124,11 @@ pub struct VizWorld {
     pub chart_data: Option<resinsim_viz::ui::plots::LayerChartData>,
     /// View-state snapshot for default-assertion step defs.
     pub panel_state: Option<resinsim_viz::ui::state::BottomPanelState>,
+    /// Return value from `render_layer_timeline` after a headless egui
+    /// pointer-injection test. `Some(Some(k))` = click detected at
+    /// layer k; `Some(None)` = no click detected (e.g. drag gesture);
+    /// `None` = test not yet run.
+    pub timeline_click_result: Option<Option<u32>>,
 }
 
 impl VizWorld {
@@ -187,8 +192,12 @@ fn specs_without_step_defs() -> Vec<(&'static str, usize)> {
         // UAT-6 stepped via headless egui pointer injection
         // (viz_screenshot_egui.rs). All scenarios now covered.
         ("viz-screenshot-flag", 0),
-        ("viz-timeline-click-seeks-current-layer", 3),
-        ("viz-timeline-drag-pan-does-not-seek", 2),
+        // PAID DOWN (viz-timeline-egui-pointer): all 5 scenarios now
+        // have in-process step defs using headless egui::Context with
+        // synthetic pointer injection (Event::PointerMoved +
+        // Event::PointerButton via RawInput::events). Bypasses bevy_egui
+        // 0.39's integration layer — see
+        // docs/patterns/bevy-egui-no-synthetic-pointer-events.md.
     ]
 }
 
