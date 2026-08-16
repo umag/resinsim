@@ -120,6 +120,7 @@ fn run(
         &PlateAdhesionProfile::default_textured(),
         ambient(),
         None,
+        None,
     )
     .expect(
         "scenario fixture: ResinBuilder/PrinterBuilder output satisfies \

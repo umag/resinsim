@@ -118,6 +118,7 @@ fn run_voxel(
         ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("voxel-mode run must succeed")
 }
@@ -285,6 +286,7 @@ fn regime_cb_z_only_realistic_default_exercises_z_smear() {
         ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("CB run must succeed");
 
@@ -361,6 +363,7 @@ fn regime_cb_z_only_realistic_default_exercises_z_smear() {
         ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("CB edge run must succeed");
     let cf_edge = sim_edge.cure_field().expect("CB edge installs cure_field");
@@ -380,6 +383,7 @@ fn regime_cb_z_only_realistic_default_exercises_z_smear() {
         ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("CB edge baseline run must succeed");
     let cf_baseline = sim_edge_baseline
@@ -489,6 +493,7 @@ fn regime_dd_both_active_combined_xy_and_z() {
         ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("DD run must succeed");
 

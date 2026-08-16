@@ -81,6 +81,7 @@ fn voxel_mode_installs_fields_on_aggregate() {
         test_ambient(),
         None,
         Some(0.5), // voxel cure mm — for v1 echoed; mask voxel size wins
+        None,
     )
     .expect("voxel-mode run on validated profiles must succeed");
 
@@ -114,6 +115,7 @@ fn tier1_mode_leaves_aggregate_fields_none() {
         test_ambient(),
         None,
         None, // Tier-1 (no voxel)
+        None,
     )
     .expect("Tier-1 mode on validated profiles must succeed");
 
@@ -139,6 +141,7 @@ fn voxel_mode_overwrites_layer_caches_with_summary() {
         test_ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("voxel-mode run must succeed");
 
@@ -243,6 +246,7 @@ max_z_mm = 200.0
         test_ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect(
         "test fixture: uniform-printer + ceramic-grey resin run satisfies validated-input \
@@ -279,6 +283,7 @@ fn photoinitiator_depletes_monotonically_across_layers() {
         test_ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("voxel-mode run must succeed");
 
@@ -319,6 +324,7 @@ fn dispatch_summary_matches_overwritten_cache() {
         test_ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("voxel-mode run must succeed");
 

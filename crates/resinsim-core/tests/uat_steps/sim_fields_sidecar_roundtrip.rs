@@ -98,6 +98,7 @@ fn produce_voxel_sim() -> resinsim_core::simulation::PrintSimulation {
         AmbientTemperature::new(22.0).expect("22°C is a valid ambient"),
         None,
         Some(0.5),
+        None,
     )
     .expect("voxel-mode run on validated profiles must succeed")
 }
@@ -127,6 +128,7 @@ fn produce_tier1_sim() -> resinsim_core::simulation::PrintSimulation {
         },
         &PlateAdhesionProfile::default_textured(),
         AmbientTemperature::new(22.0).expect("22°C is a valid ambient"),
+        None,
         None,
     )
     .expect("tier-1 run on validated profiles must succeed")

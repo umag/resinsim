@@ -123,6 +123,7 @@ fn run_tier1(
         &PlateAdhesionProfile::default_textured(),
         test_ambient(),
         None,
+        None,
     )
     .expect("Tier-1 run on validated profiles must succeed")
 }
@@ -272,6 +273,7 @@ fn variable_z_ctb_succeeds_with_variable_mismatch_provenance() {
         &PlateAdhesionProfile::default_textured(),
         test_ambient(),
         None,
+        None,
     )
     .expect("variable-Z CTB must succeed (adaptive slicing is supported)");
 
@@ -332,6 +334,7 @@ fn ctb_with_non_finite_layer_height_still_hard_errors() {
         &PlateAdhesionProfile::default_textured(),
         test_ambient(),
         None,
+        None,
     )
     .expect_err("NaN layer_height_um is invalid at any granularity");
     assert!(err.contains("layer 2"), "err: {err}");
@@ -359,6 +362,7 @@ mod tier2 {
             test_ambient(),
             None,
             Some(0.5),
+            None,
         )
         .expect("Tier-2 voxel run on validated profiles must succeed")
     }

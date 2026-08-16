@@ -278,7 +278,7 @@ fn run_and_capture(world: &mut UatWorld, layers: &[LayerInput], printer: &Printe
     let plate = PlateAdhesionProfile::default_textured();
     let ambient = AmbientTemperature::new(22.0).expect("22 °C is in AmbientTemperature domain");
     let sim = SimulationRunner::run_from_layer_inputs(
-        layers, &resin, printer, &supports, &plate, ambient, None,
+        layers, &resin, printer, &supports, &plate, ambient, None, None,
     )
     .expect(
         "scenario fixture: generic_standard + PrinterBuilder output satisfy \

@@ -70,6 +70,7 @@ fn run_voxel_sim(layers: &[LayerInput]) -> resinsim_core::simulation::PrintSimul
         test_ambient(),
         Some(InitialLedTemperature::new(27.0).expect("27°C is a valid LED temp")),
         Some(0.5),
+        None,
     )
     .expect("voxel-mode run on validated profiles must succeed")
 }
@@ -82,6 +83,7 @@ fn run_tier1_sim(layers: &[LayerInput]) -> resinsim_core::simulation::PrintSimul
         &default_supports(),
         &PlateAdhesionProfile::default_textured(),
         test_ambient(),
+        None,
         None,
         None,
     )

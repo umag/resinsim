@@ -93,6 +93,7 @@ fn run(layers: &[LayerInput]) -> resinsim_core::simulation::PrintSimulation {
         &PlateAdhesionProfile::default_textured(),
         test_ambient(),
         None,
+        None,
     )
     .expect("validated profiles satisfy run_from_layer_inputs preconditions")
 }

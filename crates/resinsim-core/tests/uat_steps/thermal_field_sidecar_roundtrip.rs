@@ -93,6 +93,7 @@ fn produce_voxel_sim() -> resinsim_core::simulation::PrintSimulation {
         test_ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("voxel-mode run on validated profiles must succeed")
 }

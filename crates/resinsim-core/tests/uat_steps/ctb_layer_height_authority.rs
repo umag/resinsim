@@ -158,6 +158,7 @@ fn when_user_runs_sim(world: &mut UatWorld) {
         &PlateAdhesionProfile::default_textured(),
         test_ambient(),
         None,
+        None,
     );
     match result {
         Ok(sim) => world.sim_primary = Some(sim),

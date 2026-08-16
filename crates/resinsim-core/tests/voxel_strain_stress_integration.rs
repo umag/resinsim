@@ -68,6 +68,7 @@ fn run_voxel_sim(
         test_ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("voxel-mode run on validated profiles must succeed")
 }
@@ -116,6 +117,7 @@ fn tier1_mode_leaves_strain_stress_fields_none() {
         test_ambient(),
         None,
         None, // Tier-1
+        None,
     )
     .expect("Tier-1 run must succeed");
 

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::app::progress::{NullProgress, SimProgress};
 use crate::entities::{PrinterProfile, ResinProfile};
 use crate::io::{geometry, sliced::LayerInput, stl};
 use crate::services::build_plate::PlateAdhesionProfile;
@@ -247,6 +248,7 @@ impl SimulationRunner {
             initial_led_temp,
             &layer_heights_um,
             None,
+            None,
         )
     }
 
@@ -297,6 +299,7 @@ impl SimulationRunner {
             initial_led_temp,
             &layer_heights_um,
             None,
+            None,
         )
     }
 
@@ -324,6 +327,7 @@ impl SimulationRunner {
         plate: &PlateAdhesionProfile,
         ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
+        progress: Option<&dyn SimProgress>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
         printer.validate().map_err(|e| format!("printer: {e}"))?;
@@ -334,6 +338,7 @@ impl SimulationRunner {
         Self::emit_layer_height_warning_if_mismatch(
             &prepared.layer_height_provenance,
             resin.name(),
+            progress,
         );
         // Destructure to move the Vec instead of cloning — addresses the
         // round-1 LOW finding about clone overhead on large prints.
@@ -356,6 +361,7 @@ impl SimulationRunner {
             initial_led_temp,
             layer_heights.as_slice(),
             Some(layer_height_provenance),
+            progress,
         )
     }
 
@@ -444,9 +450,13 @@ impl SimulationRunner {
     fn emit_layer_height_warning_if_mismatch(
         provenance: &LayerHeightProvenance,
         profile_name: &str,
+        progress: Option<&dyn SimProgress>,
     ) {
         if let Some(text) = provenance.format_warning(profile_name) {
-            eprintln!("{text}");
+            match progress {
+                Some(p) => p.message(&text),
+                None => eprintln!("{text}"),
+            }
         }
     }
 
@@ -474,6 +484,7 @@ impl SimulationRunner {
         ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
         voxel_cure_mm: Option<f32>,
+        progress: Option<&dyn SimProgress>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
         printer.validate().map_err(|e| format!("printer: {e}"))?;
@@ -484,6 +495,7 @@ impl SimulationRunner {
         Self::emit_layer_height_warning_if_mismatch(
             &prepared.layer_height_provenance,
             resin.name(),
+            progress,
         );
         let PreparedInputs {
             areas,
@@ -507,6 +519,7 @@ impl SimulationRunner {
             Some(layer_height_provenance),
             #[cfg(feature = "gpu")]
             None,
+            progress,
         )
     }
 
@@ -525,6 +538,7 @@ impl SimulationRunner {
         initial_led_temp: Option<InitialLedTemperature>,
         voxel_cure_mm: Option<f32>,
         gpu_context: Option<GpuContext>,
+        progress: Option<&dyn SimProgress>,
     ) -> Result<PrintSimulation, String> {
         resin.validate().map_err(|e| format!("resin: {e}"))?;
         printer.validate().map_err(|e| format!("printer: {e}"))?;
@@ -535,6 +549,7 @@ impl SimulationRunner {
         Self::emit_layer_height_warning_if_mismatch(
             &prepared.layer_height_provenance,
             resin.name(),
+            progress,
         );
         // Destructure to move the Vec instead of cloning.
         let PreparedInputs {
@@ -559,6 +574,7 @@ impl SimulationRunner {
             Some(layer_height_provenance),
             #[cfg(feature = "gpu")]
             gpu_context,
+            progress,
         )
     }
 
@@ -584,6 +600,7 @@ impl SimulationRunner {
         initial_led_temp: Option<InitialLedTemperature>,
         layer_heights_um: &[f32],
         layer_height_provenance: Option<LayerHeightProvenance>,
+        progress: Option<&dyn SimProgress>,
     ) -> Result<PrintSimulation, String> {
         // Tier-1 scalar path: voxel mode disabled.
         Self::run_inner_full(
@@ -601,6 +618,7 @@ impl SimulationRunner {
             layer_height_provenance,
             #[cfg(feature = "gpu")]
             None,
+            progress,
         )
     }
 
@@ -635,6 +653,7 @@ impl SimulationRunner {
         layer_height_provenance: Option<LayerHeightProvenance>,
         #[cfg(feature = "gpu")]
         gpu_context: Option<GpuContext>,
+        progress: Option<&dyn SimProgress>,
     ) -> Result<PrintSimulation, String> {
         // Caller-contract: `layer_heights_um` is indexed by layer index;
         // its length must equal `areas.len()` so per-layer dispatch can
@@ -650,6 +669,7 @@ impl SimulationRunner {
             areas.len(),
             "internal contract: layer_heights_um indexed by layer must match areas len"
         );
+        let progress: &dyn SimProgress = progress.unwrap_or(&NullProgress);
         let recipe = resin.recipe();
         let suction_map = Self::build_suction_map(masks, printer.effective_vacuum_pressure_kpa())?;
         // KB-185 Tier-1 A/L peel shape factor (ADR-0022 Stage 3). Empty (all
@@ -689,7 +709,7 @@ impl SimulationRunner {
                         .collect();
                     let resampled = resampled.map_err(|e| format!("mask resample: {e}"))?;
                     if let Some(first_r) = resampled.first() {
-                        eprintln!(
+                        progress.message(&format!(
                             "resampling layer masks: {:.3}mm ({}x{}) → {:.3}mm ({}x{})",
                             mask_mm,
                             first.width_cells(),
@@ -697,7 +717,7 @@ impl SimulationRunner {
                             resolved_mm,
                             first_r.width_cells(),
                             first_r.height_cells(),
-                        );
+                        ));
                     }
                     Some(resampled)
                 } else {
@@ -899,7 +919,7 @@ impl SimulationRunner {
         if let (Some(state), Some(ctx)) = (voxel_state.as_mut(), gpu_context) {
             let thermal_bufs = GpuThermalBuffers::new(&ctx, &state.thermal)
                 .expect("thermal buffers: single XY plane must fit in max_buffer_size");
-            eprintln!(
+            progress.message(&format!(
                 "tier-2 thermal GPU: adapter={}, voxels={}, max_buffer={}",
                 ctx.adapter_name(),
                 {
@@ -907,9 +927,9 @@ impl SimulationRunner {
                     (nx as u64) * (ny as u64) * (nz as u64)
                 },
                 ctx.max_buffer_size(),
-            );
+            ));
             let cure_bufs = GpuCureBuffers::new(&ctx, &state.cure, &state.pi);
-            eprintln!(
+            progress.message(&format!(
                 "tier-2 cure GPU: adapter={}, voxels={}, slab_nz={}",
                 ctx.adapter_name(),
                 {
@@ -917,7 +937,7 @@ impl SimulationRunner {
                     (nx as u64) * (ny as u64) * (nz as u64)
                 },
                 cure_bufs.as_ref().map_or(0, |b| b.slab_nz()),
-            );
+            ));
             state.gpu_cure = cure_bufs;
             let (cure_nx, cure_ny, _) = state.cure.dimensions();
             if cure_nx > 0 && cure_ny > 0 {
@@ -961,6 +981,9 @@ impl SimulationRunner {
         }
         #[cfg(feature = "gpu")]
         let mut deferred_layers: Vec<DeferredLayer> = Vec::new();
+
+        progress.stage_message("Simulating layers");
+        let total_layers = areas.len() as u32;
 
         for (i, &area) in areas.iter().enumerate() {
             let (exposure_override, lift_speed_override) = per_layer_overrides
@@ -1183,6 +1206,7 @@ impl SimulationRunner {
                         }
                     }
                     prev_area = area;
+                    progress.layer_tick(i as u32 + 1, total_layers);
                     continue;
                 }
 
@@ -1296,20 +1320,21 @@ impl SimulationRunner {
             sim.add_layer(result, failures)
                 .map_err(|e| format!("simulation: {e}"))?;
             prev_area = area;
+            progress.layer_tick(i as u32 + 1, total_layers);
         }
 
         #[cfg(feature = "field-sim")]
         if let Some(state) = voxel_state {
             // Emit the run-end Tier-2 thermal summary line BEFORE moving
             // `state` into the aggregate setters.
-            eprintln!(
+            progress.message(&format!(
                 "tier-2 thermal complete: total_substeps={}, max_T={:.2} °C, \
                  volume_mean={:.2} °C, wall_clock={:.3} s",
                 state.total_thermal_substeps,
                 state.thermal.volume_max_c(),
                 state.thermal.volume_mean_c(),
                 state.total_thermal_wallclock_sec,
-            );
+            ));
             sim.set_voxel_fields(state.cure, state.pi)
                 .map_err(|e| format!("install voxel fields: {e}"))?;
             // ADR-0018 / t2f3 — parallel setter for the t2f3 fields.
@@ -2182,6 +2207,7 @@ impl SimulationRunner {
         plate: &PlateAdhesionProfile,
         ambient: AmbientTemperature,
         initial_led_temp: Option<InitialLedTemperature>,
+        progress: Option<&dyn SimProgress>,
     ) -> Result<PrintSimulation, String> {
         let format = crate::io::sliced::detect_format(path)
             .ok_or_else(|| format!("unknown file format: {}", path.display()))?;
@@ -2206,6 +2232,7 @@ impl SimulationRunner {
                     plate,
                     ambient,
                     initial_led_temp,
+                    progress,
                 )
             }
             other => Err(format!("format {other} not yet supported for simulation")),
@@ -2441,6 +2468,7 @@ mod tests {
             &default_plate(),
             test_ambient(),
             None,
+            None,
         )
         .expect("test fixture: validated profiles satisfy run_from_layer_inputs preconditions");
         let suction_events: Vec<_> = sim
@@ -2488,6 +2516,7 @@ mod tests {
             &default_plate(),
             test_ambient(),
             None,
+            None,
         )
         .expect("test fixture: validated profiles satisfy run_from_layer_inputs preconditions");
         let closure_layer = &sim.layers()[15];
@@ -2523,6 +2552,7 @@ mod tests {
             },
             &default_plate(),
             test_ambient(),
+            None,
             None,
         )
         .expect("test fixture: validated profiles satisfy run_from_layer_inputs preconditions");

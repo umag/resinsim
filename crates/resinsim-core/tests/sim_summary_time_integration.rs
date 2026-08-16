@@ -58,6 +58,7 @@ fn linear_summary_time_matches_calculator() {
         &PlateAdhesionProfile::default_textured(),
         test_ambient(),
         None,
+        None,
     )
     .expect("valid factory profiles satisfy run_from_layer_inputs preconditions");
 
@@ -100,6 +101,7 @@ fn tilt_summary_time_matches_calculator_and_is_less_than_linear() {
         &PlateAdhesionProfile::default_textured(),
         test_ambient(),
         None,
+        None,
     )
     .expect("valid factory profiles satisfy run_from_layer_inputs preconditions");
 
@@ -124,6 +126,7 @@ fn tilt_summary_time_matches_calculator_and_is_less_than_linear() {
         },
         &PlateAdhesionProfile::default_textured(),
         test_ambient(),
+        None,
         None,
     )
     .expect("valid factory profiles satisfy run_from_layer_inputs preconditions");

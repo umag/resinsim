@@ -129,6 +129,7 @@ fn when_sim_runs_voxel(world: &mut UatWorld) {
         ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("voxel-mode simulation must succeed");
     world.sim_primary = Some(sim);
@@ -389,6 +390,7 @@ fn then_skip_dose_at_zero(world: &mut UatWorld) {
         ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("baseline edge run must succeed");
     let cf_baseline = baseline_sim.cure_field().expect("baseline cure_field");
@@ -432,6 +434,7 @@ fn then_no_clamp_pileup(world: &mut UatWorld) {
         ambient(),
         None,
         Some(0.5),
+        None,
     )
     .expect("baseline edge run must succeed");
     let cf_baseline = baseline_sim.cure_field().expect("baseline cure_field");

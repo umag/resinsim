@@ -82,6 +82,7 @@ fn voxel_mode_thermal_field_drift_changes_cure_depth_across_layers() {
         ambient(),
         initial_led,
         Some(0.5),
+        None,
     )
     .expect("voxel-mode run must succeed");
     let thermal = sim

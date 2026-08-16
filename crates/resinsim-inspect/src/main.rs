@@ -1533,6 +1533,7 @@ fn cmd_calibrate(
         None,
         #[cfg(feature = "gpu")]
         None,
+        None,
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -1755,6 +1756,61 @@ fn cmd_report_health(in_path: &std::path::Path, json: bool) {
     }
 }
 
+struct IndicatifProgress {
+    bar: indicatif::ProgressBar,
+}
+
+impl IndicatifProgress {
+    fn new() -> Self {
+        let bar = indicatif::ProgressBar::hidden();
+        bar.set_style(
+            indicatif::ProgressStyle::with_template(
+                "{msg} [{bar:30}] {pos}/{len} ({eta} remaining, {per_sec})",
+            )
+            .expect("valid template")
+            .progress_chars("=> "),
+        );
+        Self { bar }
+    }
+
+    fn finish(&self) {
+        self.bar.finish_and_clear();
+    }
+}
+
+impl resinsim_core::app::SimProgress for IndicatifProgress {
+    fn stage_message(&self, msg: &str) {
+        self.bar.suspend(|| eprintln!("{msg}"));
+    }
+
+    fn layer_tick(&self, current: u32, total: u32) {
+        if self.bar.length() != Some(total as u64) {
+            self.bar.set_length(total as u64);
+            self.bar.set_message("Simulating layers");
+            self.bar.reset();
+        }
+        self.bar.set_position(current as u64);
+    }
+
+    fn message(&self, msg: &str) {
+        self.bar.suspend(|| eprintln!("{msg}"));
+    }
+}
+
+struct LineProgress;
+
+impl resinsim_core::app::SimProgress for LineProgress {
+    fn stage_message(&self, msg: &str) {
+        eprintln!("{msg}");
+    }
+
+    fn layer_tick(&self, _current: u32, _total: u32) {}
+
+    fn message(&self, msg: &str) {
+        eprintln!("{msg}");
+    }
+}
+
 /// Default output path: `<input-stem>.sim.json` in the input's parent dir.
 /// `<input-stem>` is whichever of `--stl` / `--file` is present.
 /// Dispatch the simulation run, routing through the voxel-aware entry
@@ -1773,6 +1829,7 @@ fn run_simulation_with_optional_voxel(
     voxel_cure_mm: Option<f32>,
     #[cfg(feature = "gpu")]
     gpu_context: Option<resinsim_core::services::GpuContext>,
+    progress: Option<&dyn resinsim_core::app::SimProgress>,
 ) -> Result<resinsim_core::simulation::PrintSimulation, String> {
     use resinsim_core::app::SimulationRunner;
 
@@ -1796,6 +1853,7 @@ fn run_simulation_with_optional_voxel(
                     initial_led_temp,
                     voxel_cure_mm,
                     gpu_context,
+                    progress,
                 );
             }
             #[cfg(not(feature = "gpu"))]
@@ -1809,6 +1867,7 @@ fn run_simulation_with_optional_voxel(
                     ambient,
                     initial_led_temp,
                     voxel_cure_mm,
+                    progress,
                 );
             }
         }
@@ -1827,6 +1886,7 @@ fn run_simulation_with_optional_voxel(
         plate,
         ambient,
         initial_led_temp,
+        progress,
     )
 }
 
@@ -1941,10 +2001,21 @@ fn cmd_sim(
         std::process::exit(1);
     }
 
-    // Reuse the run_auto entry — it routes STL vs CTB by extension and
-    // produces the same PrintSimulation that the GUI Run button does.
+    use std::io::IsTerminal;
+    let is_tty = std::io::stderr().is_terminal();
+    let indicatif_progress = if is_tty {
+        Some(IndicatifProgress::new())
+    } else {
+        None
+    };
+    let line_progress = LineProgress;
+    let progress: &dyn resinsim_core::app::SimProgress = match &indicatif_progress {
+        Some(p) => p,
+        None => &line_progress,
+    };
+
     eprintln!(
-        "Producing sim.json from {} using resin '{}' + printer '{}'...",
+        "Parsing {} using resin '{}' + printer '{}'...",
         input_path.display(),
         resolved.resin.name(),
         resolved.printer.name()
@@ -1991,7 +2062,11 @@ fn cmd_sim(
         effective_voxel_cure_mm,
         #[cfg(feature = "gpu")]
         gpu_context,
+        Some(progress),
     );
+    if let Some(ref p) = indicatif_progress {
+        p.finish();
+    }
     let sim = match sim_result {
         Ok(s) => s,
         Err(e) => {
@@ -2026,6 +2101,7 @@ fn cmd_sim(
         // `resolved.resin` is the very profile `load_resin` warned about.
         cure_kinetics_ea_is_default: Some(resolved.resin.cure_kinetics_ea_is_default()),
     };
+    progress.stage_message("Writing output");
     if let Err(e) = save_stamped(out_path, &sim, stamp) {
         eprintln!("Error writing sim.json to {}: {e}", out_path.display());
         std::process::exit(1);

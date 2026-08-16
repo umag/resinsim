@@ -79,6 +79,7 @@ fn given_100_layer_cube_sim(world: &mut UatWorld) {
         &default_plate(),
         test_ambient(),
         None,
+        None,
     )
     .expect(
         "scenario fixture: ResinBuilder/PrinterBuilder output satisfies \

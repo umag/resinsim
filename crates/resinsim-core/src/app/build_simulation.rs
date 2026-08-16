@@ -118,6 +118,7 @@ pub fn build_simulation_from_layers(
         &default_plate(),
         req.ambient,
         req.initial_led,
+        None,
     )
 }
 

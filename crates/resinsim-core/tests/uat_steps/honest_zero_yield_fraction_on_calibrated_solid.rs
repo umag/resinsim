@@ -88,6 +88,7 @@ fn when_simulation_runner_runs_to_completion(world: &mut UatWorld) {
         AmbientTemperature::new(22.0).expect("22°C is in AmbientTemperature domain"),
         None,
         Some(0.5),
+        None,
     )
     .expect("voxel-mode run on validated profiles must succeed");
     world.sim_primary = Some(sim);
