@@ -1,4 +1,62 @@
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+#[cfg(feature = "field-sim")]
+struct LayerTimingAccumulator {
+    predict_layer: Duration,
+    cure: Duration,
+    crosstalk_predispatch: Duration,
+    thermal: Duration,
+    strain_stress: Duration,
+    finalize: Duration,
+}
+
+#[cfg(feature = "field-sim")]
+impl LayerTimingAccumulator {
+    fn new() -> Self {
+        Self {
+            predict_layer: Duration::ZERO,
+            cure: Duration::ZERO,
+            crosstalk_predispatch: Duration::ZERO,
+            thermal: Duration::ZERO,
+            strain_stress: Duration::ZERO,
+            finalize: Duration::ZERO,
+        }
+    }
+
+    fn total(&self) -> Duration {
+        self.predict_layer
+            + self.cure
+            + self.crosstalk_predispatch
+            + self.thermal
+            + self.strain_stress
+            + self.finalize
+    }
+
+    fn print_summary(&self, n_layers: usize) {
+        let total = self.total();
+        let total_s = total.as_secs_f64();
+        let per_layer_ms = if n_layers > 0 {
+            total_s * 1000.0 / n_layers as f64
+        } else {
+            0.0
+        };
+        eprintln!(
+            "tier-2 layer timing: predict={:.1}s cure={:.1}s crosstalk_pre={:.1}s \
+             thermal={:.1}s strain_stress={:.1}s finalize={:.1}s | \
+             total={:.1}s ({:.1}ms/layer, {} layers)",
+            self.predict_layer.as_secs_f64(),
+            self.cure.as_secs_f64(),
+            self.crosstalk_predispatch.as_secs_f64(),
+            self.thermal.as_secs_f64(),
+            self.strain_stress.as_secs_f64(),
+            self.finalize.as_secs_f64(),
+            total_s,
+            per_layer_ms,
+            n_layers,
+        );
+    }
+}
 
 use crate::app::progress::{NullProgress, SimProgress};
 use crate::entities::{PrinterProfile, ResinProfile};
@@ -985,6 +1043,9 @@ impl SimulationRunner {
         progress.stage_message("Simulating layers");
         let total_layers = areas.len() as u32;
 
+        #[cfg(feature = "field-sim")]
+        let mut timing = LayerTimingAccumulator::new();
+
         for (i, &area) in areas.iter().enumerate() {
             let (exposure_override, lift_speed_override) = per_layer_overrides
                 .and_then(|pl| pl.get(i).copied())
@@ -999,6 +1060,8 @@ impl SimulationRunner {
                 is_raft: matches!(phases.get(i), Some(LayerPhase::Raft)),
             };
             let layer_height_um_i = layer_heights_um[i];
+            #[cfg(feature = "field-sim")]
+            let t0 = Instant::now();
             #[allow(unused_mut)]
             let (mut result, mut failures) = FailurePredictor::predict_layer(
                 i as u32,
@@ -1013,9 +1076,12 @@ impl SimulationRunner {
                 plate,
                 &thermal,
             );
+            #[cfg(feature = "field-sim")]
+            { timing.predict_layer += t0.elapsed(); }
 
             #[cfg(feature = "field-sim")]
             if let Some(state) = voxel_state.as_mut() {
+                let t1 = Instant::now();
                 Self::apply_voxel_cure_for_layer(
                     state,
                     i as u32,
@@ -1027,11 +1093,13 @@ impl SimulationRunner {
                     &overrides,
                     &mut result,
                 )?;
+                timing.cure += t1.elapsed();
 
                 // ADR-0025 Stage F: pre-dispatch next layer's GPU crosstalk
                 // conv so the GPU works while CPU runs thermal + strain for
                 // this layer. The crosstalk function downloads the result on
                 // entry for the next layer instead of dispatching fresh.
+                let t2 = Instant::now();
                 #[cfg(feature = "gpu")]
                 if i + 1 < areas.len() {
                     if let Some(sigma_xy) = printer.crosstalk_sigma_xy_um() {
@@ -1061,14 +1129,18 @@ impl SimulationRunner {
                         }
                     }
                 }
+                timing.crosstalk_predispatch += t2.elapsed();
 
+                let t3 = Instant::now();
                 Self::apply_voxel_thermal_for_layer(state, i as u32, recipe, printer)?;
+                timing.thermal += t3.elapsed();
 
                 // ADR-0025 Stage E: when GPU cure is active, use the
                 // combined encoder path for strain/stress (on-GPU dose
                 // copy, no CPU upload_dose round-trip). Strain must be
                 // downloaded per-layer since the buffer is reused.
                 // Cure download remains deferred (batch amortisation).
+                let t4 = Instant::now();
                 #[cfg(feature = "gpu")]
                 if gpu_cure_active {
                     let mut strain_done = false;
@@ -1100,9 +1172,13 @@ impl SimulationRunner {
                         let slab_iz_start = (i as u32 / slab_nz) * slab_nz;
                         let this_slab_nz = slab_nz.min(nz_full - slab_iz_start);
                         // Ensure the cure slab containing layer_z is in GPU memory.
-                        gpu_cure.upload_slab(
-                            ctx, &state.cure, &state.pi, slab_iz_start, this_slab_nz,
-                        );
+                        // In single-slab mode, cure data is already on GPU
+                        // from the dispatch() call — skip the redundant upload.
+                        if gpu_cure.slab_nz() < nz_full {
+                            gpu_cure.upload_slab(
+                                ctx, &state.cure, &state.pi, slab_iz_start, this_slab_nz,
+                            );
+                        }
                         let mut encoder = ctx
                             .device()
                             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1182,9 +1258,12 @@ impl SimulationRunner {
                         strain_done,
                     });
 
+                    timing.strain_stress += t4.elapsed();
+
                     let is_batch_full = deferred_layers.len() >= GPU_CURE_BATCH_SIZE;
                     let is_last_layer = i == areas.len() - 1;
                     if is_batch_full || is_last_layer {
+                        let t5 = Instant::now();
                         Self::flush_gpu_cure_batch(state)?;
                         let batch = std::mem::take(&mut deferred_layers);
                         for mut def in batch {
@@ -1204,6 +1283,7 @@ impl SimulationRunner {
                             sim.add_layer(def.result, def.failures)
                                 .map_err(|e| format!("simulation: {e}"))?;
                         }
+                        timing.finalize += t5.elapsed();
                     }
                     prev_area = area;
                     progress.layer_tick(i as u32 + 1, total_layers);
@@ -1315,6 +1395,7 @@ impl SimulationRunner {
                     resin,
                 );
                 failures.extend(strain_failures);
+                timing.strain_stress += t4.elapsed();
             }
 
             sim.add_layer(result, failures)
@@ -1335,6 +1416,7 @@ impl SimulationRunner {
                 state.thermal.volume_mean_c(),
                 state.total_thermal_wallclock_sec,
             ));
+            timing.print_summary(areas.len());
             sim.set_voxel_fields(state.cure, state.pi)
                 .map_err(|e| format!("install voxel fields: {e}"))?;
             // ADR-0018 / t2f3 — parallel setter for the t2f3 fields.
@@ -1789,16 +1871,28 @@ impl SimulationRunner {
     }
 
     /// ADR-0025 Stage B: download GPU cure+PI buffers when there are
-    /// pending dispatches. Single download covers all batched layers.
-    /// No-op when no GPU cure is active or nothing is pending.
+    /// pending dispatches. In single-slab mode, dispatch() defers the
+    /// download — this flush does the actual GPU→host transfer. In
+    /// multi-slab mode, dispatch() already downloads per-slab.
     #[cfg(feature = "gpu")]
     fn flush_gpu_cure_batch(state: &mut VoxelState) -> Result<(), String> {
         if state.gpu_cure_pending.is_empty() {
             return Ok(());
         }
-        if let Some(ref _gpu_cure) = state.gpu_cure {
-            // With slab chunking, dispatch() already downloads each slab's
-            // results back to the host cure+PI fields. Nothing to flush.
+        if let Some(ref gpu_cure) = state.gpu_cure {
+            let (_, _, nz) = state.cure.dimensions();
+            if gpu_cure.slab_nz() >= nz {
+                // Single-slab: dispatch() deferred the download.
+                gpu_cure.download_current_slab(
+                    state.gpu_thermal.as_ref()
+                        .map(|(ctx, _)| ctx)
+                        .expect("gpu_cure requires gpu_thermal"),
+                    &mut state.cure,
+                    &mut state.pi,
+                    0,
+                    nz,
+                );
+            }
             if !state.cure.max_dose().is_finite() {
                 return Err(
                     "ADR-0025 / t2f5 GPU cure solver produced non-finite dose".to_string(),

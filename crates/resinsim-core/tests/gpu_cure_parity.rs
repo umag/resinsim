@@ -78,6 +78,10 @@ fn gpu_cure_parity_basic_4x4x8() {
         &mut cure_gpu,
         &mut pi_gpu,
     );
+    // Single-slab dispatch defers download — flush to host for comparison.
+    if gpu_bufs.slab_nz() >= nz {
+        gpu_bufs.download_current_slab(&ctx, &mut cure_gpu, &mut pi_gpu, 0, nz);
+    }
 
     let mut max_dose_diff: f32 = 0.0;
     let mut max_pi_diff: f32 = 0.0;
@@ -138,6 +142,9 @@ fn gpu_cure_parity_zero_intensity_noop() {
         .expect("gpu cure buffers");
     gpu_bufs.dispatch(&ctx, &intensity_grid, 0, nz, 2.5, 100.0, 0.05, 50.0,
         &mut cure_gpu, &mut pi_gpu);
+    if gpu_bufs.slab_nz() >= nz {
+        gpu_bufs.download_current_slab(&ctx, &mut cure_gpu, &mut pi_gpu, 0, nz);
+    }
 
     for ix in 0..nx {
         for iy in 0..ny {
@@ -198,6 +205,9 @@ fn gpu_cure_parity_depleted_column() {
         .expect("gpu cure buffers");
     gpu_bufs.dispatch(&ctx, &intensity_grid, 0, nz, exposure_sec, dp_um, k_d, layer_height_um,
         &mut cure_gpu, &mut pi_gpu);
+    if gpu_bufs.slab_nz() >= nz {
+        gpu_bufs.download_current_slab(&ctx, &mut cure_gpu, &mut pi_gpu, 0, nz);
+    }
 
     let mut max_dose_diff: f32 = 0.0;
     let mut max_pi_diff: f32 = 0.0;
@@ -257,6 +267,9 @@ fn gpu_cure_parity_single_voxel_nz1() {
         .expect("gpu cure buffers");
     gpu_bufs.dispatch(&ctx, &intensity_grid, 0, nz, exposure_sec, dp_um, k_d, layer_height_um,
         &mut cure_gpu, &mut pi_gpu);
+    if gpu_bufs.slab_nz() >= nz {
+        gpu_bufs.download_current_slab(&ctx, &mut cure_gpu, &mut pi_gpu, 0, nz);
+    }
 
     let dose_diff =
         (cure_cpu.dose_at(0, 0, 0).expect("in bounds") - cure_gpu.dose_at(0, 0, 0).expect("in bounds")).abs();
@@ -268,4 +281,132 @@ fn gpu_cure_parity_single_voxel_nz1() {
     assert!(dose_diff < 1e-3, "nz=1 dose parity: {dose_diff}");
     assert!(pi_diff < 1e-5, "nz=1 PI parity: {pi_diff}");
     assert!(cure_cpu.dose_at(0, 0, 0).expect("in bounds") > 0.0);
+}
+
+fn run_multislab_parity(
+    ctx: &GpuContext,
+    nz: u32,
+    slab_nz_target: u32,
+    iz_top: u32,
+    label: &str,
+) {
+    let nx = 4u32;
+    let ny = 4;
+    let voxel_size_mm = 0.05;
+    let layer_height_um = 50.0;
+    let dp_um = 100.0;
+    let k_d = 0.05;
+    let led_power = 10.0;
+    let exposure_sec = 2.5;
+
+    let mut cure_cpu =
+        CureField::new(nx, ny, nz, voxel_size_mm, [0.0, 0.0, 0.0]).expect("valid");
+    let mut pi_cpu = PhotoinitiatorField::new(nx, ny, nz, 1.0).expect("valid");
+
+    let mut cure_gpu =
+        CureField::new(nx, ny, nz, voxel_size_mm, [0.0, 0.0, 0.0]).expect("valid");
+    let mut pi_gpu = PhotoinitiatorField::new(nx, ny, nz, 1.0).expect("valid");
+
+    let dp = PenetrationDepth::new(dp_um).expect("valid");
+    let mut intensity_grid = vec![0.0f32; (nx as usize) * (ny as usize)];
+    for iy in 0..ny {
+        for ix in 0..nx {
+            intensity_grid[(iy as usize) * (nx as usize) + (ix as usize)] = led_power;
+            VoxelCureCalculator::apply_column_exposure(
+                &mut cure_cpu, &mut pi_cpu, ix, iy, iz_top,
+                led_power, exposure_sec, dp, k_d, layer_height_um,
+            )
+            .expect("CPU cure must succeed");
+        }
+    }
+
+    // Force small slab_nz by constraining max_buffer_size.
+    let xy_bytes = (nx as u64) * (ny as u64) * 4;
+    let max_buf = xy_bytes * (slab_nz_target as u64);
+    let gpu_bufs = GpuCureBuffers::new_with_max_buffer_size(
+        ctx, &cure_gpu, &pi_gpu, max_buf,
+    )
+    .expect("gpu cure buffers");
+    assert!(
+        gpu_bufs.slab_nz() <= slab_nz_target,
+        "{label}: slab_nz {} > target {slab_nz_target}",
+        gpu_bufs.slab_nz(),
+    );
+    assert!(
+        gpu_bufs.slab_nz() < nz,
+        "{label}: single slab — multi-slab not exercised (slab_nz={}, nz={nz})",
+        gpu_bufs.slab_nz(),
+    );
+
+    gpu_bufs.dispatch(
+        ctx, &intensity_grid, iz_top, nz, exposure_sec, dp_um,
+        k_d, layer_height_um, &mut cure_gpu, &mut pi_gpu,
+    );
+
+    let mut max_dose_diff: f32 = 0.0;
+    let mut max_pi_diff: f32 = 0.0;
+    for ix in 0..nx {
+        for iy in 0..ny {
+            for iz in 0..nz {
+                let diff = (cure_cpu.dose_at(ix, iy, iz).expect("in bounds")
+                    - cure_gpu.dose_at(ix, iy, iz).expect("in bounds"))
+                .abs();
+                max_dose_diff = max_dose_diff.max(diff);
+                let pdiff = (pi_cpu.concentration_at(ix, iy, iz).expect("in bounds")
+                    - pi_gpu.concentration_at(ix, iy, iz).expect("in bounds"))
+                .abs();
+                max_pi_diff = max_pi_diff.max(pdiff);
+            }
+        }
+    }
+
+    eprintln!(
+        "multislab {label}: slab_nz={}, nz={nz}, iz_top={iz_top}, \
+         max_dose_diff={max_dose_diff:.6e}, max_pi_diff={max_pi_diff:.6e}",
+        gpu_bufs.slab_nz(),
+    );
+    assert!(
+        max_dose_diff < 1e-3,
+        "{label}: dose parity: max diff {max_dose_diff} exceeds 1e-3"
+    );
+    assert!(
+        max_pi_diff < 1e-5,
+        "{label}: PI parity: max diff {max_pi_diff} exceeds 1e-5"
+    );
+}
+
+#[test]
+fn gpu_cure_parity_multislab_iz_top_first() {
+    let ctx = match try_gpu() {
+        Some(c) => c,
+        None => {
+            eprintln!("no GPU — skipping");
+            return;
+        }
+    };
+    run_multislab_parity(&ctx, 16, 4, 0, "iz_top_first");
+}
+
+#[test]
+fn gpu_cure_parity_multislab_iz_top_middle() {
+    let ctx = match try_gpu() {
+        Some(c) => c,
+        None => {
+            eprintln!("no GPU — skipping");
+            return;
+        }
+    };
+    run_multislab_parity(&ctx, 16, 4, 6, "iz_top_middle");
+}
+
+#[test]
+fn gpu_cure_parity_multislab_iz_top_last() {
+    let ctx = match try_gpu() {
+        Some(c) => c,
+        None => {
+            eprintln!("no GPU — skipping");
+            return;
+        }
+    };
+    run_multislab_parity(&ctx, 16, 4, 14, "iz_top_last");
 }

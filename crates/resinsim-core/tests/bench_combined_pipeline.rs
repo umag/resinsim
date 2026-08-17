@@ -58,6 +58,9 @@ fn bench_combined_vs_separate() {
                 &ctx, &intensity_grid, layer, nz, exposure_sec, dp_um, k_d,
                 layer_height_um, &mut cure, &mut pi,
             );
+            if cure_bufs.slab_nz() >= nz {
+                cure_bufs.download_current_slab(&ctx, &mut cure, &mut pi, 0, nz);
+            }
             strain_bufs.upload_dose(&ctx, &cure, 0);
             strain_bufs.dispatch(
                 &ctx, layer, ec_ref, dp_um, layer_height_um,

@@ -124,6 +124,13 @@ pub struct GpuCureBuffers {
     ny: u32,
     nz: u32,
     slab_nz: u32,
+    /// When `slab_nz == nz` (single slab), the GPU buffer persists across
+    /// dispatches. After the first upload, subsequent dispatches skip the
+    /// upload entirely — the shader accumulates cure+PI in-place on the GPU.
+    /// Download is deferred until `download_slab` / `download_current_slab`
+    /// is explicitly called. Set to `true` after the first `dispatch` call
+    /// when single-slab mode is active.
+    gpu_warm: std::cell::Cell<bool>,
 }
 
 fn compute_slab_nz(nx: u32, ny: u32, nz: u32, max_buffer_size: u64) -> u32 {
@@ -139,10 +146,19 @@ impl GpuCureBuffers {
     pub fn new(
         ctx: &GpuContext,
         cure_field: &CureField,
+        _pi_field: &PhotoinitiatorField,
+    ) -> Option<Self> {
+        Self::new_with_max_buffer_size(ctx, cure_field, _pi_field, ctx.max_buffer_size())
+    }
+
+    pub fn new_with_max_buffer_size(
+        ctx: &GpuContext,
+        cure_field: &CureField,
         pi_field: &PhotoinitiatorField,
+        max_buffer_size: u64,
     ) -> Option<Self> {
         let (nx, ny, nz) = cure_field.dimensions();
-        let slab_nz = compute_slab_nz(nx, ny, nz, ctx.max_buffer_size());
+        let slab_nz = compute_slab_nz(nx, ny, nz, max_buffer_size);
         if slab_nz == 0 {
             return None;
         }
@@ -150,58 +166,51 @@ impl GpuCureBuffers {
         let slab_voxels = (nx as usize) * (ny as usize) * (slab_nz as usize);
         let slab_bytes = (slab_voxels * std::mem::size_of::<f32>()) as u64;
         let xy_count = (nx as usize) * (ny as usize);
-
         let device = ctx.device();
 
-        let cure_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cure"),
-            size: slab_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let pi_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("pi"),
-            size: slab_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let mk_storage = |label| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: slab_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let mk_staging = |label| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: slab_bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+
+        let cure_buf = mk_storage("cure_test");
+        let pi_buf = mk_storage("pi_test");
         let intensity_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("intensity"),
+            label: Some("intensity_test"),
             size: (xy_count * std::mem::size_of::<f32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let params_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cure_params"),
+            label: Some("cure_params_test"),
             size: std::mem::size_of::<GpuCureParams>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let staging_cure = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("staging_cure"),
-            size: slab_bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let staging_pi = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("staging_pi"),
-            size: slab_bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let staging_cure = mk_staging("staging_cure_test");
+        let staging_pi = mk_staging("staging_pi_test");
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("cure_shader"),
+            label: Some("cure_shader_test"),
             source: wgpu::ShaderSource::Wgsl(WGSL_SHADER.into()),
         });
-
         let bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("cure_layout"),
+                label: Some("cure_layout_test"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
@@ -245,15 +254,14 @@ impl GpuCureBuffers {
                     },
                 ],
             });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("cure_pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
+        let pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("cure_pipeline_layout_test"),
+                bind_group_layouts: &[&bind_group_layout],
+                push_constant_ranges: &[],
+            });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("cure_pipeline"),
+            label: Some("cure_pipeline_test"),
             layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: Some("cure_column_march"),
@@ -274,6 +282,7 @@ impl GpuCureBuffers {
             ny,
             nz,
             slab_nz,
+            gpu_warm: std::cell::Cell::new(false),
         })
     }
 
@@ -285,9 +294,16 @@ impl GpuCureBuffers {
         self.nz
     }
 
-    /// Upload per-pixel intensity grid and dispatch the cure column march
-    /// across all Z-slabs. Each slab's cure+PI data is uploaded from the
-    /// host arrays, dispatched, and downloaded back.
+    /// Upload per-pixel intensity grid and dispatch the cure column march.
+    ///
+    /// **Single-slab fast path** (`slab_nz == nz`): the GPU buffer holds
+    /// the full field. First call uploads cure+PI from host; subsequent
+    /// calls skip the upload (data persists on GPU). Download is deferred
+    /// — call `download_slab` / `download_current_slab` explicitly.
+    ///
+    /// **Multi-slab path** (`slab_nz < nz`): iterates relevant slabs,
+    /// skipping slabs above iz_top or far below the Beer-Lambert
+    /// penetration depth.
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
@@ -303,8 +319,39 @@ impl GpuCureBuffers {
         pi_field: &mut PhotoinitiatorField,
     ) {
         self.write_intensity(ctx, intensity_grid);
+
+        if self.slab_nz >= nz {
+            // Single-slab: data persists on GPU across dispatches.
+            if !self.gpu_warm.get() {
+                self.upload_slab(ctx, cure_field, pi_field, 0, nz);
+                self.gpu_warm.set(true);
+            }
+            let mut encoder = ctx
+                .device()
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("cure_encoder"),
+                });
+            self.encode_cure_pass(
+                ctx, &mut encoder, iz_top, nz, exposure_sec, dp_base, k_d,
+                layer_height_um, 0, nz,
+            );
+            ctx.queue().submit(Some(encoder.finish()));
+            return;
+        }
+
+        // Multi-slab path with slab-skip.
+        let max_cure_depth_voxels =
+            (dp_base * 180.0 / layer_height_um).ceil() as u32;
+        let iz_limit = iz_top.saturating_add(max_cure_depth_voxels).min(nz);
         for slab_iz_start in (0..nz).step_by(self.slab_nz as usize) {
             let this_slab_nz = self.slab_nz.min(nz - slab_iz_start);
+            let slab_iz_end = slab_iz_start + this_slab_nz;
+            if slab_iz_end <= iz_top {
+                continue;
+            }
+            if slab_iz_start > iz_limit {
+                break;
+            }
             self.upload_slab(ctx, cure_field, pi_field, slab_iz_start, this_slab_nz);
             let mut encoder = ctx
                 .device()
